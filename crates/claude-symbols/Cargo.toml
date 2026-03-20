@@ -1,0 +1,24 @@
+[package]
+name = "claude-symbols"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+claude-core = { path = "../claude-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-cpp = "0.23"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-go = "0.23"
+rusqlite = { workspace = true }
+ignore = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,17 @@
+[package]
+name = "claude-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "claude-tools"
+path = "src/main.rs"
+
+[dependencies]
+claude-core = { path = "../claude-core" }
+claude-fs = { path = "../claude-fs" }
+claude-symbols = { path = "../claude-symbols" }
+claude-search = { path = "../claude-search" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }

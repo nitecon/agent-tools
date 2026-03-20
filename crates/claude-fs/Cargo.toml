@@ -1,0 +1,15 @@
+[package]
+name = "claude-fs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+claude-core = { path = "../claude-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+walkdir = { workspace = true }
+ignore = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
