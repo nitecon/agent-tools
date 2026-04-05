@@ -21,16 +21,13 @@ fi
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
-case "$OS" in
-  linux)  PLATFORM="linux" ;;
-  darwin) PLATFORM="macos" ;;
-  *)      error "Unsupported OS: $OS" ;;
-esac
-
-case "$ARCH" in
-  x86_64)        ARCH="x86_64" ;;
-  aarch64|arm64) ARCH="aarch64" ;;
-  *)             error "Unsupported architecture: $ARCH" ;;
+case "${OS}-${ARCH}" in
+  linux-x86_64)        TARGET="x86_64-unknown-linux-gnu" ;;
+  linux-aarch64)       TARGET="aarch64-unknown-linux-gnu" ;;
+  darwin-x86_64)       TARGET="x86_64-apple-darwin" ;;
+  darwin-arm64)        TARGET="aarch64-apple-darwin" ;;
+  darwin-aarch64)      TARGET="aarch64-apple-darwin" ;;
+  *)                   error "Unsupported platform: ${OS}/${ARCH}" ;;
 esac
 
 # --- Resolve latest version -------------------------------------------------
@@ -54,7 +51,7 @@ fi
 
 info "Latest version: ${LATEST_TAG}"
 
-ARCHIVE_NAME="agent-tools-${PLATFORM}-${ARCH}.tar.gz"
+ARCHIVE_NAME="agent-tools-${LATEST_TAG}-${TARGET}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${ARCHIVE_NAME}"
 
 # --- Check existing installation --------------------------------------------

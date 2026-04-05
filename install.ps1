@@ -37,7 +37,7 @@ if (-not $LatestTag) {
 
 Info "Latest version: $LatestTag"
 
-$ArchiveName = "agent-tools-windows-x86_64.zip"
+$ArchiveName = "agent-tools-${LatestTag}-x86_64-pc-windows-msvc.zip"
 $DownloadUrl = "https://github.com/$Repo/releases/download/$LatestTag/$ArchiveName"
 
 # --- Check existing installation --------------------------------------------
