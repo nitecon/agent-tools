@@ -43,6 +43,23 @@ build.bat C:\Tools
 
 This builds in release mode and copies both `agent-tools` (CLI) and `agent-tools-mcp` (MCP server) to the specified path.
 
+## Auto-Update
+
+Both binaries check for new releases automatically (at most once per hour). When an update is available, it downloads and replaces the binaries in-place — symlinks are preserved since the update writes to the real binary location (e.g., `/opt/agentic/bin/`).
+
+```bash
+# Manual update check
+agent-tools update
+
+# Check current version
+agent-tools version
+
+# Disable auto-updates
+export AGENT_TOOLS_NO_UPDATE=1
+```
+
+The rate-limit marker is stored at `~/.agentic/.agent-tools-update-check` and persists across reboots. Both the CLI and MCP server share the same marker, so an update from either resets the cooldown for both.
+
 ## Usage — CLI (Primary)
 
 The primary way to use agent-tools is via the CLI binary, called directly from your AI agent's shell. Add the directive block below to your agent's system instructions to enable it.
@@ -62,6 +79,8 @@ Commands:
   mv        Move a file or directory
   mkdir     Create directories recursively
   rm        Remove a file or directory
+  update    Check for updates and install the latest version
+  version   Print version information
 ```
 
 ### Examples
@@ -267,3 +286,19 @@ Index data is stored centrally, with a two-tier resolution:
 If the user-level directory (`~/.agent-tools/<hash>`) exists for a project, it takes precedence. Otherwise the global directory is used. For new projects, the global directory is preferred when it exists and is writable; otherwise the user-level directory is used automatically.
 
 The `<hash>` is a blake3 digest of the normalized git remote origin URL (e.g., `github.com/nitecon/agent-tools.git`). For non-git directories, the hash is derived from the absolute path. This keeps index data out of your project tree (no `.gitignore` needed) and enables future cross-machine sync.
+
+## Related: agent-memory
+
+[agent-memory](https://github.com/nitecon/agent-memory) is the companion project in the agentic tooling suite. While agent-tools provides **code exploration** (symbols, trees, indexing), agent-memory provides **persistent memory** for AI agents — semantic search, context retrieval, and knowledge storage across conversations.
+
+Install both for a complete agent toolkit:
+
+```bash
+# Install agent-tools (code exploration)
+curl -fsSL https://raw.githubusercontent.com/nitecon/agent-tools/refs/heads/main/install.sh | sudo bash
+
+# Install agent-memory (persistent memory)
+curl -fsSL https://raw.githubusercontent.com/nitecon/agent-memory/refs/heads/main/install.sh | sudo bash
+```
+
+Both tools follow the same patterns: installed to `/opt/agentic/bin/`, symlinked to `/usr/local/bin/`, auto-updating, and designed to be called directly from agent system instructions rather than requiring MCP registration.

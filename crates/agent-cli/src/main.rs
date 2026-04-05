@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
+mod updater;
+
 #[derive(Parser)]
 #[command(name = "agent-tools", about = "Token-efficient tools for AI coding agents")]
 struct Cli {
@@ -116,10 +118,22 @@ enum Commands {
 
     /// Start MCP stdio server
     Serve,
+
+    /// Check for updates and install the latest version
+    Update,
+
+    /// Print version information
+    Version,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Auto-update check on every invocation (rate-limited, non-blocking for most calls)
+    // Skip for update/version commands to avoid double-checking
+    if !matches!(cli.command, Commands::Update | Commands::Version) {
+        updater::auto_update();
+    }
 
     match cli.command {
         Commands::Tree {
@@ -172,6 +186,13 @@ fn main() -> Result<()> {
         Commands::Serve => {
             eprintln!("Use `agent-tools-mcp` binary for MCP server");
             std::process::exit(1);
+        }
+
+        Commands::Update => updater::manual_update(),
+
+        Commands::Version => {
+            println!("agent-tools {}", env!("AGENT_TOOLS_VERSION"));
+            Ok(())
         }
     }
 }

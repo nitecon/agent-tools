@@ -15,3 +15,13 @@ agent-search = { path = "../agent-search" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
+reqwest = { workspace = true }
+semver = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+flate2 = { workspace = true }
+tar = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+zip = { workspace = true }

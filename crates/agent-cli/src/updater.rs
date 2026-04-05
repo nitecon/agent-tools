@@ -19,42 +19,52 @@ struct GitHubAsset {
     browser_download_url: String,
 }
 
-/// Spawn a background update check. Non-blocking, never panics.
-/// Respects `AGENT_TOOLS_NO_UPDATE=1` to disable.
-pub fn spawn_update_check() {
+/// Run a rate-limited auto-update check. Called on every CLI invocation.
+/// Never panics, never blocks for long unless an update is available.
+pub fn auto_update() {
     if std::env::var("AGENT_TOOLS_NO_UPDATE").is_ok() {
         return;
     }
 
-    tokio::spawn(async {
-        if let Err(e) = check_and_update().await {
-            eprintln!("[agent-tools] update check: {e}");
-        }
-    });
+    if let Err(e) = check_and_update() {
+        eprintln!("[agent-tools] update check: {e}");
+    }
 }
 
-async fn check_and_update() -> Result<()> {
-    // Rate limit: at most once per hour
+/// Run a manual update check (no rate limiting). Called by `agent-tools update`.
+pub fn manual_update() -> Result<()> {
+    let current = Version::parse(CURRENT_VERSION).context("invalid current version")?;
+    eprintln!("[agent-tools] current version: v{current}");
+
+    let client = build_client()?;
+    let release = fetch_latest_release(&client)?;
+
+    let latest = Version::parse(release.tag_name.trim_start_matches('v'))
+        .context("invalid release version")?;
+
+    if latest <= current {
+        eprintln!("[agent-tools] already up to date (v{current})");
+        // Update the marker so auto_update doesn't re-check immediately
+        touch_marker(&marker_path()?);
+        return Ok(());
+    }
+
+    eprintln!("[agent-tools] updating: v{current} -> v{latest}");
+    download_and_install(&client, &release)?;
+    touch_marker(&marker_path()?);
+    eprintln!("[agent-tools] updated to v{latest} — will take effect on next invocation");
+    Ok(())
+}
+
+fn check_and_update() -> Result<()> {
     let marker = marker_path()?;
     if !should_check(&marker) {
         return Ok(());
     }
 
     let current = Version::parse(CURRENT_VERSION).context("invalid current version")?;
-
-    let client = reqwest::Client::builder()
-        .user_agent("agent-tools-updater")
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
-
-    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
-    let release: GitHubRelease = client
-        .get(&url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let client = build_client()?;
+    let release = fetch_latest_release(&client)?;
 
     // Always update the marker so we don't re-check immediately on failure
     touch_marker(&marker);
@@ -67,7 +77,24 @@ async fn check_and_update() -> Result<()> {
     }
 
     eprintln!("[agent-tools] update available: v{current} -> v{latest}");
+    download_and_install(&client, &release)?;
+    eprintln!("[agent-tools] updated to v{latest} — will take effect on next invocation");
+    Ok(())
+}
 
+fn build_client() -> Result<reqwest::blocking::Client> {
+    Ok(reqwest::blocking::Client::builder()
+        .user_agent("agent-tools-updater")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?)
+}
+
+fn fetch_latest_release(client: &reqwest::blocking::Client) -> Result<GitHubRelease> {
+    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+    Ok(client.get(&url).send()?.error_for_status()?.json()?)
+}
+
+fn download_and_install(client: &reqwest::blocking::Client, release: &GitHubRelease) -> Result<()> {
     let target = current_target()?;
     let archive_prefix = format!("agent-tools-{}-{target}", release.tag_name);
 
@@ -82,9 +109,14 @@ async fn check_and_update() -> Result<()> {
     std::fs::create_dir_all(&temp_dir)?;
 
     let archive_path = temp_dir.join(&asset.name);
-    download_file(&client, &asset.browser_download_url, &archive_path).await?;
+    let bytes = client
+        .get(&asset.browser_download_url)
+        .send()?
+        .error_for_status()?
+        .bytes()?;
+    std::fs::write(&archive_path, &bytes)?;
 
-    // Extract and replace binaries
+    // Resolve actual binary location (follows symlinks)
     let exe_dir = std::env::current_exe()?
         .canonicalize()?
         .parent()
@@ -95,8 +127,6 @@ async fn check_and_update() -> Result<()> {
 
     // Cleanup temp
     let _ = std::fs::remove_dir_all(&temp_dir);
-
-    eprintln!("[agent-tools] updated to v{latest} — will take effect on next restart");
     Ok(())
 }
 
@@ -136,23 +166,11 @@ fn should_check(marker: &Path) -> bool {
         .metadata()
         .and_then(|m| m.modified())
         .map(|t| t.elapsed().unwrap_or_default().as_secs() > CHECK_INTERVAL_SECS)
-        .unwrap_or(true) // no marker = never checked
+        .unwrap_or(true)
 }
 
 fn touch_marker(marker: &Path) {
     let _ = std::fs::write(marker, "");
-}
-
-async fn download_file(client: &reqwest::Client, url: &str, path: &Path) -> Result<()> {
-    let bytes = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    std::fs::write(path, &bytes)?;
-    Ok(())
 }
 
 /// Binary names we look for inside the release archive.
@@ -186,10 +204,9 @@ fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
 
         let target = exe_dir.join(&file_name);
         if !target.exists() {
-            continue; // only update binaries already installed
+            continue;
         }
 
-        // Write to .new, then atomically rename
         let staging = exe_dir.join(format!("{file_name}.new"));
         entry.unpack(&staging)?;
 
@@ -234,13 +251,11 @@ fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
         let staging = exe_dir.join(format!("{file_name}.new"));
         let old = exe_dir.join(format!("{file_name}.old"));
 
-        // Write new binary to staging path
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf)?;
         std::fs::write(&staging, &buf)?;
 
-        // Swap: running binary -> .old, new -> target
-        let _ = std::fs::remove_file(&old); // clean up previous .old
+        let _ = std::fs::remove_file(&old);
         std::fs::rename(&target, &old)
             .with_context(|| format!("failed to move {} to .old", target.display()))?;
         std::fs::rename(&staging, &target)
@@ -248,22 +263,4 @@ fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Clean up leftover .old binaries from a previous Windows update.
-#[cfg(windows)]
-pub fn cleanup_old_binaries() {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for name in BINARY_NAMES {
-                let old = dir.join(format!("{name}.old"));
-                let _ = std::fs::remove_file(&old);
-            }
-        }
-    }
-}
-
-#[cfg(not(windows))]
-pub fn cleanup_old_binaries() {
-    // No-op on Unix — atomic rename leaves no artifacts
 }
