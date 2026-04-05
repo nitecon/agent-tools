@@ -207,14 +207,15 @@ mod tests {
 
     #[test]
     fn test_find_files() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
+        let project_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let root = project_dir.path();
 
         std::fs::write(root.join("main.rs"), "fn main() {}").unwrap();
         std::fs::write(root.join("lib.rs"), "pub fn lib() {}").unwrap();
         std::fs::write(root.join("README.md"), "# Hello").unwrap();
 
-        let db_path = root.join(".claude-tools/files.db");
+        let db_path = db_dir.path().join("files.db");
         let indexer = FileIndexer::open(&db_path).unwrap();
         indexer.build(root, false).unwrap();
 
@@ -224,13 +225,14 @@ mod tests {
 
     #[test]
     fn test_project_summary() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
+        let project_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let root = project_dir.path();
 
         std::fs::write(root.join("main.rs"), "fn main() {}").unwrap();
         std::fs::write(root.join("Cargo.toml"), "[package]").unwrap();
 
-        let db_path = root.join(".claude-tools/files.db");
+        let db_path = db_dir.path().join("files.db");
         let indexer = FileIndexer::open(&db_path).unwrap();
         indexer.build(root, false).unwrap();
 

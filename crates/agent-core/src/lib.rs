@@ -1,10 +1,12 @@
 mod error;
 mod output;
 mod path;
+pub mod storage;
 
 pub use error::ToolError;
 pub use output::{OutputFormat, OutputFormatter};
 pub use path::normalize_path;
+pub use storage::project_data_dir;
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::path::Path;

@@ -27,13 +27,13 @@ fn tool_tree(args: Value) -> Result<Value> {
     let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
     let max_files = args.get("max_files").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
 
-    let options = claude_fs::tree::TreeOptions {
+    let options = agent_fs::tree::TreeOptions {
         max_depth: depth,
         max_files_per_dir: max_files,
     };
 
-    let tree = claude_fs::tree::tree(&path, &options)?;
-    let text = claude_fs::tree::render_tree_text(&tree, 0);
+    let tree = agent_fs::tree::tree(&path, &options)?;
+    let text = agent_fs::tree::render_tree_text(&tree, 0);
 
     Ok(mcp_text_content(&text))
 }
@@ -51,13 +51,13 @@ fn tool_list(args: Value) -> Result<Value> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let options = claude_fs::list::ListOptions {
+    let options = agent_fs::list::ListOptions {
         show_sizes: sizes,
         show_hidden,
     };
 
-    let entries = claude_fs::list::list_dir(&path, &options)?;
-    let text = claude_fs::list::render_list_text(&entries);
+    let entries = agent_fs::list::list_dir(&path, &options)?;
+    let text = agent_fs::list::render_list_text(&entries);
 
     Ok(mcp_text_content(&text))
 }
@@ -81,7 +81,7 @@ fn tool_file_ops(args: Value) -> Result<Value> {
                 .get("dst")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow!("Missing 'dst' parameter for copy"))?;
-            claude_fs::ops::copy(&src_path, &PathBuf::from(dst))?;
+            agent_fs::ops::copy(&src_path, &PathBuf::from(dst))?;
             Ok(mcp_text_content(&format!("Copied {src} -> {dst}")))
         }
         "move" => {
@@ -89,15 +89,15 @@ fn tool_file_ops(args: Value) -> Result<Value> {
                 .get("dst")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow!("Missing 'dst' parameter for move"))?;
-            claude_fs::ops::move_path(&src_path, &PathBuf::from(dst))?;
+            agent_fs::ops::move_path(&src_path, &PathBuf::from(dst))?;
             Ok(mcp_text_content(&format!("Moved {src} -> {dst}")))
         }
         "mkdir" => {
-            claude_fs::ops::mkdir(&src_path)?;
+            agent_fs::ops::mkdir(&src_path)?;
             Ok(mcp_text_content(&format!("Created {src}")))
         }
         "remove" => {
-            claude_fs::ops::remove(&src_path)?;
+            agent_fs::ops::remove(&src_path)?;
             Ok(mcp_text_content(&format!("Removed {src}")))
         }
         _ => Err(anyhow!("Unknown operation: {operation}")),
@@ -110,7 +110,7 @@ fn tool_extract_symbol(args: Value) -> Result<Value> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("Missing 'name' parameter"))?;
 
-    let mut parser = claude_symbols::SymbolParser::new();
+    let mut parser = agent_symbols::SymbolParser::new();
 
     if let Some(file) = args.get("file").and_then(|v| v.as_str()) {
         let path = PathBuf::from(file);
@@ -122,7 +122,7 @@ fn tool_extract_symbol(args: Value) -> Result<Value> {
         }
     } else {
         let root = std::env::current_dir()?;
-        let index = claude_symbols::SymbolIndex::open_for_project(&root)?;
+        let index = agent_symbols::SymbolIndex::open_for_project(&root)?;
         let results = index.search(name, None, None, 5)?;
 
         if results.is_empty() {
@@ -159,7 +159,7 @@ fn tool_list_symbols(args: Value) -> Result<Value> {
         .ok_or_else(|| anyhow!("Missing 'file' parameter"))?;
 
     let path = PathBuf::from(file);
-    let mut parser = claude_symbols::SymbolParser::new();
+    let mut parser = agent_symbols::SymbolParser::new();
     let symbols = parser.parse_file(&path)?;
 
     let mut text = String::new();
@@ -197,7 +197,7 @@ fn tool_search_symbols(args: Value) -> Result<Value> {
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
 
     let root = std::env::current_dir()?;
-    let index = claude_symbols::SymbolIndex::open_for_project(&root)?;
+    let index = agent_symbols::SymbolIndex::open_for_project(&root)?;
     let results = index.search(query, kind, file_pattern, limit)?;
 
     if results.is_empty() {
@@ -234,16 +234,16 @@ fn tool_build_index(args: Value) -> Result<Value> {
         .unwrap_or(false);
 
     if rebuild {
-        let cache_dir = root.join(".claude-tools");
-        if cache_dir.exists() {
-            std::fs::remove_dir_all(&cache_dir)?;
+        let data_dir = agent_core::project_data_dir(&root);
+        if data_dir.exists() {
+            std::fs::remove_dir_all(&data_dir)?;
         }
     }
 
-    let file_indexer = claude_search::indexer::FileIndexer::open_for_project(&root)?;
+    let file_indexer = agent_search::indexer::FileIndexer::open_for_project(&root)?;
     let file_stats = file_indexer.build(&root, true)?;
 
-    let symbol_index = claude_symbols::SymbolIndex::open_for_project(&root)?;
+    let symbol_index = agent_symbols::SymbolIndex::open_for_project(&root)?;
     let symbol_stats = symbol_index.build(&root)?;
 
     let (file_count, symbol_count) = symbol_index.stats()?;
@@ -263,10 +263,10 @@ fn tool_find_files(args: Value) -> Result<Value> {
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
 
     let root = std::env::current_dir()?;
-    let indexer = claude_search::indexer::FileIndexer::open_for_project(&root)?;
+    let indexer = agent_search::indexer::FileIndexer::open_for_project(&root)?;
 
     let results =
-        claude_search::query::find_files(&indexer, pattern, extension, min_size, max_size, limit)?;
+        agent_search::query::find_files(&indexer, pattern, extension, min_size, max_size, limit)?;
 
     if results.is_empty() {
         return Ok(mcp_text_content("No files found"));
@@ -287,13 +287,13 @@ fn tool_project_summary(args: Value) -> Result<Value> {
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let indexer = claude_search::indexer::FileIndexer::open_for_project(&root)?;
+    let indexer = agent_search::indexer::FileIndexer::open_for_project(&root)?;
     if indexer.file_count()? == 0 {
         indexer.build(&root, false)?;
     }
 
-    let summary = claude_search::query::project_summary(&indexer)?;
-    let text = claude_search::query::render_summary_text(&summary);
+    let summary = agent_search::query::project_summary(&indexer)?;
+    let text = agent_search::query::render_summary_text(&summary);
 
     Ok(mcp_text_content(&text))
 }

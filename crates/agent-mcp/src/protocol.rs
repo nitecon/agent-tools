@@ -55,8 +55,8 @@ pub fn handle_initialize(id: Value) -> JsonRpcResponse {
                 "tools": {}
             },
             "serverInfo": {
-                "name": "claude-tools",
-                "version": env!("CLAUDE_TOOLS_VERSION")
+                "name": "agent-tools",
+                "version": env!("AGENT_TOOLS_VERSION")
             }
         }),
     )

@@ -9,6 +9,100 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-cli"
+version = "0.1.0"
+dependencies = [
+ "agent-core",
+ "agent-fs",
+ "agent-search",
+ "agent-symbols",
+ "anyhow",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
+name = "agent-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "ignore",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "agent-fs"
+version = "0.1.0"
+dependencies = [
+ "agent-core",
+ "anyhow",
+ "ignore",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
+name = "agent-mcp"
+version = "0.1.0"
+dependencies = [
+ "agent-core",
+ "agent-fs",
+ "agent-search",
+ "agent-symbols",
+ "anyhow",
+ "flate2",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "tar",
+ "tokio",
+ "zip",
+]
+
+[[package]]
+name = "agent-search"
+version = "0.1.0"
+dependencies = [
+ "agent-core",
+ "anyhow",
+ "blake3",
+ "ignore",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "walkdir",
+]
+
+[[package]]
+name = "agent-symbols"
+version = "0.1.0"
+dependencies = [
+ "agent-core",
+ "anyhow",
+ "ignore",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tree-sitter",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "walkdir",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -221,99 +315,6 @@ name = "clap_lex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
-
-[[package]]
-name = "claude-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "claude-core",
- "claude-fs",
- "claude-search",
- "claude-symbols",
- "serde_json",
-]
-
-[[package]]
-name = "claude-core"
-version = "0.1.0"
-dependencies = [
- "ignore",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "claude-fs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "claude-core",
- "ignore",
- "serde",
- "serde_json",
- "tempfile",
- "walkdir",
-]
-
-[[package]]
-name = "claude-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "claude-core",
- "claude-fs",
- "claude-search",
- "claude-symbols",
- "flate2",
- "reqwest",
- "semver",
- "serde",
- "serde_json",
- "tar",
- "tokio",
- "zip",
-]
-
-[[package]]
-name = "claude-search"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "claude-core",
- "ignore",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "walkdir",
-]
-
-[[package]]
-name = "claude-symbols"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "claude-core",
- "ignore",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tree-sitter",
- "tree-sitter-c-sharp",
- "tree-sitter-cpp",
- "tree-sitter-go",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
- "walkdir",
-]
 
 [[package]]
 name = "colorchoice"

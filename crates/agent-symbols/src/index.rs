@@ -82,9 +82,9 @@ impl SymbolIndex {
         Ok(Self { conn })
     }
 
-    /// Open or create a symbol index in the `.claude-tools` directory of the given project root.
+    /// Open or create a symbol index in the centralized storage directory for the given project.
     pub fn open_for_project(project_root: &Path) -> Result<Self> {
-        let db_path = project_root.join(".claude-tools").join("symbols.db");
+        let db_path = agent_core::project_data_dir(project_root).join("symbols.db");
         Self::open(&db_path)
     }
 
@@ -417,13 +417,14 @@ class DataProcessor:
 
     #[test]
     fn test_build_and_search() {
-        let dir = TempDir::new().unwrap();
-        create_test_project(dir.path());
+        let project_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        create_test_project(project_dir.path());
 
-        let db_path = dir.path().join(".claude-tools/symbols.db");
+        let db_path = db_dir.path().join("symbols.db");
         let index = SymbolIndex::open(&db_path).unwrap();
 
-        let stats = index.build(dir.path()).unwrap();
+        let stats = index.build(project_dir.path()).unwrap();
         assert!(stats.files_indexed >= 2);
         assert!(stats.symbols_indexed >= 4);
 
@@ -439,18 +440,19 @@ class DataProcessor:
 
     #[test]
     fn test_incremental_update() {
-        let dir = TempDir::new().unwrap();
-        create_test_project(dir.path());
+        let project_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        create_test_project(project_dir.path());
 
-        let db_path = dir.path().join(".claude-tools/symbols.db");
+        let db_path = db_dir.path().join("symbols.db");
         let index = SymbolIndex::open(&db_path).unwrap();
 
         // First build
-        let stats1 = index.build(dir.path()).unwrap();
+        let stats1 = index.build(project_dir.path()).unwrap();
         assert!(stats1.files_indexed >= 2);
 
         // Second build without changes: should skip
-        let stats2 = index.build(dir.path()).unwrap();
+        let stats2 = index.build(project_dir.path()).unwrap();
         assert_eq!(stats2.files_indexed, 0);
         assert!(stats2.files_skipped >= 2);
     }

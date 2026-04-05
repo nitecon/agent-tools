@@ -70,9 +70,9 @@ impl FileIndexer {
         Ok(Self { conn })
     }
 
-    /// Open the file index in the `.claude-tools` directory of the given project root.
+    /// Open the file index in the centralized storage directory for the given project.
     pub fn open_for_project(project_root: &Path) -> Result<Self> {
-        let db_path = project_root.join(".claude-tools").join("files.db");
+        let db_path = agent_core::project_data_dir(project_root).join("files.db");
         Self::open(&db_path)
     }
 
@@ -190,15 +190,16 @@ mod tests {
 
     #[test]
     fn test_build_index() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
+        let project_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let root = project_dir.path();
 
         std::fs::write(root.join("file.rs"), "fn main() {}").unwrap();
         std::fs::write(root.join("README.md"), "# Hello").unwrap();
         std::fs::create_dir(root.join("src")).unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub fn lib() {}").unwrap();
 
-        let db_path = root.join(".claude-tools/files.db");
+        let db_path = db_dir.path().join("files.db");
         let indexer = FileIndexer::open(&db_path).unwrap();
         let stats = indexer.build(root, false).unwrap();
 
@@ -208,12 +209,13 @@ mod tests {
 
     #[test]
     fn test_incremental() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
+        let project_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let root = project_dir.path();
 
         std::fs::write(root.join("file.txt"), "hello").unwrap();
 
-        let db_path = root.join(".claude-tools/files.db");
+        let db_path = db_dir.path().join("files.db");
         let indexer = FileIndexer::open(&db_path).unwrap();
 
         let stats1 = indexer.build(root, false).unwrap();

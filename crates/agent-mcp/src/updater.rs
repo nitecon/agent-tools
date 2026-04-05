@@ -3,8 +3,8 @@ use semver::Version;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-const GITHUB_REPO: &str = "nitecon/claude-tools";
-const CURRENT_VERSION: &str = env!("CLAUDE_TOOLS_VERSION");
+const GITHUB_REPO: &str = "nitecon/agent-tools";
+const CURRENT_VERSION: &str = env!("AGENT_TOOLS_VERSION");
 const CHECK_INTERVAL_SECS: u64 = 3600; // 1 hour
 
 #[derive(Deserialize)]
@@ -23,7 +23,7 @@ struct GitHubAsset {
 pub fn spawn_update_check() {
     tokio::spawn(async {
         if let Err(e) = check_and_update().await {
-            eprintln!("[claude-tools] update check: {e}");
+            eprintln!("[agent-tools] update check: {e}");
         }
     });
 }
@@ -38,7 +38,7 @@ async fn check_and_update() -> Result<()> {
     let current = Version::parse(CURRENT_VERSION).context("invalid current version")?;
 
     let client = reqwest::Client::builder()
-        .user_agent("claude-tools-updater")
+        .user_agent("agent-tools-updater")
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
 
@@ -61,10 +61,10 @@ async fn check_and_update() -> Result<()> {
         return Ok(());
     }
 
-    eprintln!("[claude-tools] update available: v{current} -> v{latest}");
+    eprintln!("[agent-tools] update available: v{current} -> v{latest}");
 
     let target = current_target()?;
-    let archive_prefix = format!("claude-tools-{}-{target}", release.tag_name);
+    let archive_prefix = format!("agent-tools-{}-{target}", release.tag_name);
 
     let asset = release
         .assets
@@ -73,7 +73,7 @@ async fn check_and_update() -> Result<()> {
         .context("no release asset for this platform")?;
 
     // Download to OS temp directory
-    let temp_dir = std::env::temp_dir().join(format!("claude-tools-update-{}", release.tag_name));
+    let temp_dir = std::env::temp_dir().join(format!("agent-tools-update-{}", release.tag_name));
     std::fs::create_dir_all(&temp_dir)?;
 
     let archive_path = temp_dir.join(&asset.name);
@@ -91,7 +91,7 @@ async fn check_and_update() -> Result<()> {
     // Cleanup temp
     let _ = std::fs::remove_dir_all(&temp_dir);
 
-    eprintln!("[claude-tools] updated to v{latest} — will take effect on next restart");
+    eprintln!("[agent-tools] updated to v{latest} — will take effect on next restart");
     Ok(())
 }
 
@@ -108,7 +108,7 @@ fn current_target() -> Result<&'static str> {
 }
 
 fn marker_path() -> Result<PathBuf> {
-    let dir = std::env::temp_dir().join("claude-tools");
+    let dir = std::env::temp_dir().join("agent-tools");
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join("last-update-check"))
 }
@@ -139,10 +139,10 @@ async fn download_file(client: &reqwest::Client, url: &str, path: &Path) -> Resu
 
 /// Binary names we look for inside the release archive.
 #[cfg(unix)]
-const BINARY_NAMES: &[&str] = &["claude-tools-mcp", "claude-tools"];
+const BINARY_NAMES: &[&str] = &["agent-tools-mcp", "agent-tools"];
 
 #[cfg(windows)]
-const BINARY_NAMES: &[&str] = &["claude-tools-mcp.exe", "claude-tools.exe"];
+const BINARY_NAMES: &[&str] = &["agent-tools-mcp.exe", "agent-tools.exe"];
 
 #[cfg(unix)]
 fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {

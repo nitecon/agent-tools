@@ -1,4 +1,4 @@
-use claude_core::ToolError;
+use agent_core::ToolError;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

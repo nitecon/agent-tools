@@ -1,11 +1,11 @@
 [workspace]
 members = [
-    "crates/claude-core",
-    "crates/claude-fs",
-    "crates/claude-symbols",
-    "crates/claude-search",
-    "crates/claude-cli",
-    "crates/claude-mcp",
+    "crates/agent-core",
+    "crates/agent-fs",
+    "crates/agent-symbols",
+    "crates/agent-search",
+    "crates/agent-cli",
+    "crates/agent-mcp",
 ]
 resolver = "2"
 

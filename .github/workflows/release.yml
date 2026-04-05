@@ -59,17 +59,17 @@ jobs:
       - name: Build release binaries
         run: cargo build --workspace --release --target ${{ matrix.target }}
         env:
-          CLAUDE_TOOLS_VERSION: ${{ github.ref_name }}
+          AGENT_TOOLS_VERSION: ${{ github.ref_name }}
 
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
-          staging="claude-tools-${tag}-${{ matrix.target }}"
+          staging="agent-tools-${tag}-${{ matrix.target }}"
           mkdir -p "$staging"
-          cp "target/${{ matrix.target }}/release/claude-tools" "$staging/"
-          cp "target/${{ matrix.target }}/release/claude-tools-mcp" "$staging/"
+          cp "target/${{ matrix.target }}/release/agent-tools" "$staging/"
+          cp "target/${{ matrix.target }}/release/agent-tools-mcp" "$staging/"
           cp LICENSE README.md "$staging/"
           tar czf "${staging}.tar.gz" "$staging"
           echo "ASSET=${staging}.tar.gz" >> "$GITHUB_ENV"
@@ -79,10 +79,10 @@ jobs:
         shell: pwsh
         run: |
           $tag = $env:GITHUB_REF_NAME
-          $staging = "claude-tools-${tag}-${{ matrix.target }}"
+          $staging = "agent-tools-${tag}-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $staging
-          Copy-Item "target/${{ matrix.target }}/release/claude-tools.exe" $staging
-          Copy-Item "target/${{ matrix.target }}/release/claude-tools-mcp.exe" $staging
+          Copy-Item "target/${{ matrix.target }}/release/agent-tools.exe" $staging
+          Copy-Item "target/${{ matrix.target }}/release/agent-tools-mcp.exe" $staging
           Copy-Item LICENSE, README.md $staging
           Compress-Archive -Path $staging -DestinationPath "${staging}.zip"
           echo "ASSET=${staging}.zip" >> $env:GITHUB_ENV
@@ -108,7 +108,7 @@ jobs:
 
       - name: Generate checksums
         working-directory: artifacts
-        run: sha256sum claude-tools-* > SHA256SUMS.txt
+        run: sha256sum agent-tools-* > SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

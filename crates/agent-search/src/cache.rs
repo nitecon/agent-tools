@@ -33,9 +33,9 @@ impl Cache {
         Ok(Self { conn })
     }
 
-    /// Open cache in the `.claude-tools` directory of the given project root.
+    /// Open cache in the centralized storage directory for the given project.
     pub fn open_for_project(project_root: &Path) -> Result<Self> {
-        let db_path = project_root.join(".claude-tools").join("cache.db");
+        let db_path = agent_core::project_data_dir(project_root).join("cache.db");
         Self::open(&db_path)
     }
 

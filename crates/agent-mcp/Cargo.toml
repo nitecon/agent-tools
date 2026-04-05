@@ -1,17 +1,17 @@
 [package]
-name = "claude-mcp"
+name = "agent-mcp"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "claude-tools-mcp"
+name = "agent-tools-mcp"
 path = "src/main.rs"
 
 [dependencies]
-claude-core = { path = "../claude-core" }
-claude-fs = { path = "../claude-fs" }
-claude-symbols = { path = "../claude-symbols" }
-claude-search = { path = "../claude-search" }
+agent-core = { path = "../agent-core" }
+agent-fs = { path = "../agent-fs" }
+agent-symbols = { path = "../agent-symbols" }
+agent-search = { path = "../agent-search" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

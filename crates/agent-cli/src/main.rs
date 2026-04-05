@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
-#[command(name = "claude-tools", about = "Token-efficient tools for Claude Code")]
+#[command(name = "agent-tools", about = "Token-efficient tools for AI coding agents")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -146,31 +146,31 @@ fn main() -> Result<()> {
         Commands::Summary { path } => cmd_summary(path),
 
         Commands::Cp { src, dst } => {
-            claude_fs::ops::copy(&src, &dst)?;
+            agent_fs::ops::copy(&src, &dst)?;
             println!("Copied {} -> {}", src.display(), dst.display());
             Ok(())
         }
 
         Commands::Mv { src, dst } => {
-            claude_fs::ops::move_path(&src, &dst)?;
+            agent_fs::ops::move_path(&src, &dst)?;
             println!("Moved {} -> {}", src.display(), dst.display());
             Ok(())
         }
 
         Commands::Mkdir { path } => {
-            claude_fs::ops::mkdir(&path)?;
+            agent_fs::ops::mkdir(&path)?;
             println!("Created {}", path.display());
             Ok(())
         }
 
         Commands::Rm { path } => {
-            claude_fs::ops::remove(&path)?;
+            agent_fs::ops::remove(&path)?;
             println!("Removed {}", path.display());
             Ok(())
         }
 
         Commands::Serve => {
-            eprintln!("Use `claude-tools-mcp` binary for MCP server");
+            eprintln!("Use `agent-tools-mcp` binary for MCP server");
             std::process::exit(1);
         }
     }
@@ -178,30 +178,30 @@ fn main() -> Result<()> {
 
 fn cmd_tree(path: Option<PathBuf>, depth: usize, max_files: usize) -> Result<()> {
     let path = path.unwrap_or_else(|| PathBuf::from("."));
-    let options = claude_fs::tree::TreeOptions {
+    let options = agent_fs::tree::TreeOptions {
         max_depth: depth,
         max_files_per_dir: max_files,
     };
-    let tree = claude_fs::tree::tree(&path, &options)?;
-    print!("{}", claude_fs::tree::render_tree_text(&tree, 0));
+    let tree = agent_fs::tree::tree(&path, &options)?;
+    print!("{}", agent_fs::tree::render_tree_text(&tree, 0));
     Ok(())
 }
 
 fn cmd_list(path: Option<PathBuf>, sizes: bool, all: bool) -> Result<()> {
     let path = path.unwrap_or_else(|| PathBuf::from("."));
-    let options = claude_fs::list::ListOptions {
+    let options = agent_fs::list::ListOptions {
         show_sizes: sizes,
         show_hidden: all,
     };
-    let entries = claude_fs::list::list_dir(&path, &options)?;
-    print!("{}", claude_fs::list::render_list_text(&entries));
+    let entries = agent_fs::list::list_dir(&path, &options)?;
+    print!("{}", agent_fs::list::render_list_text(&entries));
     Ok(())
 }
 
 fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result<()> {
     if let Some(file_path) = file {
         // Direct file extraction
-        let mut parser = claude_symbols::SymbolParser::new();
+        let mut parser = agent_symbols::SymbolParser::new();
         match parser.extract_symbol(&file_path, name)? {
             Some(source) => {
                 println!("{source}");
@@ -214,17 +214,17 @@ fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result
     } else {
         // Search index
         let root = std::env::current_dir()?;
-        let index = claude_symbols::SymbolIndex::open_for_project(&root)?;
+        let index = agent_symbols::SymbolIndex::open_for_project(&root)?;
         let results = index.search(name, kind.as_deref(), None, 10)?;
 
         if results.is_empty() {
-            eprintln!("Symbol '{name}' not found in index. Run `claude-tools index` first.");
+            eprintln!("Symbol '{name}' not found in index. Run `agent-tools index` first.");
             std::process::exit(1);
         }
 
         // Extract source from the first match
         let first = &results[0];
-        let mut parser = claude_symbols::SymbolParser::new();
+        let mut parser = agent_symbols::SymbolParser::new();
         match parser.extract_symbol(&first.file, name)? {
             Some(source) => println!("{source}"),
             None => {
@@ -246,7 +246,7 @@ fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result
 }
 
 fn cmd_symbols(file: &Path, kind: Option<String>) -> Result<()> {
-    let mut parser = claude_symbols::SymbolParser::new();
+    let mut parser = agent_symbols::SymbolParser::new();
     let symbols = parser.parse_file(file)?;
 
     for s in &symbols {
@@ -279,7 +279,7 @@ fn cmd_search(query: &str, search_type: &str, file: Option<String>, limit: usize
 
     match search_type {
         "symbol" => {
-            let index = claude_symbols::SymbolIndex::open_for_project(&root)?;
+            let index = agent_symbols::SymbolIndex::open_for_project(&root)?;
             let results = index.search(query, None, file.as_deref(), limit)?;
 
             if results.is_empty() {
@@ -299,9 +299,9 @@ fn cmd_search(query: &str, search_type: &str, file: Option<String>, limit: usize
             }
         }
         "file" => {
-            let indexer = claude_search::indexer::FileIndexer::open_for_project(&root)?;
+            let indexer = agent_search::indexer::FileIndexer::open_for_project(&root)?;
             let results =
-                claude_search::query::find_files(&indexer, Some(query), None, None, None, limit)?;
+                agent_search::query::find_files(&indexer, Some(query), None, None, None, limit)?;
 
             if results.is_empty() {
                 eprintln!("No files found matching '{query}'");
@@ -325,22 +325,22 @@ fn cmd_index(path: Option<PathBuf>, rebuild: bool) -> Result<()> {
         path.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     if rebuild {
-        let cache_dir = root.join(".claude-tools");
-        if cache_dir.exists() {
-            std::fs::remove_dir_all(&cache_dir)?;
-            println!("Cleared existing index");
+        let data_dir = agent_core::project_data_dir(&root);
+        if data_dir.exists() {
+            std::fs::remove_dir_all(&data_dir)?;
+            println!("Cleared existing index at {}", data_dir.display());
         }
     }
 
     // Build file index
     print!("Indexing files... ");
-    let file_indexer = claude_search::indexer::FileIndexer::open_for_project(&root)?;
+    let file_indexer = agent_search::indexer::FileIndexer::open_for_project(&root)?;
     let file_stats = file_indexer.build(&root, true)?;
     println!("{file_stats}");
 
     // Build symbol index
     print!("Indexing symbols... ");
-    let symbol_index = claude_symbols::SymbolIndex::open_for_project(&root)?;
+    let symbol_index = agent_symbols::SymbolIndex::open_for_project(&root)?;
     let symbol_stats = symbol_index.build(&root)?;
     println!("{symbol_stats}");
 
@@ -355,13 +355,13 @@ fn cmd_summary(path: Option<PathBuf>) -> Result<()> {
         path.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     // Ensure index exists
-    let indexer = claude_search::indexer::FileIndexer::open_for_project(&root)?;
+    let indexer = agent_search::indexer::FileIndexer::open_for_project(&root)?;
     if indexer.file_count()? == 0 {
         println!("No index found. Building...");
         indexer.build(&root, false)?;
     }
 
-    let summary = claude_search::query::project_summary(&indexer)?;
-    print!("{}", claude_search::query::render_summary_text(&summary));
+    let summary = agent_search::query::project_summary(&indexer)?;
+    print!("{}", agent_search::query::render_summary_text(&summary));
     Ok(())
 }
