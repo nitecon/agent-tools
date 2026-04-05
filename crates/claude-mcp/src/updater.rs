@@ -43,7 +43,13 @@ async fn check_and_update() -> Result<()> {
         .build()?;
 
     let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
-    let release: GitHubRelease = client.get(&url).send().await?.error_for_status()?.json().await?;
+    let release: GitHubRelease = client
+        .get(&url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
 
     // Always update the marker so we don't re-check immediately on failure
     touch_marker(&marker);
@@ -55,9 +61,7 @@ async fn check_and_update() -> Result<()> {
         return Ok(());
     }
 
-    eprintln!(
-        "[claude-tools] update available: v{current} -> v{latest}"
-    );
+    eprintln!("[claude-tools] update available: v{current} -> v{latest}");
 
     let target = current_target()?;
     let archive_prefix = format!("claude-tools-{}-{target}", release.tag_name);
@@ -113,12 +117,7 @@ fn should_check(marker: &Path) -> bool {
     marker
         .metadata()
         .and_then(|m| m.modified())
-        .map(|t| {
-            t.elapsed()
-                .unwrap_or_default()
-                .as_secs()
-                > CHECK_INTERVAL_SECS
-        })
+        .map(|t| t.elapsed().unwrap_or_default().as_secs() > CHECK_INTERVAL_SECS)
         .unwrap_or(true) // no marker = never checked
 }
 
