@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="nitecon/agent-tools"
 INSTALL_DIR="/opt/agentic/bin"
-BINARY_NAMES=("agent-tools" "agent-tools-mcp")
+BINARY_NAMES=("agent-tools" "agent-tools-mcp" "agent-sync")
 SYMLINK_DIR="/usr/local/bin"
 
 # --- Helpers ----------------------------------------------------------------
@@ -98,6 +98,11 @@ mkdir -p "$TOOLS_DIR"
 chmod 1777 "$TOOLS_DIR"
 info "Created data directory ${TOOLS_DIR} (mode 1777)"
 
+CONFIG_DIR="/opt/agentic/agent-tools"
+mkdir -p "$CONFIG_DIR"
+chmod 755 "$CONFIG_DIR"
+info "Created config directory ${CONFIG_DIR}"
+
 # --- Symlinks ---------------------------------------------------------------
 
 for BIN in "${BINARY_NAMES[@]}"; do
@@ -114,8 +119,12 @@ info "Installation complete!"
 echo ""
 echo "  Binaries:  ${INSTALL_DIR}/agent-tools"
 echo "             ${INSTALL_DIR}/agent-tools-mcp"
+echo "             ${INSTALL_DIR}/agent-sync"
 echo "  Symlinks:  ${SYMLINK_DIR}/agent-tools"
 echo "             ${SYMLINK_DIR}/agent-tools-mcp"
+echo "             ${SYMLINK_DIR}/agent-sync"
+echo "  Config:    ${CONFIG_DIR}/ (global)"
+echo "             ~/.agentic/ (user override)"
 echo "  Version:   ${LATEST_TAG}"
 echo ""
 echo "Quick start (CLI):"
@@ -123,6 +132,9 @@ echo "  agent-tools tree"
 echo "  agent-tools symbols src/main.rs"
 echo "  agent-tools search MyFunction"
 echo ""
-echo "Register as MCP server for Claude Code:"
+echo "Configure gateway connection (optional):"
+echo "  agent-tools init"
+echo ""
+echo "Register as MCP server (includes code tools + comms):"
 echo "  claude mcp add -s user agent-tools -- ${INSTALL_DIR}/agent-tools-mcp"
 echo ""

@@ -1,6 +1,6 @@
 # agent-tools
 
-Token-efficient, cross-platform tools for AI coding agents. Provides symbol extraction, directory trees, file indexing, and cross-platform file operations — exposed as both a **CLI** and an **MCP stdio server**.
+Token-efficient, cross-platform toolkit for AI coding agents. Provides symbol extraction, directory trees, file indexing, cross-platform file operations, and optional gateway communication — exposed as a **CLI**, **MCP stdio server**, and **sync CLI**.
 
 ## Why
 
@@ -41,7 +41,7 @@ irm https://raw.githubusercontent.com/nitecon/agent-tools/refs/heads/main/instal
 build.bat C:\Tools
 ```
 
-This builds in release mode and copies both `agent-tools` (CLI) and `agent-tools-mcp` (MCP server) to the specified path.
+This builds in release mode and copies `agent-tools` (CLI), `agent-tools-mcp` (MCP server), and `agent-sync` (sync CLI) to the specified path.
 
 ## Auto-Update
 
@@ -79,6 +79,7 @@ Commands:
   mv        Move a file or directory
   mkdir     Create directories recursively
   rm        Remove a file or directory
+  init      Configure gateway connection (~/.agentic/config.toml)
   update    Check for updates and install the latest version
   version   Print version information
 ```
@@ -240,6 +241,8 @@ claude mcp add -s user agent-tools -- /opt/agentic/bin/agent-tools-mcp
 
 Once registered, the following MCP tools become available:
 
+**Code tools** (always available):
+
 | MCP Tool | Description |
 |----------|-------------|
 | `tree` | Token-efficient directory tree (respects .gitignore) |
@@ -251,6 +254,73 @@ Once registered, the following MCP tools become available:
 | `build_index` | Build/update file and symbol indexes |
 | `find_files` | Query the file index |
 | `project_summary` | Compact project overview |
+
+**Communication tools** (require [gateway setup](#gateway-integration)):
+
+| MCP Tool | Description |
+|----------|-------------|
+| `set_identity` | Set the project identity for this session (call once) |
+| `send_message` | Send a message to the user via the project's channel |
+| `get_messages` | Poll for unread messages from the user |
+| `confirm_read` | Acknowledge a message (unconfirmed messages reappear) |
+
+## Gateway Integration
+
+The MCP server includes 4 communication tools (`set_identity`, `send_message`, `get_messages`, `confirm_read`) and the `agent-sync` binary for sharing skills, commands, and agents across machines. These features require a running [agent-gateway](https://github.com/nitecon/agent-gateway) instance.
+
+**If you only need code exploration tools, no gateway setup is needed.** The code tools (tree, symbols, search, etc.) work immediately with no configuration.
+
+### Prerequisites
+
+1. **Install and configure the gateway** — follow the [agent-gateway setup guide](https://github.com/nitecon/agent-gateway). The gateway is a single persistent service that handles Discord, Slack, email, and other channel integrations.
+
+2. **Configure the client connection:**
+
+   ```bash
+   # Interactive setup — prompts for gateway URL, API key, etc.
+   agent-tools init
+   ```
+
+   This writes `~/.agentic/config.toml`:
+
+   ```toml
+   [gateway]
+   url = "http://your-gateway-host:7913"
+   api_key = "your-shared-secret"
+   timeout_ms = 5000
+   ```
+
+   You can also set these via environment variables (`GATEWAY_URL`, `GATEWAY_API_KEY`) or CLI flags.
+
+3. **Verify the connection** — once configured, the MCP comms tools will connect automatically. Without configuration, they return a helpful error message instead of failing.
+
+### Configuration hierarchy
+
+Config is resolved in this order (highest priority wins):
+
+| Priority | Source |
+|----------|--------|
+| 1 (highest) | CLI flags (`--url`, `--api-key`) |
+| 2 | Environment variables (`GATEWAY_URL`, `GATEWAY_API_KEY`) |
+| 3 | User config (`~/.agentic/config.toml`) |
+| 4 | Global config (`/opt/agentic/agent-tools/config.toml`) |
+
+### Syncing skills, commands, and agents
+
+The `agent-sync` CLI manages shared resources on the gateway:
+
+```bash
+# Push a skill directory to the gateway
+agent-sync skills push ./my-skill/
+
+# Pull all shared resources
+agent-sync sync --dir .
+
+# List what's on the gateway
+agent-sync skills list
+agent-sync commands list
+agent-sync agents list
+```
 
 ## Supported Languages
 
@@ -272,9 +342,20 @@ crates/
   agent-fs/         Tree view, directory listing, file operations
   agent-symbols/    Tree-sitter parsing, symbol extraction, SQLite index
   agent-search/     File indexing, cached search, project summaries
+  agent-comms/      Gateway client library, config system, sanitization
+  agent-updater/    Consolidated self-update mechanism (GitHub releases)
   agent-cli/        CLI binary (agent-tools)
-  agent-mcp/        MCP stdio server (agent-tools-mcp)
+  agent-mcp/        MCP stdio server (agent-tools-mcp) — 13 tools via rmcp
+  agent-sync/       Sync CLI binary (agent-sync)
 ```
+
+Three binaries are produced:
+
+| Binary | Purpose |
+|--------|---------|
+| `agent-tools` | CLI for direct shell usage (code exploration + file ops) |
+| `agent-tools-mcp` | MCP stdio server (code tools + comms tools in one server) |
+| `agent-sync` | CLI for syncing skills, commands, and agents with the gateway |
 
 Index data is stored centrally, with a two-tier resolution:
 
@@ -287,18 +368,27 @@ If the user-level directory (`~/.agent-tools/<hash>`) exists for a project, it t
 
 The `<hash>` is a blake3 digest of the normalized git remote origin URL (e.g., `github.com/nitecon/agent-tools.git`). For non-git directories, the hash is derived from the absolute path. This keeps index data out of your project tree (no `.gitignore` needed) and enables future cross-machine sync.
 
-## Related: agent-memory
+## Related Projects
 
-[agent-memory](https://github.com/nitecon/agent-memory) is the companion project in the agentic tooling suite. While agent-tools provides **code exploration** (symbols, trees, indexing), agent-memory provides **persistent memory** for AI agents — semantic search, context retrieval, and knowledge storage across conversations.
+The agentic tooling suite:
 
-Install both for a complete agent toolkit:
+| Project | Purpose | Install scope |
+|---------|---------|---------------|
+| **[agent-tools](https://github.com/nitecon/agent-tools)** (this repo) | Code exploration, file ops, comms client, sync CLI | Every dev machine |
+| **[agent-gateway](https://github.com/nitecon/agent-gateway)** | Communication hub — Discord, Slack, email channels + skill storage | Deploy once (server) |
+| **[agent-memory](https://github.com/nitecon/agent-memory)** | Persistent memory — semantic search, context retrieval | Every dev machine |
+
+Install all client-side tools for a complete agent toolkit:
 
 ```bash
-# Install agent-tools (code exploration)
+# Install agent-tools (code exploration + comms client + sync)
 curl -fsSL https://raw.githubusercontent.com/nitecon/agent-tools/refs/heads/main/install.sh | sudo bash
 
 # Install agent-memory (persistent memory)
 curl -fsSL https://raw.githubusercontent.com/nitecon/agent-memory/refs/heads/main/install.sh | sudo bash
+
+# Optional: install the gateway (deploy on one server)
+curl -fsSL https://raw.githubusercontent.com/nitecon/agent-gateway/main/install-gateway.sh | sudo bash
 ```
 
-Both tools follow the same patterns: installed to `/opt/agentic/bin/`, symlinked to `/usr/local/bin/`, auto-updating, and designed to be called directly from agent system instructions rather than requiring MCP registration.
+All client tools follow the same patterns: installed to `/opt/agentic/bin/`, symlinked to `/usr/local/bin/`, auto-updating, and designed to be called directly from agent system instructions rather than requiring MCP registration.

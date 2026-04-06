@@ -1,0 +1,18 @@
+[package]
+name = "agent-updater"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+semver = { workspace = true }
+tokio = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+flate2 = { workspace = true }
+tar = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+zip = { workspace = true }

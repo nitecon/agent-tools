@@ -1,79 +1,113 @@
-use anyhow::Result;
-use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+//! Entry point for the unified `agent-tools-mcp` MCP server.
+//!
+//! Merges 9 code tools (tree, list, file_ops, extract_symbol, list_symbols,
+//! search_symbols, build_index, find_files, project_summary) with 4 comms
+//! tools (set_identity, send_message, get_messages, confirm_read) into a
+//! single rmcp-based server served over stdio.
 
-mod protocol;
-mod tools;
-mod updater;
+mod server;
 
-use protocol::{JsonRpcRequest, JsonRpcResponse};
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use rmcp::ServiceExt;
+use tokio::io::{stdin, stdout};
+
+// ── CLI definition ───────────────────────────────────────────────────────────
+
+#[derive(Parser)]
+#[command(name = "agent-tools-mcp", about = "agent-tools MCP server")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// Gateway base URL (override config)
+    #[arg(long, env = "GATEWAY_URL")]
+    url: Option<String>,
+
+    /// Gateway API key (override config)
+    #[arg(long, env = "GATEWAY_API_KEY")]
+    api_key: Option<String>,
+
+    /// Default project identity
+    #[arg(long, env = "DEFAULT_PROJECT_IDENT")]
+    default_project: Option<String>,
+
+    /// HTTP timeout in milliseconds
+    #[arg(long, env = "GATEWAY_TIMEOUT_MS")]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Interactive setup -- creates ~/.agentic/config.toml
+    Init,
+    /// Check for a newer version and update the binary in place
+    Update,
+}
+
+// ── Entry point ──────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    updater::cleanup_old_binaries();
-    updater::spawn_update_check();
+    agent_updater::cleanup_old_binaries();
 
-    let stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
-    let mut reader = BufReader::new(stdin);
+    // Load config (TOML + legacy + env)
+    agent_comms::config::migrate_legacy_config();
+    let config = agent_comms::config::load_config();
 
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let bytes_read = reader.read_line(&mut line).await?;
-        if bytes_read == 0 {
-            break; // EOF
-        }
+    let cli = Cli::parse();
 
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let response = match serde_json::from_str::<JsonRpcRequest>(trimmed) {
-            Ok(request) => handle_request(request).await,
-            Err(e) => JsonRpcResponse::error(Value::Null, -32700, format!("Parse error: {e}")),
-        };
-
-        let response_json = serde_json::to_string(&response)?;
-        stdout.write_all(response_json.as_bytes()).await?;
-        stdout.write_all(b"\n").await?;
-        stdout.flush().await?;
+    if let Some(Command::Init) = cli.command {
+        return agent_comms::config::run_init();
+    }
+    if let Some(Command::Update) = cli.command {
+        return agent_updater::manual_update_blocking();
     }
 
-    Ok(())
-}
+    // Log to stderr so it does not corrupt the stdio MCP stream.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_env("RUST_LOG")
+                .add_directive("agent_tools=info".parse()?),
+        )
+        .init();
 
-async fn handle_request(request: JsonRpcRequest) -> JsonRpcResponse {
-    let id = request.id.clone();
+    // Build gateway client if configured
+    let gw_url = cli.url.or(config.gateway.url);
+    let gw_key = cli.api_key.or(config.gateway.api_key);
+    let gw_timeout = cli.timeout_ms.or(config.gateway.timeout_ms).unwrap_or(5000);
 
-    match request.method.as_str() {
-        "initialize" => protocol::handle_initialize(id),
-        "tools/list" => protocol::handle_tools_list(id),
-        "tools/call" => {
-            let tool_name = request
-                .params
-                .as_ref()
-                .and_then(|p| p.get("name"))
-                .and_then(|n| n.as_str())
-                .unwrap_or("");
-
-            let arguments = request
-                .params
-                .as_ref()
-                .and_then(|p| p.get("arguments"))
-                .cloned()
-                .unwrap_or(Value::Object(serde_json::Map::new()));
-
-            match tools::dispatch(tool_name, arguments).await {
-                Ok(result) => JsonRpcResponse::success(id, result),
-                Err(e) => JsonRpcResponse::error(id, -32000, format!("{e}")),
+    let gateway = match (gw_url, gw_key) {
+        (Some(url), Some(key)) => {
+            match agent_comms::gateway::GatewayClient::new(url, key, gw_timeout) {
+                Ok(gw) => Some(gw),
+                Err(e) => {
+                    tracing::warn!("Failed to create gateway client: {e}");
+                    None
+                }
             }
         }
-        "notifications/initialized" | "notifications/cancelled" => {
-            // Notifications don't need responses, but we'll return success if ID present
-            JsonRpcResponse::success(id, Value::Object(serde_json::Map::new()))
+        _ => None,
+    };
+
+    let server = server::AgentToolsServer::new(gateway.clone());
+
+    // Auto-register default identity if configured
+    let default_project = cli.default_project.or(config.gateway.default_project);
+    if let (Some(ident), Some(gw)) = (default_project, &gateway) {
+        match gw.register_project(&ident, None).await {
+            Ok(resp) => server.set_default_ident(resp.ident, resp.channel_name),
+            Err(e) => tracing::warn!("Failed to auto-register '{ident}': {e}"),
         }
-        _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method)),
     }
+
+    // Background update check
+    agent_updater::spawn_update_check();
+
+    let transport = (stdin(), stdout());
+    let running = server.serve(transport).await.context("serve MCP")?;
+    running.waiting().await.context("MCP server closed")?;
+
+    Ok(())
 }

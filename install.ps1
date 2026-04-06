@@ -11,7 +11,7 @@
 $ErrorActionPreference = "Stop"
 
 $Repo = "nitecon/agent-tools"
-$BinaryNames = @("agent-tools.exe", "agent-tools-mcp.exe")
+$BinaryNames = @("agent-tools.exe", "agent-tools-mcp.exe", "agent-sync.exe")
 $InstallDir = Join-Path $env:USERPROFILE ".agentic\bin"
 
 # --- Helpers ----------------------------------------------------------------
@@ -106,6 +106,8 @@ Info "Installation complete!"
 Write-Host ""
 Write-Host "  Binaries: $(Join-Path $InstallDir 'agent-tools.exe')"
 Write-Host "            $(Join-Path $InstallDir 'agent-tools-mcp.exe')"
+Write-Host "            $(Join-Path $InstallDir 'agent-sync.exe')"
+Write-Host "  Config:   ~\.agentic\ (user config)"
 Write-Host "  Version:  $LatestTag"
 Write-Host ""
 Write-Host "Quick start (CLI):"
@@ -113,6 +115,9 @@ Write-Host "  agent-tools tree"
 Write-Host "  agent-tools symbols src/main.rs"
 Write-Host "  agent-tools search MyFunction"
 Write-Host ""
-Write-Host "Register as MCP server for Claude Code:"
+Write-Host "Configure gateway connection (optional):"
+Write-Host "  agent-tools init"
+Write-Host ""
+Write-Host "Register as MCP server (includes code tools + comms):"
 Write-Host "  claude mcp add -s user agent-tools -- `"$(Join-Path $InstallDir 'agent-tools-mcp.exe')`""
 Write-Host ""

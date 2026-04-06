@@ -2,8 +2,6 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
-mod updater;
-
 #[derive(Parser)]
 #[command(
     name = "agent-tools",
@@ -122,6 +120,9 @@ enum Commands {
     /// Start MCP stdio server
     Serve,
 
+    /// Configure gateway connection (creates ~/.agentic/config.toml)
+    Init,
+
     /// Check for updates and install the latest version
     Update,
 
@@ -133,9 +134,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Auto-update check on every invocation (rate-limited, non-blocking for most calls)
-    // Skip for update/version commands to avoid double-checking
-    if !matches!(cli.command, Commands::Update | Commands::Version) {
-        updater::auto_update();
+    // Skip for update/version/init commands to avoid double-checking or blocking interactive prompts
+    if !matches!(
+        cli.command,
+        Commands::Update | Commands::Version | Commands::Init
+    ) {
+        agent_updater::auto_update_blocking();
     }
 
     match cli.command {
@@ -191,7 +195,9 @@ fn main() -> Result<()> {
             std::process::exit(1);
         }
 
-        Commands::Update => updater::manual_update(),
+        Commands::Init => agent_comms::config::run_init(),
+
+        Commands::Update => agent_updater::manual_update_blocking(),
 
         Commands::Version => {
             println!("agent-tools {}", env!("AGENT_TOOLS_VERSION"));
@@ -200,6 +206,7 @@ fn main() -> Result<()> {
     }
 }
 
+/// Display a token-efficient directory tree.
 fn cmd_tree(path: Option<PathBuf>, depth: usize, max_files: usize) -> Result<()> {
     let path = path.unwrap_or_else(|| PathBuf::from("."));
     let options = agent_fs::tree::TreeOptions {
@@ -211,6 +218,7 @@ fn cmd_tree(path: Option<PathBuf>, depth: usize, max_files: usize) -> Result<()>
     Ok(())
 }
 
+/// List directory contents with optional file sizes and hidden file display.
 fn cmd_list(path: Option<PathBuf>, sizes: bool, all: bool) -> Result<()> {
     let path = path.unwrap_or_else(|| PathBuf::from("."));
     let options = agent_fs::list::ListOptions {
@@ -222,6 +230,7 @@ fn cmd_list(path: Option<PathBuf>, sizes: bool, all: bool) -> Result<()> {
     Ok(())
 }
 
+/// Extract a named symbol's source code, either from a specific file or the project index.
 fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result<()> {
     if let Some(file_path) = file {
         // Direct file extraction
@@ -269,6 +278,7 @@ fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result
     Ok(())
 }
 
+/// List all symbols defined in a file, optionally filtered by kind.
 fn cmd_symbols(file: &Path, kind: Option<String>) -> Result<()> {
     let mut parser = agent_symbols::SymbolParser::new();
     let symbols = parser.parse_file(file)?;
@@ -298,6 +308,7 @@ fn cmd_symbols(file: &Path, kind: Option<String>) -> Result<()> {
     Ok(())
 }
 
+/// Search the project-wide index by symbol name or file pattern.
 fn cmd_search(query: &str, search_type: &str, file: Option<String>, limit: usize) -> Result<()> {
     let root = std::env::current_dir()?;
 
@@ -344,6 +355,7 @@ fn cmd_search(query: &str, search_type: &str, file: Option<String>, limit: usize
     Ok(())
 }
 
+/// Build or rebuild the project file and symbol index.
 fn cmd_index(path: Option<PathBuf>, rebuild: bool) -> Result<()> {
     let root =
         path.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -374,6 +386,7 @@ fn cmd_index(path: Option<PathBuf>, rebuild: bool) -> Result<()> {
     Ok(())
 }
 
+/// Generate and display a compact project summary from the file index.
 fn cmd_summary(path: Option<PathBuf>) -> Result<()> {
     let root =
         path.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
