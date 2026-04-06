@@ -105,7 +105,10 @@ fn load_toml_file(path: &PathBuf) -> Option<Config> {
     match toml::from_str::<Config>(&content) {
         Ok(c) => Some(c),
         Err(e) => {
-            eprintln!("[agent-tools] warning: failed to parse {}: {e}", path.display());
+            eprintln!(
+                "[agent-tools] warning: failed to parse {}: {e}",
+                path.display()
+            );
             None
         }
     }
@@ -124,7 +127,9 @@ fn overlay_config(dst: &mut Config, src: &Config) {
         dst.gateway.timeout_ms = src.gateway.timeout_ms;
     }
     if src.gateway.default_project.is_some() {
-        dst.gateway.default_project.clone_from(&src.gateway.default_project);
+        dst.gateway
+            .default_project
+            .clone_from(&src.gateway.default_project);
     }
 }
 
@@ -217,14 +222,8 @@ pub fn migrate_legacy_config() {
         None => return,
     };
 
-    let url = pairs
-        .get("GATEWAY_URL")
-        .cloned()
-        .unwrap_or_default();
-    let api_key = pairs
-        .get("GATEWAY_API_KEY")
-        .cloned()
-        .unwrap_or_default();
+    let url = pairs.get("GATEWAY_URL").cloned().unwrap_or_default();
+    let api_key = pairs.get("GATEWAY_API_KEY").cloned().unwrap_or_default();
     let timeout: u64 = pairs
         .get("GATEWAY_TIMEOUT_MS")
         .and_then(|v| v.parse().ok())
@@ -293,15 +292,18 @@ pub fn run_init() -> Result<()> {
     };
 
     // API key (masked input)
-    let api_key = rpassword::prompt_password("Gateway API key: ")
-        .context("failed to read API key")?;
+    let api_key =
+        rpassword::prompt_password("Gateway API key: ").context("failed to read API key")?;
     if api_key.trim().is_empty() {
         anyhow::bail!("API key cannot be empty");
     }
     let api_key = api_key.trim();
 
     // Default project (optional)
-    write!(out, "Default project ident (optional, press Enter to skip): ")?;
+    write!(
+        out,
+        "Default project ident (optional, press Enter to skip): "
+    )?;
     out.flush()?;
     let mut project_input = String::new();
     reader.read_line(&mut project_input)?;
@@ -312,10 +314,7 @@ pub fn run_init() -> Result<()> {
     out.flush()?;
     let mut timeout_input = String::new();
     reader.read_line(&mut timeout_input)?;
-    let timeout: u64 = timeout_input
-        .trim()
-        .parse()
-        .unwrap_or(5000);
+    let timeout: u64 = timeout_input.trim().parse().unwrap_or(5000);
 
     // Build TOML content
     let mut toml_content = String::from("[gateway]\n");
@@ -338,7 +337,10 @@ pub fn run_init() -> Result<()> {
     writeln!(out)?;
     writeln!(out, "Config written to {}", config_path.display())?;
     writeln!(out)?;
-    writeln!(out, "To register the MCP server, add to your Claude config:")?;
+    writeln!(
+        out,
+        "To register the MCP server, add to your Claude config:"
+    )?;
     writeln!(out, "  {{")?;
     writeln!(out, "    \"mcpServers\": {{")?;
     writeln!(out, "      \"agent-comms\": {{")?;
