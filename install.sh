@@ -5,6 +5,8 @@ REPO="nitecon/agent-tools"
 INSTALL_DIR="/opt/agentic/bin"
 BINARY_NAMES=("agent-tools" "agent-tools-mcp" "agent-sync")
 SYMLINK_DIR="/usr/local/bin"
+SVC_USER="agentic"
+SVC_GROUP="agentic"
 
 # --- Helpers ----------------------------------------------------------------
 
@@ -29,6 +31,35 @@ case "${OS}-${ARCH}" in
   darwin-aarch64)      TARGET="aarch64-apple-darwin" ;;
   *)                   error "Unsupported platform: ${OS}/${ARCH}" ;;
 esac
+
+# --- Create agentic system user and group -----------------------------------
+
+if ! getent group "$SVC_GROUP" >/dev/null 2>&1; then
+  groupadd --system "$SVC_GROUP"
+  info "Created system group: ${SVC_GROUP}"
+fi
+
+if ! getent passwd "$SVC_USER" >/dev/null 2>&1; then
+  useradd --system --gid "$SVC_GROUP" --no-create-home --shell /usr/sbin/nologin "$SVC_USER"
+  info "Created system user: ${SVC_USER}"
+fi
+
+# Add all human users (uid >= 1000, excluding nobody) to the agentic group
+while IFS=: read -r username _ uid _; do
+  if [ "$uid" -ge 1000 ] 2>/dev/null && [ "$username" != "nobody" ]; then
+    if ! id -nG "$username" 2>/dev/null | grep -qw "$SVC_GROUP"; then
+      usermod -aG "$SVC_GROUP" "$username"
+      info "Added user ${username} to ${SVC_GROUP} group"
+    fi
+  fi
+done < /etc/passwd
+
+# --- Set /opt/agentic ownership ---------------------------------------------
+
+mkdir -p "$INSTALL_DIR"
+chown -R "${SVC_USER}:${SVC_GROUP}" /opt/agentic
+chmod -R 775 /opt/agentic
+info "Set /opt/agentic ownership to ${SVC_USER}:${SVC_GROUP}"
 
 # --- Resolve latest version -------------------------------------------------
 
@@ -77,14 +108,13 @@ tar xzf "${TMPDIR}/${ARCHIVE_NAME}" -C "$TMPDIR"
 
 # --- Install ----------------------------------------------------------------
 
-mkdir -p "$INSTALL_DIR"
-
 for BIN in "${BINARY_NAMES[@]}"; do
   # The archive may contain the binary at the top level or in a subdirectory
   BIN_PATH=$(find "$TMPDIR" -name "$BIN" -type f | head -1)
   if [ -n "$BIN_PATH" ]; then
     mv "$BIN_PATH" "${INSTALL_DIR}/${BIN}"
-    chmod +x "${INSTALL_DIR}/${BIN}"
+    chown "${SVC_USER}:${SVC_GROUP}" "${INSTALL_DIR}/${BIN}"
+    chmod 775 "${INSTALL_DIR}/${BIN}"
     info "Installed ${INSTALL_DIR}/${BIN}"
   else
     warn "Binary ${BIN} not found in archive"
@@ -95,12 +125,14 @@ done
 
 TOOLS_DIR="/opt/agentic/tools"
 mkdir -p "$TOOLS_DIR"
-chmod 1777 "$TOOLS_DIR"
-info "Created data directory ${TOOLS_DIR} (mode 1777)"
+chown "${SVC_USER}:${SVC_GROUP}" "$TOOLS_DIR"
+chmod 775 "$TOOLS_DIR"
+info "Created data directory ${TOOLS_DIR}"
 
 CONFIG_DIR="/opt/agentic/agent-tools"
 mkdir -p "$CONFIG_DIR"
-chmod 755 "$CONFIG_DIR"
+chown "${SVC_USER}:${SVC_GROUP}" "$CONFIG_DIR"
+chmod 775 "$CONFIG_DIR"
 info "Created config directory ${CONFIG_DIR}"
 
 # --- Symlinks ---------------------------------------------------------------
