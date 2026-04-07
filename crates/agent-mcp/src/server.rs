@@ -346,9 +346,7 @@ impl AgentToolsServer {
     }
 
     /// Search the project-wide symbol index.
-    #[tool(
-        description = "Search the project-wide symbol index by name, type, or file pattern."
-    )]
+    #[tool(description = "Search the project-wide symbol index by name, type, or file pattern.")]
     fn search_symbols(&self, Parameters(params): Parameters<SearchSymbolsParams>) -> String {
         let kind = params.kind.as_deref();
         let file_pattern = params.file_pattern.as_deref();
@@ -387,9 +385,7 @@ impl AgentToolsServer {
     }
 
     /// Build or update the project index.
-    #[tool(
-        description = "Build or incrementally update the project file and symbol index."
-    )]
+    #[tool(description = "Build or incrementally update the project file and symbol index.")]
     fn build_index(&self, Parameters(params): Parameters<BuildIndexParams>) -> String {
         let root = params
             .path
@@ -435,9 +431,7 @@ impl AgentToolsServer {
     }
 
     /// Search the file index.
-    #[tool(
-        description = "Search the file index by name pattern, extension, or size range."
-    )]
+    #[tool(description = "Search the file index by name pattern, extension, or size range.")]
     fn find_files(&self, Parameters(params): Parameters<FindFilesParams>) -> String {
         let pattern = params.pattern.as_deref();
         let extension = params.extension.as_deref();
@@ -454,12 +448,12 @@ impl AgentToolsServer {
             Err(e) => return format!("Error: {e}"),
         };
 
-        let results =
-            match agent_search::query::find_files(&indexer, pattern, extension, min_size, max_size, limit)
-            {
-                Ok(r) => r,
-                Err(e) => return format!("Error: {e}"),
-            };
+        let results = match agent_search::query::find_files(
+            &indexer, pattern, extension, min_size, max_size, limit,
+        ) {
+            Ok(r) => r,
+            Err(e) => return format!("Error: {e}"),
+        };
 
         if results.is_empty() {
             return "No files found".to_string();

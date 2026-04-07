@@ -97,10 +97,12 @@ fn require_client(
     timeout_ms: u64,
     config: &Config,
 ) -> Result<SkillsClient> {
-    let url = url.or_else(|| config.gateway.url.clone()).unwrap_or_else(|| {
-        eprintln!("Missing --url / GATEWAY_URL (run `agent-comms init` to configure)");
-        std::process::exit(1);
-    });
+    let url = url
+        .or_else(|| config.gateway.url.clone())
+        .unwrap_or_else(|| {
+            eprintln!("Missing --url / GATEWAY_URL (run `agent-comms init` to configure)");
+            std::process::exit(1);
+        });
     let api_key = api_key
         .or_else(|| config.gateway.api_key.clone())
         .unwrap_or_else(|| {

@@ -235,10 +235,7 @@ async fn fetch_latest_release(client: &reqwest::Client) -> Result<GitHubRelease>
 }
 
 /// Download the release archive and extract/replace binaries in the exe directory.
-async fn download_and_install(
-    client: &reqwest::Client,
-    release: &GitHubRelease,
-) -> Result<()> {
+async fn download_and_install(client: &reqwest::Client, release: &GitHubRelease) -> Result<()> {
     let target = current_target()?;
     let archive_prefix = format!("agent-tools-{}-{target}", release.tag_name);
 
@@ -249,8 +246,7 @@ async fn download_and_install(
         .context("no release asset for this platform")?;
 
     // Download to OS temp directory.
-    let temp_dir =
-        std::env::temp_dir().join(format!("agent-tools-update-{}", release.tag_name));
+    let temp_dir = std::env::temp_dir().join(format!("agent-tools-update-{}", release.tag_name));
     std::fs::create_dir_all(&temp_dir)?;
 
     let archive_path = temp_dir.join(&asset.name);
@@ -483,6 +479,10 @@ mod tests {
     fn test_current_version_parses() {
         // Validates that the compile-time CURRENT_VERSION constant is valid semver.
         let v = Version::parse(super::CURRENT_VERSION);
-        assert!(v.is_ok(), "CURRENT_VERSION '{}' is not valid semver", super::CURRENT_VERSION);
+        assert!(
+            v.is_ok(),
+            "CURRENT_VERSION '{}' is not valid semver",
+            super::CURRENT_VERSION
+        );
     }
 }
