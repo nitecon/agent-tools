@@ -17,7 +17,13 @@ AI coding agents' built-in tools have gaps when working with large codebases:
 
 ### Quick Install (recommended)
 
-**Linux / macOS:**
+**macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nitecon/agent-tools/refs/heads/main/install-macos.sh | sudo bash
+```
+
+**Linux:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nitecon/agent-tools/refs/heads/main/install.sh | sudo bash
@@ -400,6 +406,9 @@ Install all client-side tools for a complete agent toolkit:
 
 ```bash
 # Install agent-tools (code exploration + comms client + sync)
+# macOS:
+curl -fsSL https://raw.githubusercontent.com/nitecon/agent-tools/refs/heads/main/install-macos.sh | sudo bash
+# Linux:
 curl -fsSL https://raw.githubusercontent.com/nitecon/agent-tools/refs/heads/main/install.sh | sudo bash
 
 # Install agent-memory (persistent memory)

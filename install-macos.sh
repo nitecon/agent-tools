@@ -5,8 +5,6 @@ REPO="nitecon/agent-tools"
 INSTALL_DIR="/opt/agentic/bin"
 BINARY_NAMES=("agent-tools" "agent-tools-mcp" "agent-sync")
 SYMLINK_DIR="/usr/local/bin"
-SVC_USER="agentic"
-SVC_GROUP="agentic"
 
 # --- Helpers ----------------------------------------------------------------
 
@@ -23,44 +21,35 @@ fi
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
-if [ "$OS" = "darwin" ]; then
-  error "This script is for Linux only. Use install-macos.sh for macOS."
+if [ "$OS" != "darwin" ]; then
+  error "This script is for macOS only. Use install.sh for Linux."
 fi
 
-case "${OS}-${ARCH}" in
-  linux-x86_64)        TARGET="x86_64-unknown-linux-gnu" ;;
-  linux-aarch64)       TARGET="aarch64-unknown-linux-gnu" ;;
-  *)                   error "Unsupported platform: ${OS}/${ARCH}" ;;
+case "${ARCH}" in
+  x86_64)   TARGET="x86_64-apple-darwin" ;;
+  arm64)    TARGET="aarch64-apple-darwin" ;;
+  aarch64)  TARGET="aarch64-apple-darwin" ;;
+  *)        error "Unsupported architecture: ${ARCH}" ;;
 esac
 
-# --- Create agentic system user and group -----------------------------------
+# --- Determine the real user (the one who invoked sudo) ---------------------
 
-if ! getent group "$SVC_GROUP" >/dev/null 2>&1; then
-  groupadd --system "$SVC_GROUP"
-  info "Created system group: ${SVC_GROUP}"
+REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "$USER")}"
+REAL_UID=$(id -u "$REAL_USER")
+REAL_GID=$(id -g "$REAL_USER")
+
+if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
+  error "Could not determine the non-root user. Run with: sudo bash install-macos.sh"
 fi
 
-if ! getent passwd "$SVC_USER" >/dev/null 2>&1; then
-  useradd --system --gid "$SVC_GROUP" --no-create-home --shell /usr/sbin/nologin "$SVC_USER"
-  info "Created system user: ${SVC_USER}"
-fi
+info "Installing for user: ${REAL_USER} (uid=${REAL_UID}, gid=${REAL_GID})"
 
-# Add all human users (uid >= 1000, excluding nobody) to the agentic group
-while IFS=: read -r username _ uid _; do
-  if [ "$uid" -ge 1000 ] 2>/dev/null && [ "$username" != "nobody" ]; then
-    if ! id -nG "$username" 2>/dev/null | grep -qw "$SVC_GROUP"; then
-      usermod -aG "$SVC_GROUP" "$username"
-      info "Added user ${username} to ${SVC_GROUP} group"
-    fi
-  fi
-done < /etc/passwd
-
-# --- Set /opt/agentic ownership ---------------------------------------------
+# --- Create /opt/agentic owned by the current user -------------------------
 
 mkdir -p "$INSTALL_DIR"
-chown -R "${SVC_USER}:${SVC_GROUP}" /opt/agentic
-chmod -R 775 /opt/agentic
-info "Set /opt/agentic ownership to ${SVC_USER}:${SVC_GROUP}"
+chown -R "${REAL_USER}:staff" /opt/agentic
+chmod -R 755 /opt/agentic
+info "Set /opt/agentic ownership to ${REAL_USER}:staff"
 
 # --- Resolve latest version -------------------------------------------------
 
@@ -114,8 +103,8 @@ for BIN in "${BINARY_NAMES[@]}"; do
   BIN_PATH=$(find "$TMPDIR" -name "$BIN" -type f | head -1)
   if [ -n "$BIN_PATH" ]; then
     mv "$BIN_PATH" "${INSTALL_DIR}/${BIN}"
-    chown "${SVC_USER}:${SVC_GROUP}" "${INSTALL_DIR}/${BIN}"
-    chmod 775 "${INSTALL_DIR}/${BIN}"
+    chown "${REAL_USER}:staff" "${INSTALL_DIR}/${BIN}"
+    chmod 755 "${INSTALL_DIR}/${BIN}"
     info "Installed ${INSTALL_DIR}/${BIN}"
   else
     warn "Binary ${BIN} not found in archive"
@@ -126,17 +115,19 @@ done
 
 TOOLS_DIR="/opt/agentic/tools"
 mkdir -p "$TOOLS_DIR"
-chown "${SVC_USER}:${SVC_GROUP}" "$TOOLS_DIR"
-chmod 775 "$TOOLS_DIR"
+chown "${REAL_USER}:staff" "$TOOLS_DIR"
+chmod 755 "$TOOLS_DIR"
 info "Created data directory ${TOOLS_DIR}"
 
 CONFIG_DIR="/opt/agentic/agent-tools"
 mkdir -p "$CONFIG_DIR"
-chown "${SVC_USER}:${SVC_GROUP}" "$CONFIG_DIR"
-chmod 775 "$CONFIG_DIR"
+chown "${REAL_USER}:staff" "$CONFIG_DIR"
+chmod 755 "$CONFIG_DIR"
 info "Created config directory ${CONFIG_DIR}"
 
 # --- Symlinks ---------------------------------------------------------------
+
+mkdir -p "$SYMLINK_DIR"
 
 for BIN in "${BINARY_NAMES[@]}"; do
   if [ -f "${INSTALL_DIR}/${BIN}" ]; then
