@@ -244,7 +244,7 @@ claude mcp add -s user agent-tools -- /opt/agentic/bin/agent-tools-mcp
 claude mcp add -s user agent-tools -- /opt/agentic/bin/agent-tools-mcp --url https://your-gateway-host:7913
 ```
 
-The `--url` flag connects the MCP server to your [agent-gateway](#gateway-integration) instance, enabling the communication tools (`set_identity`, `send_message`, `get_messages`, `confirm_read`). Without it, only the code exploration tools are available.
+The `--url` flag connects the MCP server to your [agent-gateway](#gateway-integration) instance, enabling the communication tools (`set_identity`, `send_message`, `get_messages`, `confirm_read`, `reply_to`, `taking_action_on`) and sync tools (`sync_push`, `sync_pull`, `sync_list`, `sync_delete`, `sync_all`). Without it, only the code exploration tools are available.
 
 Once registered, the following MCP tools become available:
 
@@ -266,14 +266,26 @@ Once registered, the following MCP tools become available:
 
 | MCP Tool | Description |
 |----------|-------------|
-| `set_identity` | Set the project identity for this session (call once) |
+| `set_identity` | Set the project identity and optional agent ID for this session |
 | `send_message` | Send a message to the user via the project's channel |
-| `get_messages` | Poll for unread messages from the user |
-| `confirm_read` | Acknowledge a message (unconfirmed messages reappear) |
+| `get_messages` | Poll for unread messages (per-agent when agent ID is set) |
+| `confirm_read` | Acknowledge a message (per-agent scoping supported) |
+| `reply_to` | Send a threaded reply to a specific message |
+| `taking_action_on` | Signal that the agent is actively working on a message |
+
+**Sync tools** (require [gateway setup](#gateway-integration)):
+
+| MCP Tool | Description |
+|----------|-------------|
+| `sync_push` | Push a skill, command, or agent to the gateway |
+| `sync_pull` | Pull a resource from the gateway to the local machine |
+| `sync_list` | List skills, commands, and agents stored on the gateway |
+| `sync_delete` | Delete a resource from the gateway by name |
+| `sync_all` | Bidirectional sync of all local and remote resources |
 
 ## Gateway Integration
 
-The MCP server includes 4 communication tools (`set_identity`, `send_message`, `get_messages`, `confirm_read`) and the `agent-sync` binary for sharing skills, commands, and agents across machines. These features require a running [agent-gateway](https://github.com/nitecon/agent-gateway) instance.
+The MCP server includes 6 communication tools (`set_identity`, `send_message`, `get_messages`, `confirm_read`, `reply_to`, `taking_action_on`), 5 sync tools (`sync_push`, `sync_pull`, `sync_list`, `sync_delete`, `sync_all`), and the `agent-sync` binary for sharing skills, commands, and agents across machines. These features require a running [agent-gateway](https://github.com/nitecon/agent-gateway) instance.
 
 **If you only need code exploration tools, no gateway setup is needed.** The code tools (tree, symbols, search, etc.) work immediately with no configuration.
 
@@ -351,7 +363,7 @@ crates/
   agent-comms/      Gateway client library, config system, sanitization
   agent-updater/    Consolidated self-update mechanism (GitHub releases)
   agent-cli/        CLI binary (agent-tools)
-  agent-mcp/        MCP stdio server (agent-tools-mcp) — 13 tools via rmcp
+  agent-mcp/        MCP stdio server (agent-tools-mcp) — 20 tools via rmcp
   agent-sync/       Sync CLI binary (agent-sync)
 ```
 
