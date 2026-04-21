@@ -217,10 +217,7 @@ fn write_registration_marker(ident: &str, gateway_url: &str, channel_name: &str)
 
 /// Register the project with the gateway if we haven't already for this URL.
 /// Returns the channel name (cached or freshly registered).
-async fn ensure_registered(
-    ctx: &CommsContext,
-    channel_override: Option<&str>,
-) -> Result<String> {
+async fn ensure_registered(ctx: &CommsContext, channel_override: Option<&str>) -> Result<String> {
     if let Some(channel_name) = read_registration_marker(&ctx.ident, &ctx.gateway_url) {
         return Ok(channel_name);
     }
