@@ -171,10 +171,10 @@ pub fn run_setup_gateway() -> Result<()> {
     // API key (masked input)
     let api_key =
         rpassword::prompt_password("Gateway API key: ").context("failed to read API key")?;
-    if api_key.trim().is_empty() {
-        anyhow::bail!("API key cannot be empty");
-    }
     let api_key = api_key.trim();
+    // Reject empty + any character that would later blow up HeaderValue parsing
+    // (newlines, NBSP from a paste, etc.) so we never write a broken key to disk.
+    crate::sanitize::validate_api_key(api_key).map_err(anyhow::Error::msg)?;
 
     // Timeout
     write!(out, "Request timeout in ms [5000]: ")?;

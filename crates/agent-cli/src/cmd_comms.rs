@@ -9,6 +9,7 @@
 use agent_comms::config::{home_dir, load_config};
 use agent_comms::gateway::GatewayClient;
 use agent_comms::identity::load_or_generate_agent_id;
+use agent_comms::sanitize::short_project_ident;
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use serde::Serialize;
@@ -128,8 +129,15 @@ async fn run(cmd: CommsCommands) -> Result<()> {
 // -- Context resolution ------------------------------------------------------
 
 /// Resolved per-invocation context shared by every comms subcommand.
+///
+/// `ident` is the short, gateway-friendly slug (e.g. `eventic`) sent to the
+/// server. `canonical_ident` is the full normalized identifier (git remote URL
+/// or canonical path) used to key local state like the registration marker,
+/// so two different repositories that share a basename cannot clobber each
+/// other's cached registration.
 struct CommsContext {
     ident: String,
+    canonical_ident: String,
     agent_id: String,
     gateway: GatewayClient,
     gateway_url: String,
@@ -137,7 +145,15 @@ struct CommsContext {
 
 /// Resolve cwd -> ident, load-or-generate agent-id, build `GatewayClient`.
 fn resolve_context(agent_id_override: Option<String>) -> Result<CommsContext> {
-    let ident = agent_core::project_ident_from_cwd().context("derive project ident from cwd")?;
+    let canonical_ident =
+        agent_core::project_ident_from_cwd().context("derive project ident from cwd")?;
+    let ident = short_project_ident(&canonical_ident);
+    if ident.is_empty() {
+        anyhow::bail!(
+            "could not derive a short project ident from {canonical_ident:?}; \
+             pass --project-ident or set DEFAULT_PROJECT_IDENT in gateway.conf"
+        );
+    }
 
     let agent_id = match agent_id_override {
         Some(id) => id,
@@ -161,6 +177,7 @@ fn resolve_context(agent_id_override: Option<String>) -> Result<CommsContext> {
 
     Ok(CommsContext {
         ident,
+        canonical_ident,
         agent_id,
         gateway,
         gateway_url,
@@ -217,8 +234,12 @@ fn write_registration_marker(ident: &str, gateway_url: &str, channel_name: &str)
 
 /// Register the project with the gateway if we haven't already for this URL.
 /// Returns the channel name (cached or freshly registered).
+///
+/// The marker is keyed on the canonical ident (git URL / full path) so two
+/// different repositories that collapse to the same short slug still get
+/// distinct registration state.
 async fn ensure_registered(ctx: &CommsContext, channel_override: Option<&str>) -> Result<String> {
-    if let Some(channel_name) = read_registration_marker(&ctx.ident, &ctx.gateway_url) {
+    if let Some(channel_name) = read_registration_marker(&ctx.canonical_ident, &ctx.gateway_url) {
         return Ok(channel_name);
     }
     let resp = ctx
@@ -226,7 +247,7 @@ async fn ensure_registered(ctx: &CommsContext, channel_override: Option<&str>) -
         .register_project(&ctx.ident, channel_override)
         .await
         .context("register project with gateway")?;
-    write_registration_marker(&ctx.ident, &ctx.gateway_url, &resp.channel_name)?;
+    write_registration_marker(&ctx.canonical_ident, &ctx.gateway_url, &resp.channel_name)?;
     Ok(resp.channel_name)
 }
 
@@ -235,13 +256,15 @@ async fn ensure_registered(ctx: &CommsContext, channel_override: Option<&str>) -
 #[derive(Serialize)]
 struct WhoamiOutput<'a> {
     project_ident: &'a str,
+    canonical_ident: &'a str,
     agent_id: &'a str,
     gateway_url: Option<&'a str>,
     gateway_configured: bool,
 }
 
 fn cmd_whoami(json: bool) -> Result<()> {
-    let ident = agent_core::project_ident_from_cwd().context("derive project ident")?;
+    let canonical_ident = agent_core::project_ident_from_cwd().context("derive project ident")?;
+    let ident = short_project_ident(&canonical_ident);
     let agent_id = load_or_generate_agent_id()?;
     let config = load_config();
     let gateway_url = config.gateway.url.as_deref();
@@ -250,20 +273,22 @@ fn cmd_whoami(json: bool) -> Result<()> {
     if json {
         let out = WhoamiOutput {
             project_ident: &ident,
+            canonical_ident: &canonical_ident,
             agent_id: &agent_id,
             gateway_url,
             gateway_configured: configured,
         };
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("project_ident: {ident}");
-        println!("agent_id:      {agent_id}");
+        println!("project_ident:   {ident}");
+        println!("canonical_ident: {canonical_ident}");
+        println!("agent_id:        {agent_id}");
         match gateway_url {
-            Some(u) => println!("gateway_url:   {u}"),
-            None => println!("gateway_url:   (not configured)"),
+            Some(u) => println!("gateway_url:     {u}"),
+            None => println!("gateway_url:     (not configured)"),
         }
         println!(
-            "gateway:       {}",
+            "gateway:         {}",
             if configured {
                 "configured"
             } else {

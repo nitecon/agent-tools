@@ -2,6 +2,7 @@
 // the current tool set, but they should be kept for completeness / future use.
 #![allow(dead_code)]
 
+use crate::sanitize::validate_api_key;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -99,6 +100,13 @@ impl GatewayClient {
     /// # Errors
     /// Returns an error if the underlying `reqwest::Client` cannot be built.
     pub fn new(base_url: String, api_key: String, timeout_ms: u64) -> Result<Self> {
+        // Trim outer whitespace defensively (env overrides / exotic shells can
+        // leave stray \r or trailing spaces), then validate that the key can
+        // safely flow into an `Authorization` header. Surfacing a clear error
+        // here beats reqwest's opaque "failed to parse header value".
+        let api_key = api_key.trim().to_string();
+        validate_api_key(&api_key).map_err(anyhow::Error::msg)?;
+
         let client = Client::builder()
             .timeout(Duration::from_millis(timeout_ms))
             .build()
