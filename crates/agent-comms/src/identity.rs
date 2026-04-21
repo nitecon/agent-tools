@@ -86,7 +86,12 @@ fn read_hostname() -> String {
 /// Sanitize a hostname: lowercase, drop domain suffix, keep only
 /// `[a-z0-9-]`, collapse runs of hyphens, strip trailing hyphens.
 fn sanitize_hostname(input: &str) -> String {
-    let short = input.split('.').next().unwrap_or(input).trim().to_lowercase();
+    let short = input
+        .split('.')
+        .next()
+        .unwrap_or(input)
+        .trim()
+        .to_lowercase();
     let mut out = String::with_capacity(short.len());
     let mut last_was_hyphen = false;
     for c in short.chars() {
