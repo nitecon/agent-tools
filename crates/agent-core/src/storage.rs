@@ -96,6 +96,30 @@ fn is_writable(dir: &Path) -> bool {
 ///
 /// Prefers the git remote origin URL (normalized). Falls back to the
 /// canonicalized absolute path of the project root.
+///
+/// Used by the file/symbol indexer to key `project_data_dir`, and by the
+/// comms CLI to auto-derive the gateway project ident from cwd -- guaranteeing
+/// both systems agree on a single identity per project.
+pub fn project_ident(project_root: &Path) -> String {
+    resolve_project_identifier(project_root)
+}
+
+/// Resolve the project ident for the current working directory.
+///
+/// # Errors
+/// Returns an error if the current working directory cannot be determined.
+pub fn project_ident_from_cwd() -> std::io::Result<String> {
+    let cwd = std::env::current_dir()?;
+    Ok(resolve_project_identifier(&cwd))
+}
+
+/// Stable blake3 hex hash of a project ident. Used to key per-project state
+/// files (data dirs, registration markers, etc.) without leaking the raw
+/// remote URL into filesystem paths.
+pub fn hash_project_ident(ident: &str) -> String {
+    blake3::hash(ident.as_bytes()).to_hex().to_string()
+}
+
 fn resolve_project_identifier(project_root: &Path) -> String {
     // Try git remote origin URL
     if let Ok(output) = std::process::Command::new("git")

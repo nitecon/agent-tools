@@ -28,7 +28,7 @@ struct RegisterProjectRequest<'a> {
 }
 
 /// Response returned after registering (or re-registering) a project.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RegisterProjectResponse {
     pub ident: String,
     pub channel_name: String,
@@ -41,14 +41,14 @@ struct SendMessageRequest<'a> {
 }
 
 /// Response returned after posting a message to a project channel.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SendMessageResponse {
     pub message_id: i64,
     pub external_message_id: String,
 }
 
 /// A single message retrieved from the gateway.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GatewayMessage {
     pub id: i64,
     pub project_ident: String,
@@ -61,20 +61,20 @@ pub struct GatewayMessage {
 }
 
 /// Response envelope for the unread-messages endpoint.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GetUnreadResponse {
     pub messages: Vec<GatewayMessage>,
     pub status: String,
 }
 
 /// Response returned after confirming a message as read.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConfirmResponse {
     pub confirmed: bool,
 }
 
 /// Response returned after replying to or acting on a message.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReplyResponse {
     pub message_id: i64,
     pub external_message_id: String,

@@ -1,3 +1,5 @@
+mod cmd_comms;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -129,6 +131,12 @@ enum Commands {
     /// Configure gateway connection (alias for `setup gateway`)
     Init,
 
+    /// Send / receive messages via the gateway (project ident auto-derived from cwd)
+    Comms {
+        #[command(subcommand)]
+        command: cmd_comms::CommsCommands,
+    },
+
     /// Check for updates and install the latest version
     Update,
 
@@ -146,10 +154,15 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Auto-update check on every invocation (rate-limited, non-blocking for most calls)
-    // Skip for update/version/init commands to avoid double-checking or blocking interactive prompts
+    // Skip for update/version/init/comms commands to avoid double-checking,
+    // blocking interactive prompts, or slowing down tight comms polling loops.
     if !matches!(
         cli.command,
-        Commands::Update | Commands::Version | Commands::Init | Commands::Setup { .. }
+        Commands::Update
+            | Commands::Version
+            | Commands::Init
+            | Commands::Setup { .. }
+            | Commands::Comms { .. }
     ) {
         agent_updater::auto_update_blocking();
     }
@@ -212,6 +225,8 @@ fn main() -> Result<()> {
         },
 
         Commands::Init => agent_comms::config::run_setup_gateway(),
+
+        Commands::Comms { command } => cmd_comms::dispatch(command),
 
         Commands::Update => agent_updater::manual_update_blocking(),
 

@@ -85,6 +85,7 @@ Commands:
   mv        Move a file or directory
   mkdir     Create directories recursively
   rm        Remove a file or directory
+  comms     Send / receive messages via the gateway
   setup     Setup and configuration commands
   init      Configure gateway connection (alias for `setup gateway`)
   update    Check for updates and install the latest version
@@ -121,6 +122,33 @@ agent-tools search config --type file
 # Project overview
 agent-tools summary
 ```
+
+### Communication tools (CLI)
+
+Once the gateway is configured (see [Gateway Integration](#gateway-integration)), agents can send and receive messages directly from the shell — no MCP required. The project identity is derived automatically from the current working directory (git `origin` URL, or the canonical path for non-git dirs), and a machine-stable agent id is generated once at `~/.agentic/agent-tools/agent-id` and reused on every subsequent call. Agents never pass either value explicitly.
+
+```bash
+# Send a message to the project's channel (auto-derives ident + agent-id)
+agent-tools comms send "build green on main"
+
+# Poll unread messages for this project + agent
+agent-tools comms recv
+
+# Acknowledge a message so it stops reappearing
+agent-tools comms confirm 1234
+
+# Threaded reply
+agent-tools comms reply 1234 "fixed — see commit abc123"
+
+# Signal that work is in progress on a message
+agent-tools comms action 1234 "deploying to staging"
+
+# Print what we'd send (debug)
+agent-tools comms whoami
+agent-tools comms whoami --json
+```
+
+All subcommands accept `--json` for machine-readable output, and `--agent-id <id>` when a per-invocation override is needed (e.g. running multiple distinct agents on one machine).
 
 ## Agent Directives
 
@@ -180,6 +208,42 @@ Prefer symbol-level tools over raw file reads whenever possible.
 /opt/agentic/bin/agent-tools rm <path>
 ```
 </code_exploration_protocol>
+
+<comms_protocol>
+## Communication Tools (CLI)
+
+**Binary:** `/opt/agentic/bin/agent-tools comms` — call directly via Bash (do NOT use MCP for comms; the CLI auto-derives identity from the working directory).
+
+**Zero-config identity:** The project ident is derived from the git remote of your current working directory (normalized), or the canonical path for non-git dirs. The agent id is read from `~/.agentic/agent-tools/agent-id` (auto-generated on first call). You never pass either unless overriding.
+
+### CLI Commands (run via Bash):
+
+```bash
+# Send a message to the project's channel
+/opt/agentic/bin/agent-tools comms send "<content>"
+
+# Fetch unread messages for this project + agent
+/opt/agentic/bin/agent-tools comms recv [--json]
+
+# Confirm a message is handled (stops it reappearing on recv)
+/opt/agentic/bin/agent-tools comms confirm <message_id>
+
+# Threaded reply to a specific message
+/opt/agentic/bin/agent-tools comms reply <message_id> "<content>"
+
+# Signal that this agent is actively working on a message
+/opt/agentic/bin/agent-tools comms action <message_id> "<what you're doing>"
+
+# Show derived project ident + agent id (debug / verification)
+/opt/agentic/bin/agent-tools comms whoami [--json]
+```
+
+### Rules
+1. Always call `comms recv` at the start of a work session.
+2. For every message returned by `recv`, call `comms confirm <id>` once it is handled — otherwise it will reappear.
+3. Use `comms action <id>` when claiming a task, and `comms reply <id>` when reporting a result.
+4. Add `--agent-id <id>` only if you need a per-invocation override (rare).
+</comms_protocol>
 ````
 
 ### GEMINI.md / Google AI Studio
@@ -236,6 +300,28 @@ Prefer symbol-level tools over raw file reads whenever possible.
 /opt/agentic/bin/agent-tools rm <path>
 ```
 </code_exploration_protocol>
+
+<comms_protocol>
+## Communication Tools (CLI)
+
+**Binary:** `/opt/agentic/bin/agent-tools comms` — call directly via shell execution. Project ident is auto-derived from the current working directory; agent id is persisted per machine at `~/.agentic/agent-tools/agent-id`. No explicit identity arguments are needed.
+
+### CLI Commands (run via shell):
+
+```bash
+/opt/agentic/bin/agent-tools comms send "<content>"
+/opt/agentic/bin/agent-tools comms recv [--json]
+/opt/agentic/bin/agent-tools comms confirm <message_id>
+/opt/agentic/bin/agent-tools comms reply <message_id> "<content>"
+/opt/agentic/bin/agent-tools comms action <message_id> "<what you're doing>"
+/opt/agentic/bin/agent-tools comms whoami [--json]
+```
+
+### Rules
+1. Call `comms recv` at the start of a work session.
+2. Call `comms confirm <id>` for every message you handle — otherwise it will reappear.
+3. Use `comms action <id>` when claiming a task, `comms reply <id>` when reporting the result.
+</comms_protocol>
 ````
 
 ## Usage — MCP Server (Alternative)

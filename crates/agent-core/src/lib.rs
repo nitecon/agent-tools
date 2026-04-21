@@ -6,7 +6,7 @@ pub mod storage;
 pub use error::ToolError;
 pub use output::{OutputFormat, OutputFormatter};
 pub use path::normalize_path;
-pub use storage::project_data_dir;
+pub use storage::{hash_project_ident, project_data_dir, project_ident, project_ident_from_cwd};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::path::Path;
