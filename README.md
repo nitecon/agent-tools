@@ -210,16 +210,21 @@ Prefer symbol-level tools over raw file reads whenever possible.
 </code_exploration_protocol>
 
 <comms_protocol>
-## Communication Tools (CLI)
+## Communication Tools (MANDATORY — CLI only)
 
-**Binary:** `/opt/agentic/bin/agent-tools comms` — call directly via Bash (do NOT use MCP for comms; the CLI auto-derives identity from the working directory).
+**Binary:** `/opt/agentic/bin/agent-tools comms` — call directly via Bash. **Do NOT use the MCP comms tools; they are deprecated in favor of this CLI.**
 
-**Zero-config identity:** The project ident is derived from the git remote of your current working directory (normalized), or the canonical path for non-git dirs. The agent id is read from `~/.agentic/agent-tools/agent-id` (auto-generated on first call). You never pass either unless overriding.
+**Zero-config identity:** The project ident is auto-derived from the git remote of the current working directory (normalized), or the canonical path for non-git dirs. The agent id is persisted at `~/.agentic/agent-tools/agent-id` and reused across invocations. You never pass either value unless explicitly overriding.
+
+### The "Recv First / Confirm Always" Rule
+1. Run `comms recv` at the start of a work session to pick up pending messages.
+2. For every message returned, run `comms confirm <id>` once it has been handled — otherwise it will reappear on the next `recv`.
+3. Use `comms action <id>` when claiming a task, `comms reply <id>` when reporting a result.
 
 ### CLI Commands (run via Bash):
 
 ```bash
-# Send a message to the project's channel
+# Send a message to the project's channel (auto-derives ident + agent-id)
 /opt/agentic/bin/agent-tools comms send "<content>"
 
 # Fetch unread messages for this project + agent
@@ -238,11 +243,10 @@ Prefer symbol-level tools over raw file reads whenever possible.
 /opt/agentic/bin/agent-tools comms whoami [--json]
 ```
 
-### Rules
-1. Always call `comms recv` at the start of a work session.
-2. For every message returned by `recv`, call `comms confirm <id>` once it is handled — otherwise it will reappear.
-3. Use `comms action <id>` when claiming a task, and `comms reply <id>` when reporting a result.
-4. Add `--agent-id <id>` only if you need a per-invocation override (rare).
+### Notes
+- All subcommands accept `--json` for machine-readable output.
+- `--agent-id <id>` overrides the persisted agent id for a single invocation (rare — only needed when running multiple distinct agents on one machine).
+- The first `send` from a new project auto-registers the channel with the gateway; subsequent calls hit a cached marker and skip the round-trip.
 </comms_protocol>
 ````
 
@@ -302,9 +306,16 @@ Prefer symbol-level tools over raw file reads whenever possible.
 </code_exploration_protocol>
 
 <comms_protocol>
-## Communication Tools (CLI)
+## Communication Tools (MANDATORY — CLI only)
 
-**Binary:** `/opt/agentic/bin/agent-tools comms` — call directly via shell execution. Project ident is auto-derived from the current working directory; agent id is persisted per machine at `~/.agentic/agent-tools/agent-id`. No explicit identity arguments are needed.
+**Binary:** `/opt/agentic/bin/agent-tools comms` — call directly via shell execution. **Do NOT use the MCP comms tools; they are deprecated in favor of this CLI.**
+
+**Zero-config identity:** Project ident is auto-derived from the current working directory (git remote when available, canonical path otherwise); agent id is persisted per machine at `~/.agentic/agent-tools/agent-id`. No explicit identity arguments are needed.
+
+### The "Recv First / Confirm Always" Rule
+1. Run `comms recv` at the start of a work session to pick up pending messages.
+2. For every message returned, run `comms confirm <id>` once it has been handled — otherwise it will reappear on the next `recv`.
+3. Use `comms action <id>` when claiming a task, `comms reply <id>` when reporting a result.
 
 ### CLI Commands (run via shell):
 
@@ -317,10 +328,10 @@ Prefer symbol-level tools over raw file reads whenever possible.
 /opt/agentic/bin/agent-tools comms whoami [--json]
 ```
 
-### Rules
-1. Call `comms recv` at the start of a work session.
-2. Call `comms confirm <id>` for every message you handle — otherwise it will reappear.
-3. Use `comms action <id>` when claiming a task, `comms reply <id>` when reporting the result.
+### Notes
+- All subcommands accept `--json` for machine-readable output.
+- `--agent-id <id>` overrides the persisted agent id for a single invocation (rare).
+- The first `send` from a new project auto-registers the channel with the gateway; subsequent calls use a cached marker.
 </comms_protocol>
 ````
 
@@ -354,7 +365,7 @@ Once registered, the following MCP tools become available:
 | `find_files` | Query the file index |
 | `project_summary` | Compact project overview |
 
-**Communication tools** (require [gateway setup](#gateway-integration)):
+**Communication tools** (require [gateway setup](#gateway-integration)) — **deprecated; prefer `agent-tools comms` CLI**:
 
 | MCP Tool | Description |
 |----------|-------------|
@@ -364,6 +375,8 @@ Once registered, the following MCP tools become available:
 | `confirm_read` | Acknowledge a message (per-agent scoping supported) |
 | `reply_to` | Send a threaded reply to a specific message |
 | `taking_action_on` | Signal that the agent is actively working on a message |
+
+> These MCP comms tools are retained for backward compatibility but are no longer the recommended path. The `agent-tools comms` CLI auto-derives project identity from the working directory and the machine-persistent agent id file, so agents don't need to call `set_identity` first. New integrations should use the CLI.
 
 **Sync tools** (require [gateway setup](#gateway-integration)):
 
