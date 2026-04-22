@@ -109,6 +109,22 @@ struct ProjectSummaryParams {
     path: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct GetDocOutlineParams {
+    #[schemars(description = "Path to the markdown file to outline")]
+    file: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct GetDocSectionParams {
+    #[schemars(description = "Path to the markdown file")]
+    file: String,
+    #[schemars(
+        description = "Heading text (case-insensitive) of the section to return. Captures from that heading until the next heading at the same or higher level."
+    )]
+    section: String,
+}
+
 // ── Parameter structs — comms tools ──────────────────────────────────────────
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -218,7 +234,7 @@ const NO_GATEWAY_MSG: &str =
 
 const NO_SYNC_MSG: &str = "Sync not configured. Please ask the user to run: agent-tools-mcp init";
 
-// ── tool_router impl — all 20 tools ─────────────────────────────────────────
+// ── tool_router impl — all 22 tools ─────────────────────────────────────────
 
 #[tool_router]
 impl AgentToolsServer {
@@ -560,6 +576,36 @@ impl AgentToolsServer {
 
         match agent_search::query::project_summary(&indexer) {
             Ok(summary) => agent_search::query::render_summary_text(&summary),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Markdown outline — return only the headings of a markdown file.
+    #[tool(
+        description = "Return only the heading outline of a markdown file (level + text + line number) — much cheaper than reading the full file. Use this first when exploring docs, then call get_doc_section to read the part you need."
+    )]
+    fn get_doc_outline(&self, Parameters(params): Parameters<GetDocOutlineParams>) -> String {
+        let path = PathBuf::from(&params.file);
+        match agent_fs::markdown::extract_headings(&path) {
+            Ok(headings) => {
+                if headings.is_empty() {
+                    format!("No headings found in {}", params.file)
+                } else {
+                    agent_fs::markdown::render_outline_text(&headings)
+                }
+            }
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Markdown section — extract a single section by heading.
+    #[tool(
+        description = "Extract one section of a markdown file by its heading text (case-insensitive). Returns the heading and everything beneath it until the next heading at the same or higher level. Use after get_doc_outline to read just the relevant part of a long document instead of the whole file."
+    )]
+    fn get_doc_section(&self, Parameters(params): Parameters<GetDocSectionParams>) -> String {
+        let path = PathBuf::from(&params.file);
+        match agent_fs::markdown::extract_section(&path, &params.section) {
+            Ok(body) => body,
             Err(e) => format!("Error: {e}"),
         }
     }
