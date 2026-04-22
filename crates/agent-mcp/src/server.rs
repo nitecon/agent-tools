@@ -622,7 +622,12 @@ impl AgentToolsServer {
         };
 
         match gw
-            .send_message(&ident, &content, &MessageMeta::default(), agent_id.as_deref())
+            .send_message(
+                &ident,
+                &content,
+                &MessageMeta::default(),
+                agent_id.as_deref(),
+            )
             .await
         {
             Ok(resp) => format!("Message sent (id={}).", resp.message_id),

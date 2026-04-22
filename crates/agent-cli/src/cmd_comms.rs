@@ -438,7 +438,12 @@ async fn cmd_send(
 
     let resp = ctx
         .gateway
-        .send_message(&ctx.ident, &content, &meta.as_borrowed(), Some(&ctx.agent_id))
+        .send_message(
+            &ctx.ident,
+            &content,
+            &meta.as_borrowed(),
+            Some(&ctx.agent_id),
+        )
         .await
         .context("send message")?;
 

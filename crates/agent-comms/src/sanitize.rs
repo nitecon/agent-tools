@@ -198,7 +198,10 @@ mod tests {
     #[test]
     fn validate_api_key_rejects_newline() {
         let err = validate_api_key("secret\nkey").unwrap_err();
-        assert!(err.contains("0x0a"), "error should name the bad byte: {err}");
+        assert!(
+            err.contains("0x0a"),
+            "error should name the bad byte: {err}"
+        );
     }
 
     #[test]
