@@ -81,6 +81,7 @@ Commands:
   search    Search the project-wide symbol index
   index     Build or update the project index
   summary   Show a compact project summary
+  doc       Markdown reading helpers (outline / section extraction)
   cp        Copy a file or directory
   mv        Move a file or directory
   mkdir     Create directories recursively
@@ -121,6 +122,12 @@ agent-tools search config --type file
 
 # Project overview
 agent-tools summary
+
+# Markdown — show only the headings of a doc (no body — minimal tokens)
+agent-tools doc outline docs/Architecture.md
+
+# Markdown — pull just one section by heading name (case-insensitive)
+agent-tools doc section docs/Architecture.md "Data Flow"
 ```
 
 ### Communication tools (CLI)
@@ -212,6 +219,7 @@ Prefer symbol-level tools over raw file reads whenever possible.
 - **Discovery**: Use `tree` to understand structure; `summary` for the "big picture."
 - **Analysis**: Use `symbols` to list a file's API; `symbol` to read specific implementation.
 - **Search**: Use `search` (symbol-index) instead of `grep` (raw text) whenever possible.
+- **Docs**: Use `doc outline` to scan a markdown file's headings, then `doc section "<heading>"` to read just the relevant part — never `cat` a long doc.
 
 ### CLI Commands (run via Bash):
 
@@ -236,6 +244,12 @@ Prefer symbol-level tools over raw file reads whenever possible.
 
 # Summary — compact project overview
 /opt/agentic/bin/agent-tools summary [path]
+
+# Doc outline — list only the headings of a markdown file (minimal tokens)
+/opt/agentic/bin/agent-tools doc outline <file>
+
+# Doc section — extract one section by heading text (case-insensitive)
+/opt/agentic/bin/agent-tools doc section <file> "<heading>"
 
 # File ops — cross-platform copy, move, mkdir, remove
 /opt/agentic/bin/agent-tools cp <src> <dst>
@@ -320,6 +334,7 @@ Prefer symbol-level tools over raw file reads whenever possible.
 - **Discovery**: Use `tree` to understand structure; `summary` for the "big picture."
 - **Analysis**: Use `symbols` to list a file's API; `symbol` to read specific implementation.
 - **Search**: Use `search` (symbol-index) instead of `grep` (raw text) whenever possible.
+- **Docs**: Use `doc outline` to scan a markdown file's headings, then `doc section "<heading>"` to read just the relevant part — never `cat` a long doc.
 
 ### CLI Commands (run via shell):
 
@@ -344,6 +359,12 @@ Prefer symbol-level tools over raw file reads whenever possible.
 
 # Summary — compact project overview
 /opt/agentic/bin/agent-tools summary [path]
+
+# Doc outline — list only the headings of a markdown file (minimal tokens)
+/opt/agentic/bin/agent-tools doc outline <file>
+
+# Doc section — extract one section by heading text (case-insensitive)
+/opt/agentic/bin/agent-tools doc section <file> "<heading>"
 
 # File ops — cross-platform copy, move, mkdir, remove
 /opt/agentic/bin/agent-tools cp <src> <dst>
@@ -424,6 +445,8 @@ Once registered, the following MCP tools become available:
 | `build_index` | Build/update file and symbol indexes |
 | `find_files` | Query the file index |
 | `project_summary` | Compact project overview |
+| `get_doc_outline` | List only the headings of a markdown file (level + text + line) |
+| `get_doc_section` | Extract one section of a markdown file by heading (case-insensitive) |
 
 **Communication tools** (require [gateway setup](#gateway-integration)) — **deprecated; prefer `agent-tools comms` CLI**:
 
@@ -528,7 +551,7 @@ crates/
   agent-comms/      Gateway client library, config system, sanitization
   agent-updater/    Consolidated self-update mechanism (GitHub releases)
   agent-cli/        CLI binary (agent-tools)
-  agent-mcp/        MCP stdio server (agent-tools-mcp) — 20 tools via rmcp
+  agent-mcp/        MCP stdio server (agent-tools-mcp) — 22 tools via rmcp
   agent-sync/       Sync CLI binary (agent-sync)
 ```
 

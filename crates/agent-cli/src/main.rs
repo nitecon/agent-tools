@@ -119,6 +119,12 @@ enum Commands {
         path: PathBuf,
     },
 
+    /// Markdown reading helpers — outline + section extraction
+    Doc {
+        #[command(subcommand)]
+        command: DocCommands,
+    },
+
     /// Start MCP stdio server
     Serve,
 
@@ -148,6 +154,22 @@ enum Commands {
 enum SetupCommands {
     /// Configure gateway connection (creates ~/.agentic/agent-tools/gateway.conf)
     Gateway,
+}
+
+#[derive(Subcommand)]
+enum DocCommands {
+    /// Print just the heading outline of a markdown file (no body)
+    Outline {
+        /// Markdown file to inspect
+        file: PathBuf,
+    },
+    /// Extract a single section by heading text (case-insensitive)
+    Section {
+        /// Markdown file to inspect
+        file: PathBuf,
+        /// Heading text of the section to return
+        section: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -214,6 +236,23 @@ fn main() -> Result<()> {
             println!("Removed {}", path.display());
             Ok(())
         }
+
+        Commands::Doc { command } => match command {
+            DocCommands::Outline { file } => {
+                let headings = agent_fs::markdown::extract_headings(&file)?;
+                if headings.is_empty() {
+                    eprintln!("No headings found in {}", file.display());
+                } else {
+                    print!("{}", agent_fs::markdown::render_outline_text(&headings));
+                }
+                Ok(())
+            }
+            DocCommands::Section { file, section } => {
+                let body = agent_fs::markdown::extract_section(&file, &section)?;
+                print!("{body}");
+                Ok(())
+            }
+        },
 
         Commands::Serve => {
             eprintln!("Use `agent-tools-mcp` binary for MCP server");
