@@ -1,5 +1,8 @@
 mod cmd_comms;
+mod cmd_setup_menu;
+mod cmd_setup_perms;
 mod cmd_setup_rules;
+mod cmd_setup_skill;
 mod cmd_tasks;
 mod nudge;
 
@@ -131,10 +134,11 @@ enum Commands {
     /// Start MCP stdio server
     Serve,
 
-    /// Setup and configuration commands
+    /// Setup and configuration commands (run with no subcommand for an
+    /// interactive menu)
     Setup {
         #[command(subcommand)]
-        command: SetupCommands,
+        command: Option<SetupCommands>,
     },
 
     /// Configure gateway connection (alias for `setup gateway`)
@@ -180,6 +184,40 @@ enum SetupCommands {
         /// Print the rules block to stdout and exit (no file IO, no gateway check).
         #[arg(long)]
         print: bool,
+    },
+
+    /// Install a Claude Code skill at ~/.claude/skills/agent-tools/SKILL.md
+    /// so the agent-tools CLI is auto-advertised to sessions.
+    Skill {
+        /// Show the resulting file content without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Print the SKILL.md to stdout and exit.
+        #[arg(long)]
+        print: bool,
+    },
+
+    /// Add (or remove) permission denies in ~/.claude/settings.json that
+    /// block the native task system (TaskCreate/TaskUpdate/TaskList/TaskGet,
+    /// plus the legacy TodoWrite) so agents are forced onto
+    /// `agent-tools tasks`.
+    Perms {
+        /// Remove the denies instead of adding them.
+        #[arg(long)]
+        remove: bool,
+        /// Show the resulting settings.json without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Print the resulting settings.json to stdout and exit.
+        #[arg(long)]
+        print: bool,
+    },
+
+    /// Run gateway → rules → skill → perms non-interactively.
+    All {
+        /// Skip the confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 }
 
@@ -293,13 +331,21 @@ fn main() -> Result<()> {
         }
 
         Commands::Setup { command } => match command {
-            SetupCommands::Gateway => agent_comms::config::run_setup_gateway(),
-            SetupCommands::Rules {
+            None => cmd_setup_menu::run_interactive(),
+            Some(SetupCommands::Gateway) => agent_comms::config::run_setup_gateway(),
+            Some(SetupCommands::Rules {
                 target,
                 all,
                 dry_run,
                 print,
-            } => cmd_setup_rules::run(target, all, dry_run, print),
+            }) => cmd_setup_rules::run(target, all, dry_run, print),
+            Some(SetupCommands::Skill { dry_run, print }) => cmd_setup_skill::run(dry_run, print),
+            Some(SetupCommands::Perms {
+                remove,
+                dry_run,
+                print,
+            }) => cmd_setup_perms::run(remove, dry_run, print),
+            Some(SetupCommands::All { yes }) => cmd_setup_menu::run_all(yes),
         },
 
         Commands::Init => agent_comms::config::run_setup_gateway(),
