@@ -36,9 +36,48 @@ pub struct RegisterProjectResponse {
     pub room_id: String,
 }
 
+/// Optional metadata that enriches the structured message payload
+/// (subject line, originating host, explicit event time). All fields are
+/// optional; the gateway derives sensible defaults for anything left empty.
+///
+/// Borrowed form so callers can build a `MessageMeta` from existing strings
+/// without forcing an allocation per send.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct MessageMeta<'a> {
+    /// One-line headline rendered as the embed title. Defaults server-side
+    /// to the first non-empty line of the body, capped at 80 chars.
+    pub subject: Option<&'a str>,
+    /// Originating host of the message. Defaults server-side to the
+    /// `X-Agent-Id` header value.
+    pub hostname: Option<&'a str>,
+    /// Event time in epoch milliseconds. Defaults server-side to receipt time.
+    pub event_at_ms: Option<i64>,
+}
+
 #[derive(Serialize)]
 struct SendMessageRequest<'a> {
+    body: &'a str,
+    /// Back-compat alias retained so this client also works against gateways
+    /// that pre-date the structured payload. New gateways prefer `body`.
     content: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hostname: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_at: Option<i64>,
+}
+
+impl<'a> SendMessageRequest<'a> {
+    fn from_meta(body: &'a str, meta: &MessageMeta<'a>) -> Self {
+        Self {
+            body,
+            content: body,
+            subject: meta.subject,
+            hostname: meta.hostname,
+            event_at: meta.event_at_ms,
+        }
+    }
 }
 
 /// Response returned after posting a message to a project channel.
@@ -84,7 +123,28 @@ pub struct ReplyResponse {
 
 #[derive(Serialize)]
 struct ActionRequest<'a> {
+    body: &'a str,
+    /// Back-compat alias for action posts on older gateways. New gateways
+    /// prefer `body`; this is ignored when `body` is set.
     message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hostname: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_at: Option<i64>,
+}
+
+impl<'a> ActionRequest<'a> {
+    fn from_meta(body: &'a str, meta: &MessageMeta<'a>) -> Self {
+        Self {
+            body,
+            message: body,
+            subject: meta.subject,
+            hostname: meta.hostname,
+            event_at: meta.event_at_ms,
+        }
+    }
 }
 
 // -- Client implementation ----------------------------------------------------
@@ -165,12 +225,19 @@ impl GatewayClient {
 
     /// Post an agent message to the project's channel.
     ///
+    /// `body` populates the structured `body` field (and the legacy `content`
+    /// alias for back-compat with older gateways). `meta` carries the optional
+    /// structured fields — subject, hostname, and explicit event time. Pass
+    /// `&MessageMeta::default()` when you want the gateway to derive every
+    /// optional field server-side.
+    ///
     /// When `agent_id` is `Some`, the request includes an `X-Agent-Id` header so
     /// the gateway can attribute the message to a specific agent.
     pub async fn send_message(
         &self,
         ident: &str,
-        content: &str,
+        body: &str,
+        meta: &MessageMeta<'_>,
         agent_id: Option<&str>,
     ) -> Result<SendMessageResponse> {
         let url = format!("{}/v1/projects/{}/messages", self.base_url, ident);
@@ -178,7 +245,7 @@ impl GatewayClient {
             .client
             .post(&url)
             .header("Authorization", self.auth())
-            .json(&SendMessageRequest { content });
+            .json(&SendMessageRequest::from_meta(body, meta));
         let resp = Self::add_agent_id(builder, agent_id)
             .send()
             .await
@@ -255,14 +322,19 @@ impl GatewayClient {
 
     /// Reply to a specific message in a project's channel.
     ///
-    /// Sends `content` as a threaded reply to the message identified by `msg_id`.
+    /// Sends `body` as a threaded reply to the message identified by `msg_id`.
+    /// `meta` populates the optional structured fields (subject, hostname,
+    /// event time); pass `&MessageMeta::default()` to let the gateway derive
+    /// them server-side.
+    ///
     /// The gateway will attempt native threading (e.g. Discord message references)
     /// and falls back to a plain send if the parent has no external message id.
     pub async fn reply_to(
         &self,
         ident: &str,
         msg_id: i64,
-        content: &str,
+        body: &str,
+        meta: &MessageMeta<'_>,
         agent_id: Option<&str>,
     ) -> Result<ReplyResponse> {
         let url = format!(
@@ -273,7 +345,7 @@ impl GatewayClient {
             .client
             .post(&url)
             .header("Authorization", self.auth())
-            .json(&SendMessageRequest { content });
+            .json(&SendMessageRequest::from_meta(body, meta));
         let resp = Self::add_agent_id(builder, agent_id)
             .send()
             .await
@@ -292,14 +364,20 @@ impl GatewayClient {
 
     /// Signal that the agent is taking action on a message.
     ///
-    /// Posts an action notification against `msg_id`.  The body uses the field
-    /// name `message` (not `content`) to distinguish action payloads from
-    /// regular messages and replies.
+    /// Posts an action notification against `msg_id`. The payload uses the
+    /// structured `body` field (with the legacy `message` alias for back-compat
+    /// against older gateways). `meta` populates the optional structured fields
+    /// — pass `&MessageMeta::default()` to defer everything to the gateway.
+    ///
+    /// When the gateway derives the subject server-side it prefixes `[ACTION] `
+    /// so action posts stay visually distinct; supply your own subject (with
+    /// the prefix if you want it) to override that behavior.
     pub async fn taking_action_on(
         &self,
         ident: &str,
         msg_id: i64,
-        message: &str,
+        body: &str,
+        meta: &MessageMeta<'_>,
         agent_id: Option<&str>,
     ) -> Result<ReplyResponse> {
         let url = format!(
@@ -310,7 +388,7 @@ impl GatewayClient {
             .client
             .post(&url)
             .header("Authorization", self.auth())
-            .json(&ActionRequest { message });
+            .json(&ActionRequest::from_meta(body, meta));
         let resp = Self::add_agent_id(builder, agent_id)
             .send()
             .await

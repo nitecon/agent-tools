@@ -36,6 +36,8 @@ hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rpassword = "7"
+time = { version = "0.3", default-features = false, features = ["parsing"] }
+gethostname = "0.5"
 
 [profile.release]
 lto = true

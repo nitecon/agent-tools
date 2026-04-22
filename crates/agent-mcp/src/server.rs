@@ -3,7 +3,7 @@
 //! All tool methods live in the single `#[tool_router]` impl block as required
 //! by rmcp. Parameter structs are defined inline for clarity.
 
-use agent_comms::gateway::GatewayClient;
+use agent_comms::gateway::{GatewayClient, MessageMeta};
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
@@ -621,7 +621,10 @@ impl AgentToolsServer {
             return "Error: identity not set. Call set_identity first.".to_string();
         };
 
-        match gw.send_message(&ident, &content, agent_id.as_deref()).await {
+        match gw
+            .send_message(&ident, &content, &MessageMeta::default(), agent_id.as_deref())
+            .await
+        {
             Ok(resp) => format!("Message sent (id={}).", resp.message_id),
             Err(e) => format!("Error sending message: {e}"),
         }
@@ -750,7 +753,13 @@ impl AgentToolsServer {
         };
 
         match gw
-            .reply_to(&ident, message_id, &content, agent_id.as_deref())
+            .reply_to(
+                &ident,
+                message_id,
+                &content,
+                &MessageMeta::default(),
+                agent_id.as_deref(),
+            )
             .await
         {
             Ok(resp) => format!(
@@ -786,7 +795,13 @@ impl AgentToolsServer {
         };
 
         match gw
-            .taking_action_on(&ident, message_id, &message, agent_id.as_deref())
+            .taking_action_on(
+                &ident,
+                message_id,
+                &message,
+                &MessageMeta::default(),
+                agent_id.as_deref(),
+            )
             .await
         {
             Ok(resp) => format!(

@@ -150,6 +150,42 @@ agent-tools comms whoami --json
 
 All subcommands accept `--json` for machine-readable output, and `--agent-id <id>` when a per-invocation override is needed (e.g. running multiple distinct agents on one machine).
 
+#### Structured rendering (Discord embeds & friends)
+
+`send`, `reply`, and `action` now publish a structured payload to the gateway so messages render as a tidy Discord embed (and as clean Markdown on any other channel) instead of a single run-on line. The positional `<content>` argument still populates the message body — three new optional flags let you control the rest:
+
+| Flag | Purpose | Default |
+|------|---------|---------|
+| `--subject <text>` | One-line headline used as the embed title | First non-empty line of the body, capped at 80 chars |
+| `--hostname <host>` | Originating host shown in the byline | Local hostname (`gethostname`); pass `--hostname ""` to opt out and let the gateway fall back to the agent-id |
+| `--event-at <time>` | Event time stamped on the embed; accepts RFC3339 (`2026-04-21T19:18:00Z`) or a bare epoch-ms integer | Gateway receipt time |
+
+Examples:
+
+```bash
+# Fully structured send — bold subject, body in a code block, host + timestamp byline
+agent-tools comms send \
+  --subject "push.main on nitecon/agent-gateway · v0.9.5" \
+  "commit 8814ff2 by Will Hattingh.
+
+Two independent changes:
+1. Versioning fix
+2. ndesign theme"
+
+# Threaded reply with an explicit timestamp (e.g. replaying a historical event)
+agent-tools comms reply 1234 \
+  --subject "deploy: prod rollout complete" \
+  --event-at 2026-04-21T19:18:00Z \
+  "All replicas healthy after 4m23s."
+
+# Action signal with a custom subject (skips the auto `[ACTION] ` prefix)
+agent-tools comms action 1234 \
+  --subject "[CLAIM] migration 0042" \
+  "running backfill in batches of 5k rows"
+```
+
+The gateway accepts either the new structured payload or the legacy single-`content` shape, so older `agent-tools` builds and the new structured CLI can coexist against the same gateway during rollout.
+
 ## Agent Directives
 
 Add the appropriate block below to your agent's global instructions file to enable CLI-based tool usage.
@@ -225,7 +261,7 @@ Prefer symbol-level tools over raw file reads whenever possible.
 
 ```bash
 # Send a message to the project's channel (auto-derives ident + agent-id)
-/opt/agentic/bin/agent-tools comms send "<content>"
+/opt/agentic/bin/agent-tools comms send "<body>"
 
 # Fetch unread messages for this project + agent
 /opt/agentic/bin/agent-tools comms recv [--json]
@@ -234,7 +270,7 @@ Prefer symbol-level tools over raw file reads whenever possible.
 /opt/agentic/bin/agent-tools comms confirm <message_id>
 
 # Threaded reply to a specific message
-/opt/agentic/bin/agent-tools comms reply <message_id> "<content>"
+/opt/agentic/bin/agent-tools comms reply <message_id> "<body>"
 
 # Signal that this agent is actively working on a message
 /opt/agentic/bin/agent-tools comms action <message_id> "<what you're doing>"
@@ -242,6 +278,18 @@ Prefer symbol-level tools over raw file reads whenever possible.
 # Show derived project ident + agent id (debug / verification)
 /opt/agentic/bin/agent-tools comms whoami [--json]
 ```
+
+### Structured rendering flags (send / reply / action)
+
+For Discord embeds (and clean Markdown on Slack / email), enrich any send / reply / action with these optional flags. The positional argument still populates the body:
+
+```bash
+--subject "<one-line headline>"     # embed title; defaults to first line of body
+--hostname "<host>"                  # byline host; defaults to local hostname (use "" to opt out)
+--event-at <RFC3339|epoch-ms>        # event time; defaults to gateway receipt time
+```
+
+Use a structured `send` whenever the message has a clear headline + multi-line detail, e.g. a deploy summary, a build failure, or a PR-review verdict — it dramatically improves readability on Discord vs. a single run-on line.
 
 ### Notes
 - All subcommands accept `--json` for machine-readable output.
@@ -320,13 +368,25 @@ Prefer symbol-level tools over raw file reads whenever possible.
 ### CLI Commands (run via shell):
 
 ```bash
-/opt/agentic/bin/agent-tools comms send "<content>"
+/opt/agentic/bin/agent-tools comms send "<body>"
 /opt/agentic/bin/agent-tools comms recv [--json]
 /opt/agentic/bin/agent-tools comms confirm <message_id>
-/opt/agentic/bin/agent-tools comms reply <message_id> "<content>"
+/opt/agentic/bin/agent-tools comms reply <message_id> "<body>"
 /opt/agentic/bin/agent-tools comms action <message_id> "<what you're doing>"
 /opt/agentic/bin/agent-tools comms whoami [--json]
 ```
+
+### Structured rendering flags (send / reply / action)
+
+For Discord embeds (and clean Markdown on Slack / email), enrich any send / reply / action with these optional flags:
+
+```bash
+--subject "<one-line headline>"     # embed title; defaults to first line of body
+--hostname "<host>"                  # byline host; defaults to local hostname (use "" to opt out)
+--event-at <RFC3339|epoch-ms>        # event time; defaults to gateway receipt time
+```
+
+Prefer a structured `send` whenever the message has a clear headline and multi-line detail; the body lands inside a code block so formatting is preserved.
 
 ### Notes
 - All subcommands accept `--json` for machine-readable output.

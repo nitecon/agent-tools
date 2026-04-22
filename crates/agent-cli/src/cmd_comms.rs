@@ -7,20 +7,33 @@
 //! so repeat sends don't pay a register round-trip.
 
 use agent_comms::config::{home_dir, load_config};
-use agent_comms::gateway::GatewayClient;
+use agent_comms::gateway::{GatewayClient, MessageMeta};
 use agent_comms::identity::load_or_generate_agent_id;
 use agent_comms::sanitize::short_project_ident;
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use serde::Serialize;
 use std::path::PathBuf;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 #[derive(Subcommand)]
 pub enum CommsCommands {
     /// Send a message to the project channel (auto-derives project ident).
     Send {
-        /// Message content.
+        /// Message body. Rendered inside a fenced code block in Discord.
         content: String,
+        /// One-line headline for the embed title (defaults to first line of body).
+        #[arg(long)]
+        subject: Option<String>,
+        /// Originating host. Defaults to the local hostname; pass an empty
+        /// string to leave the gateway to fall back to the agent-id.
+        #[arg(long)]
+        hostname: Option<String>,
+        /// Event time. Accepts RFC3339 (e.g. `2026-04-21T19:18:00Z`) or epoch
+        /// milliseconds. Defaults to gateway receipt time when omitted.
+        #[arg(long)]
+        event_at: Option<String>,
         /// Override the machine agent-id for this invocation.
         #[arg(long)]
         agent_id: Option<String>,
@@ -57,8 +70,19 @@ pub enum CommsCommands {
     Reply {
         /// Numeric message id to reply to.
         message_id: i64,
-        /// Reply content.
+        /// Reply body. Rendered inside a fenced code block in Discord.
         content: String,
+        /// One-line headline for the embed title (defaults to first line of body).
+        #[arg(long)]
+        subject: Option<String>,
+        /// Originating host. Defaults to the local hostname; pass an empty
+        /// string to leave the gateway to fall back to the agent-id.
+        #[arg(long)]
+        hostname: Option<String>,
+        /// Event time. Accepts RFC3339 or epoch milliseconds. Defaults to
+        /// gateway receipt time when omitted.
+        #[arg(long)]
+        event_at: Option<String>,
         #[arg(long)]
         agent_id: Option<String>,
         #[arg(long)]
@@ -69,8 +93,20 @@ pub enum CommsCommands {
     Action {
         /// Numeric message id being acted on.
         message_id: i64,
-        /// Brief description of the action being taken.
+        /// Brief description of the action being taken (used as the body).
         message: String,
+        /// One-line headline for the embed title. Auto-derived subjects are
+        /// prefixed with `[ACTION] ` server-side; supply your own to override.
+        #[arg(long)]
+        subject: Option<String>,
+        /// Originating host. Defaults to the local hostname; pass an empty
+        /// string to leave the gateway to fall back to the agent-id.
+        #[arg(long)]
+        hostname: Option<String>,
+        /// Event time. Accepts RFC3339 or epoch milliseconds. Defaults to
+        /// gateway receipt time when omitted.
+        #[arg(long)]
+        event_at: Option<String>,
         #[arg(long)]
         agent_id: Option<String>,
         #[arg(long)]
@@ -101,10 +137,16 @@ async fn run(cmd: CommsCommands) -> Result<()> {
         CommsCommands::Whoami { json } => cmd_whoami(json),
         CommsCommands::Send {
             content,
+            subject,
+            hostname,
+            event_at,
             agent_id,
             channel,
             json,
-        } => cmd_send(content, agent_id, channel, json).await,
+        } => {
+            let meta = ResolvedMeta::from_args(subject, hostname, event_at)?;
+            cmd_send(content, meta, agent_id, channel, json).await
+        }
         CommsCommands::Recv { agent_id, json } => cmd_recv(agent_id, json).await,
         CommsCommands::Confirm {
             message_id,
@@ -114,16 +156,99 @@ async fn run(cmd: CommsCommands) -> Result<()> {
         CommsCommands::Reply {
             message_id,
             content,
+            subject,
+            hostname,
+            event_at,
             agent_id,
             json,
-        } => cmd_reply(message_id, content, agent_id, json).await,
+        } => {
+            let meta = ResolvedMeta::from_args(subject, hostname, event_at)?;
+            cmd_reply(message_id, content, meta, agent_id, json).await
+        }
         CommsCommands::Action {
             message_id,
             message,
+            subject,
+            hostname,
+            event_at,
             agent_id,
             json,
-        } => cmd_action(message_id, message, agent_id, json).await,
+        } => {
+            let meta = ResolvedMeta::from_args(subject, hostname, event_at)?;
+            cmd_action(message_id, message, meta, agent_id, json).await
+        }
     }
+}
+
+// -- Structured-payload helpers ---------------------------------------------
+
+/// Owned counterpart to `agent_comms::gateway::MessageMeta` so the CLI can
+/// stage borrowed strings (host auto-detect, parsed event time) for the life
+/// of one request before handing them to the gateway client.
+struct ResolvedMeta {
+    subject: Option<String>,
+    hostname: Option<String>,
+    event_at_ms: Option<i64>,
+}
+
+impl ResolvedMeta {
+    fn from_args(
+        subject: Option<String>,
+        hostname: Option<String>,
+        event_at: Option<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            subject: subject.and_then(non_empty),
+            hostname: resolve_hostname(hostname),
+            event_at_ms: event_at.map(|raw| parse_event_at(&raw)).transpose()?,
+        })
+    }
+
+    fn as_borrowed(&self) -> MessageMeta<'_> {
+        MessageMeta {
+            subject: self.subject.as_deref(),
+            hostname: self.hostname.as_deref(),
+            event_at_ms: self.event_at_ms,
+        }
+    }
+}
+
+/// Auto-fill hostname when the caller didn't supply one. An explicit empty
+/// string opts out — the gateway will then fall back to the agent-id.
+fn resolve_hostname(flag: Option<String>) -> Option<String> {
+    match flag {
+        Some(s) if s.is_empty() => None,
+        Some(s) => Some(s),
+        None => gethostname::gethostname()
+            .into_string()
+            .ok()
+            .and_then(non_empty),
+    }
+}
+
+fn non_empty(s: String) -> Option<String> {
+    if s.trim().is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Parse `--event-at`. Accepts a bare epoch-ms integer or an RFC3339 timestamp
+/// (`2026-04-21T19:18:00Z`). Returns epoch milliseconds.
+fn parse_event_at(raw: &str) -> Result<i64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("--event-at value is empty");
+    }
+    if let Ok(ms) = trimmed.parse::<i64>() {
+        return Ok(ms);
+    }
+    let dt = OffsetDateTime::parse(trimmed, &Rfc3339)
+        .with_context(|| format!("parse --event-at {trimmed:?} as RFC3339 or epoch-ms"))?;
+    let nanos = dt.unix_timestamp_nanos();
+    let ms = nanos / 1_000_000;
+    i64::try_from(ms).context("event_at out of range for i64 epoch-ms")
 }
 
 // -- Context resolution ------------------------------------------------------
@@ -303,6 +428,7 @@ fn cmd_whoami(json: bool) -> Result<()> {
 
 async fn cmd_send(
     content: String,
+    meta: ResolvedMeta,
     agent_id: Option<String>,
     channel: Option<String>,
     json: bool,
@@ -312,7 +438,7 @@ async fn cmd_send(
 
     let resp = ctx
         .gateway
-        .send_message(&ctx.ident, &content, Some(&ctx.agent_id))
+        .send_message(&ctx.ident, &content, &meta.as_borrowed(), Some(&ctx.agent_id))
         .await
         .context("send message")?;
 
@@ -399,6 +525,7 @@ async fn cmd_confirm(message_id: i64, agent_id: Option<String>, json: bool) -> R
 async fn cmd_reply(
     message_id: i64,
     content: String,
+    meta: ResolvedMeta,
     agent_id: Option<String>,
     json: bool,
 ) -> Result<()> {
@@ -407,7 +534,13 @@ async fn cmd_reply(
 
     let resp = ctx
         .gateway
-        .reply_to(&ctx.ident, message_id, &content, Some(&ctx.agent_id))
+        .reply_to(
+            &ctx.ident,
+            message_id,
+            &content,
+            &meta.as_borrowed(),
+            Some(&ctx.agent_id),
+        )
         .await
         .context("reply to message")?;
 
@@ -427,6 +560,7 @@ async fn cmd_reply(
 async fn cmd_action(
     message_id: i64,
     message: String,
+    meta: ResolvedMeta,
     agent_id: Option<String>,
     json: bool,
 ) -> Result<()> {
@@ -435,7 +569,13 @@ async fn cmd_action(
 
     let resp = ctx
         .gateway
-        .taking_action_on(&ctx.ident, message_id, &message, Some(&ctx.agent_id))
+        .taking_action_on(
+            &ctx.ident,
+            message_id,
+            &message,
+            &meta.as_borrowed(),
+            Some(&ctx.agent_id),
+        )
         .await
         .context("signal action")?;
 
@@ -456,6 +596,52 @@ async fn cmd_action(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn parse_event_at_accepts_epoch_ms() {
+        assert_eq!(parse_event_at("1714000000000").unwrap(), 1_714_000_000_000);
+    }
+
+    #[test]
+    fn parse_event_at_accepts_rfc3339_utc() {
+        // 2024-04-25T00:26:40Z == 1714004800000 ms
+        let ms = parse_event_at("2024-04-25T00:26:40Z").unwrap();
+        assert_eq!(ms, 1_714_004_800_000);
+    }
+
+    #[test]
+    fn parse_event_at_accepts_rfc3339_with_offset() {
+        // 2024-04-25T02:26:40+02:00 is the same instant as the UTC case above.
+        let ms = parse_event_at("2024-04-25T02:26:40+02:00").unwrap();
+        assert_eq!(ms, 1_714_004_800_000);
+    }
+
+    #[test]
+    fn parse_event_at_rejects_garbage() {
+        assert!(parse_event_at("not-a-date").is_err());
+        assert!(parse_event_at("   ").is_err());
+    }
+
+    #[test]
+    fn resolve_hostname_explicit_empty_opts_out() {
+        assert_eq!(resolve_hostname(Some(String::new())), None);
+    }
+
+    #[test]
+    fn resolve_hostname_explicit_value_passes_through() {
+        assert_eq!(
+            resolve_hostname(Some("custom.host".into())),
+            Some("custom.host".into())
+        );
+    }
+
+    #[test]
+    fn resolve_hostname_default_is_local_hostname() {
+        // We don't assert a specific value (it varies by machine), only that
+        // omitting the flag gives us *some* non-empty hostname back.
+        let resolved = resolve_hostname(None);
+        assert!(resolved.is_some_and(|h| !h.is_empty()));
+    }
 
     #[test]
     fn marker_path_has_stable_shape() {
