@@ -177,7 +177,19 @@ async fn run(cmd: TasksCommands) -> Result<()> {
             reporter,
             agent_id,
             json,
-        } => cmd_add(title, description, details, label, hostname, reporter, agent_id, json).await,
+        } => {
+            cmd_add(
+                title,
+                description,
+                details,
+                label,
+                hostname,
+                reporter,
+                agent_id,
+                json,
+            )
+            .await
+        }
         TasksCommands::Claim {
             task_id,
             agent_id,
@@ -493,10 +505,7 @@ fn print_task_detail(task: &Task, comments: &[TaskComment]) {
         "owner:     {}",
         task.owner_agent_id.as_deref().unwrap_or("—")
     );
-    println!(
-        "hostname:  {}",
-        task.hostname.as_deref().unwrap_or("—")
-    );
+    println!("hostname:  {}", task.hostname.as_deref().unwrap_or("—"));
     println!("created:   {}", fmt_epoch_ms(task.created_at));
     println!("updated:   {}", fmt_epoch_ms(task.updated_at));
     if let Some(started) = task.started_at {
@@ -719,7 +728,10 @@ mod tests {
 
     #[test]
     fn parse_status_csv_basic() {
-        assert_eq!(parse_status_csv("todo,in_progress"), vec!["todo", "in_progress"]);
+        assert_eq!(
+            parse_status_csv("todo,in_progress"),
+            vec!["todo", "in_progress"]
+        );
         assert_eq!(parse_status_csv(" done "), vec!["done"]);
         assert!(parse_status_csv("").is_empty());
         assert!(parse_status_csv(" , ").is_empty());
