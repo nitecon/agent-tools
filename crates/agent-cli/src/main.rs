@@ -1,4 +1,7 @@
 mod cmd_comms;
+mod cmd_setup_rules;
+mod cmd_tasks;
+mod nudge;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -143,6 +146,12 @@ enum Commands {
         command: cmd_comms::CommsCommands,
     },
 
+    /// Per-project task board: list, claim, comment, complete (gateway-backed)
+    Tasks {
+        #[command(subcommand)]
+        command: cmd_tasks::TasksCommands,
+    },
+
     /// Check for updates and install the latest version
     Update,
 
@@ -154,6 +163,24 @@ enum Commands {
 enum SetupCommands {
     /// Configure gateway connection (creates ~/.agentic/agent-tools/gateway.conf)
     Gateway,
+
+    /// Inject the agent-tools usage protocols into known agent rule files
+    /// (e.g. ~/.claude/CLAUDE.md). Idempotent — re-runs replace the existing
+    /// `<agent-tools-rules>` block in place.
+    Rules {
+        /// Update a specific file instead of running detection.
+        #[arg(long)]
+        target: Option<PathBuf>,
+        /// Update every detected file without prompting.
+        #[arg(long)]
+        all: bool,
+        /// Show the resulting file content without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Print the rules block to stdout and exit (no file IO, no gateway check).
+        #[arg(long)]
+        print: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -185,11 +212,17 @@ fn main() -> Result<()> {
             | Commands::Init
             | Commands::Setup { .. }
             | Commands::Comms { .. }
+            | Commands::Tasks { .. }
     ) {
         agent_updater::auto_update_blocking();
     }
 
-    match cli.command {
+    // Capture nudge eligibility before the match consumes `cli.command`.
+    // The actual emit happens after dispatch so we only nudge on success and
+    // never compete with the command's own output.
+    let nudge_after = nudge::should_nudge(&cli.command);
+
+    let result = match cli.command {
         Commands::Tree {
             path,
             depth,
@@ -261,11 +294,19 @@ fn main() -> Result<()> {
 
         Commands::Setup { command } => match command {
             SetupCommands::Gateway => agent_comms::config::run_setup_gateway(),
+            SetupCommands::Rules {
+                target,
+                all,
+                dry_run,
+                print,
+            } => cmd_setup_rules::run(target, all, dry_run, print),
         },
 
         Commands::Init => agent_comms::config::run_setup_gateway(),
 
         Commands::Comms { command } => cmd_comms::dispatch(command),
+
+        Commands::Tasks { command } => cmd_tasks::dispatch(command),
 
         Commands::Update => agent_updater::manual_update_blocking(),
 
@@ -273,7 +314,13 @@ fn main() -> Result<()> {
             println!("agent-tools {}", env!("AGENT_TOOLS_VERSION"));
             Ok(())
         }
+    };
+
+    if nudge_after && result.is_ok() {
+        nudge::emit_if_due();
     }
+
+    result
 }
 
 /// Display a token-efficient directory tree.

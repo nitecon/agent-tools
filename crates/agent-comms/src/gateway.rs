@@ -178,12 +178,26 @@ impl GatewayClient {
         })
     }
 
-    fn auth(&self) -> String {
+    /// Construct the `Bearer <api-key>` `Authorization` header value.
+    /// Exposed `pub(crate)` so sibling modules (e.g. `tasks`) can reuse it.
+    pub(crate) fn auth(&self) -> String {
         format!("Bearer {}", self.api_key)
     }
 
+    /// Borrow the underlying reqwest `Client` so sibling modules can build
+    /// requests without re-creating connection pools.
+    pub(crate) fn http_client(&self) -> &Client {
+        &self.client
+    }
+
+    /// Borrow the gateway base URL so sibling modules can format endpoint
+    /// paths without exposing the field directly.
+    pub(crate) fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Conditionally attach the `X-Agent-Id` header to a request builder.
-    fn add_agent_id(
+    pub(crate) fn add_agent_id(
         builder: reqwest::RequestBuilder,
         agent_id: Option<&str>,
     ) -> reqwest::RequestBuilder {

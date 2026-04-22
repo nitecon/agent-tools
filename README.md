@@ -197,6 +197,34 @@ The gateway accepts either the new structured payload or the legacy single-`cont
 
 Add the appropriate block below to your agent's global instructions file to enable CLI-based tool usage.
 
+### Automated install: `agent-tools setup rules`
+
+The fastest way to keep your agent rule files in sync with the latest agent-tools protocols is the built-in installer:
+
+```bash
+# Detect ~/.claude/CLAUDE.md, ~/.gemini/GEMINI.md, ~/.codex/AGENTS.md,
+# ~/.config/codex/AGENTS.md and prompt for which to update:
+agent-tools setup rules
+
+# Update every detected file without prompting:
+agent-tools setup rules --all
+
+# Target a specific file (skip detection):
+agent-tools setup rules --target ~/.claude/CLAUDE.md
+
+# Preview without writing:
+agent-tools setup rules --dry-run --target ~/.claude/CLAUDE.md
+
+# Dump the rules block to stdout (useful for piping or review):
+agent-tools setup rules --print
+```
+
+The injected block is wrapped in `<agent-tools-rules>...</agent-tools-rules>` markers; re-runs replace the block in place rather than duplicating it. A `<file>.bak` sibling is written before each modification so changes are recoverable.
+
+When the gateway is configured, the injected block includes code-exploration + comms + tasks. When the gateway is not configured, only the code-exploration section is injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
+
+If you'd rather inspect and paste the content yourself, the manual blocks below are kept in sync with the installer's output.
+
 ### CLAUDE.md / Cline / Aider
 
 Add this to your `CLAUDE.md` (or equivalent system instructions file):
