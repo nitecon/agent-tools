@@ -23,11 +23,15 @@ const CLOSE_MARKER: &str = "</agent-tools-rules>";
 // `setup rules --print` is the single source of truth.
 
 const HEADER: &str = r#"## Agent Tools — Mandatory Protocols
-
-These directives are auto-injected by `agent-tools setup rules`. Re-run that
-command to refresh; do not edit between the marker tags — your edits will be
-overwritten on the next update.
 "#;
+
+/// One-shot reminder printed to stdout after a successful inject. The same
+/// information used to live inside the injected block itself, which wasted
+/// agent context on every conversation; showing it here keeps the user aware
+/// of the overwrite behavior without bloating the rules file.
+const POST_INJECT_NOTE: &str =
+    "Note: content between the <agent-tools-rules> markers is regenerated \
+from this CLI on every run of `agent-tools setup rules` — edit the source, not the marker block.";
 
 const CODE_EXPLORATION_SECTION: &str = r#"
 ### Code Exploration (token-efficient)
@@ -149,6 +153,9 @@ pub fn run(target: Option<PathBuf>, all: bool, dry_run: bool, print: bool) -> Re
     if any_failed {
         anyhow::bail!("one or more files could not be updated");
     }
+    if !dry_run {
+        println!("\n{POST_INJECT_NOTE}");
+    }
     Ok(())
 }
 
@@ -261,7 +268,10 @@ fn prompt_user_for_selection(candidates: &[PathBuf]) -> Result<Vec<PathBuf>> {
     for (i, p) in candidates.iter().enumerate() {
         println!("  {}) {}", i + 1, p.display());
     }
-    print!("Update [a]ll, [1-{}] specific, [c]ancel: ", candidates.len());
+    print!(
+        "Update [a]ll, [1-{}] specific, [c]ancel: ",
+        candidates.len()
+    );
     io::stdout().flush().context("flush stdout")?;
 
     let mut input = String::new();
@@ -328,8 +338,7 @@ mod tests {
     #[test]
     fn compute_new_content_replaces_in_place() {
         let block = build_block(true);
-        let existing =
-            format!("# Header\n\n{OPEN_MARKER}\nold body\n{CLOSE_MARKER}\n\n# Footer\n");
+        let existing = format!("# Header\n\n{OPEN_MARKER}\nold body\n{CLOSE_MARKER}\n\n# Footer\n");
         let out = compute_new_content(&existing, &block, true);
         assert!(out.starts_with("# Header"));
         assert!(out.contains("# Footer"));
