@@ -338,11 +338,12 @@ fn touch_marker(marker: &Path) {
 // Archive extraction — Unix (tar.gz)
 // ---------------------------------------------------------------------------
 
-/// Extract matching binaries from a `.tar.gz` archive and atomically replace them.
+/// Extract matching binaries from a `.tar.gz` archive and atomically place them.
 ///
 /// Strategy: unpack each matching entry to `<name>.new`, set permissions to 0o755,
-/// then rename over the existing binary. Only binaries that are already installed
-/// (i.e. the target path exists) are replaced.
+/// then rename over the target path. Companion binaries shipped in the same archive
+/// (e.g. `agent-sync`) are installed even if they are not yet present on disk, so
+/// `agent-tools update` brings existing installs up to the current binary set.
 #[cfg(unix)]
 fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
     use flate2::read::GzDecoder;
@@ -366,9 +367,7 @@ fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
         }
 
         let target = exe_dir.join(&file_name);
-        if !target.exists() {
-            continue; // only update binaries already installed
-        }
+        let is_new = !target.exists();
 
         // Write to .new, then atomically rename.
         let staging = exe_dir.join(format!("{file_name}.new"));
@@ -380,6 +379,16 @@ fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
 
         std::fs::rename(&staging, &target)
             .with_context(|| format!("failed to replace {}", target.display()))?;
+
+        if is_new {
+            eprintln!(
+                "[agent-tools] installed new companion binary: {}",
+                target.display()
+            );
+            eprintln!(
+                "[agent-tools] re-run install.sh / install-macos.sh with sudo to create the /usr/local/bin symlink for `{file_name}`"
+            );
+        }
     }
 
     Ok(())
@@ -389,12 +398,16 @@ fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
 // Archive extraction — Windows (zip)
 // ---------------------------------------------------------------------------
 
-/// Extract matching binaries from a `.zip` archive and replace them.
+/// Extract matching binaries from a `.zip` archive and place them.
 ///
 /// On Windows we cannot rename over a running executable, so the strategy is:
 /// 1. Write the new binary to `<name>.new`.
-/// 2. Rename the running binary to `<name>.old`.
+/// 2. If the target exists, rename it to `<name>.old`.
 /// 3. Rename `<name>.new` to `<name>`.
+///
+/// Companion binaries shipped in the same archive (e.g. `agent-sync.exe`) are
+/// installed even if they are not yet present on disk, so `agent-tools update`
+/// brings existing installs up to the current binary set.
 ///
 /// Leftover `.old` files are cleaned up on the next invocation via
 /// [`cleanup_old_binaries`].
@@ -421,9 +434,7 @@ fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
         }
 
         let target = exe_dir.join(&file_name);
-        if !target.exists() {
-            continue;
-        }
+        let is_new = !target.exists();
 
         let staging = exe_dir.join(format!("{file_name}.new"));
         let old = exe_dir.join(format!("{file_name}.old"));
@@ -433,12 +444,21 @@ fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
         entry.read_to_end(&mut buf)?;
         std::fs::write(&staging, &buf)?;
 
-        // Swap: running binary -> .old, new -> target.
+        // Swap: running binary -> .old (if present), new -> target.
         let _ = std::fs::remove_file(&old); // clean up previous .old
-        std::fs::rename(&target, &old)
-            .with_context(|| format!("failed to move {} to .old", target.display()))?;
+        if target.exists() {
+            std::fs::rename(&target, &old)
+                .with_context(|| format!("failed to move {} to .old", target.display()))?;
+        }
         std::fs::rename(&staging, &target)
             .with_context(|| format!("failed to move .new to {}", target.display()))?;
+
+        if is_new {
+            eprintln!(
+                "[agent-tools] installed new companion binary: {}",
+                target.display()
+            );
+        }
     }
 
     Ok(())

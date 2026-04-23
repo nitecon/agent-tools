@@ -67,6 +67,7 @@ jobs:
           mkdir -p "$staging"
           cp "target/${{ matrix.target }}/release/agent-tools" "$staging/"
           cp "target/${{ matrix.target }}/release/agent-tools-mcp" "$staging/"
+          cp "target/${{ matrix.target }}/release/agent-sync" "$staging/"
           cp LICENSE README.md "$staging/"
           tar czf "${staging}.tar.gz" "$staging"
           echo "ASSET=${staging}.tar.gz" >> "$GITHUB_ENV"
@@ -80,6 +81,7 @@ jobs:
           New-Item -ItemType Directory -Path $staging
           Copy-Item "target/${{ matrix.target }}/release/agent-tools.exe" $staging
           Copy-Item "target/${{ matrix.target }}/release/agent-tools-mcp.exe" $staging
+          Copy-Item "target/${{ matrix.target }}/release/agent-sync.exe" $staging
           Copy-Item LICENSE, README.md $staging
           Compress-Archive -Path $staging -DestinationPath "${staging}.zip"
           echo "ASSET=${staging}.zip" >> $env:GITHUB_ENV
