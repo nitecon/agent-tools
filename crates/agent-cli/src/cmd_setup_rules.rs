@@ -1,9 +1,13 @@
 //! `agent-tools setup rules` — inject the agent-tools usage protocols into
-//! known agent rule files (e.g. `~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`).
+//! known agent rule files (e.g. `~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`,
+//! `~/.codex/AGENTS.md`).
 //!
-//! Idempotent: uses `<agent-tools-rules>...</agent-tools-rules>` markers so
-//! re-runs replace the block in place rather than duplicating it. A `.bak`
-//! sibling is written before each modification so the user can recover.
+//! Detection is by *agent home directory* rather than rule-file existence, so
+//! a fresh Codex install without an `AGENTS.md` still picks up the block on
+//! the first setup run. Idempotent: uses
+//! `<agent-tools-rules>...</agent-tools-rules>` markers so re-runs replace the
+//! block in place rather than duplicating it. A `.bak` sibling is written
+//! before each destructive modification so the user can recover.
 
 use agent_comms::config::{home_dir, load_config};
 use anyhow::{Context, Result};
@@ -107,12 +111,13 @@ pub fn run(target: Option<PathBuf>, all: bool, dry_run: bool, print: bool) -> Re
 
     if candidates.is_empty() {
         anyhow::bail!(
-            "No agent rule files detected. Tried:\n  \
-             ~/.claude/CLAUDE.md\n  \
-             ~/.gemini/GEMINI.md\n  \
-             ~/.codex/AGENTS.md\n  \
-             ~/.config/codex/AGENTS.md\n\
-             Re-run with `--target <path>` to point at a specific file."
+            "No agent home directories detected. Tried:\n  \
+             ~/.claude (CLAUDE.md)\n  \
+             ~/.gemini (GEMINI.md)\n  \
+             ~/.codex or $CODEX_HOME (AGENTS.md)\n  \
+             ~/.config/codex (AGENTS.md)\n\
+             Install one of these agents first, or re-run with \
+             `--target <path>` to point at a specific rule file."
         );
     }
 
@@ -138,11 +143,18 @@ pub fn run(target: Option<PathBuf>, all: bool, dry_run: bool, print: bool) -> Re
             }
             Ok(InjectOutcome::Replaced { backup }) => {
                 println!("Updated existing block in {}", path.display());
-                println!("  backup: {}", backup.display());
+                if let Some(b) = backup {
+                    println!("  backup: {}", b.display());
+                }
             }
             Ok(InjectOutcome::Prepended { backup }) => {
                 println!("Prepended new block to {}", path.display());
-                println!("  backup: {}", backup.display());
+                if let Some(b) = backup {
+                    println!("  backup: {}", b.display());
+                }
+            }
+            Ok(InjectOutcome::Created) => {
+                println!("Created new rule file at {}", path.display());
             }
             Err(e) => {
                 eprintln!("Failed to update {}: {e:#}", path.display());
@@ -169,15 +181,46 @@ fn gateway_configured() -> bool {
 /// Built-in detection list. Only home-dir global rule files; project-local
 /// instruction files (e.g. `./CLAUDE.md`) are intentionally left alone since
 /// they're per-repo content the user should edit directly.
-fn detect_agent_files() -> Vec<PathBuf> {
+///
+/// Detection is by **agent home directory**, not rule-file existence. That
+/// means a fresh Codex install (with `~/.codex/` present but no
+/// `AGENTS.md`) still gets the rules injected on first run — `inject()`
+/// creates the file if missing. The `~/.config/codex/AGENTS.md` variant is
+/// only considered when that XDG-style directory actually exists, so we
+/// don't pre-create it on macOS where only `~/.codex/` is used.
+pub(crate) fn detect_agent_files() -> Vec<PathBuf> {
     let home = home_dir();
     let candidates = [
-        home.join(".claude").join("CLAUDE.md"),
-        home.join(".gemini").join("GEMINI.md"),
-        home.join(".codex").join("AGENTS.md"),
-        home.join(".config").join("codex").join("AGENTS.md"),
+        (home.join(".claude"), home.join(".claude").join("CLAUDE.md")),
+        (home.join(".gemini"), home.join(".gemini").join("GEMINI.md")),
+        (codex_home(), codex_home().join("AGENTS.md")),
+        (
+            home.join(".config").join("codex"),
+            home.join(".config").join("codex").join("AGENTS.md"),
+        ),
     ];
-    candidates.into_iter().filter(|p| p.exists()).collect()
+    let mut out: Vec<PathBuf> = Vec::new();
+    for (dir, file) in candidates {
+        // The directory is the signal the agent is installed; the file itself
+        // may or may not exist yet. Dedupe on file path so overlapping
+        // CODEX_HOME + ~/.codex setups don't double-list.
+        if dir.exists() && !out.iter().any(|p| p == &file) {
+            out.push(file);
+        }
+    }
+    out
+}
+
+/// Resolve the Codex home directory. Honors `CODEX_HOME` (Codex's own
+/// override) before falling back to `~/.codex`, matching the behavior
+/// documented in Codex's `skill-installer` skill.
+pub(crate) fn codex_home() -> PathBuf {
+    if let Ok(val) = std::env::var("CODEX_HOME") {
+        if !val.is_empty() {
+            return PathBuf::from(val);
+        }
+    }
+    home_dir().join(".codex")
 }
 
 /// Compose the rules block. `include_gateway_sections` flips the comms +
@@ -196,11 +239,13 @@ fn build_block(include_gateway_sections: bool) -> String {
 
 enum InjectOutcome {
     DryRun(String),
-    Replaced { backup: PathBuf },
-    Prepended { backup: PathBuf },
+    Replaced { backup: Option<PathBuf> },
+    Prepended { backup: Option<PathBuf> },
+    Created,
 }
 
 fn inject(path: &Path, block: &str, dry_run: bool) -> Result<InjectOutcome> {
+    let file_exists = path.exists();
     let existing = std::fs::read_to_string(path).unwrap_or_default();
     let already_present = existing.contains(OPEN_MARKER) && existing.contains(CLOSE_MARKER);
     let new_content = compute_new_content(&existing, block, already_present);
@@ -214,16 +259,24 @@ fn inject(path: &Path, block: &str, dry_run: bool) -> Result<InjectOutcome> {
             .with_context(|| format!("create parent of {}", path.display()))?;
     }
 
-    let backup = backup_path(path);
-    std::fs::write(&backup, &existing)
-        .with_context(|| format!("write backup to {}", backup.display()))?;
+    // Only write a `.bak` when there's actual content to preserve. Brand-new
+    // rule files (first-run Codex users whose AGENTS.md we just created)
+    // don't need a zero-byte `.bak` cluttering the directory.
+    let backup = if file_exists {
+        let b = backup_path(path);
+        std::fs::write(&b, &existing)
+            .with_context(|| format!("write backup to {}", b.display()))?;
+        Some(b)
+    } else {
+        None
+    };
     std::fs::write(path, &new_content)
         .with_context(|| format!("write updated file {}", path.display()))?;
 
-    if already_present {
-        Ok(InjectOutcome::Replaced { backup })
-    } else {
-        Ok(InjectOutcome::Prepended { backup })
+    match (file_exists, already_present) {
+        (false, _) => Ok(InjectOutcome::Created),
+        (true, true) => Ok(InjectOutcome::Replaced { backup }),
+        (true, false) => Ok(InjectOutcome::Prepended { backup }),
     }
 }
 

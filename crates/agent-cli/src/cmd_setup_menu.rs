@@ -138,50 +138,69 @@ fn probe_rules() -> ComponentState {
     if targets.is_empty() {
         return ComponentState {
             installed: false,
-            detail: "no agent rule files detected".into(),
+            detail: "no agent home directories detected".into(),
         };
     }
-    let any_with_block = targets.iter().any(|p| file_has_rules_block(p));
-    if any_with_block {
-        let with_block: Vec<String> = targets
-            .iter()
-            .filter(|p| file_has_rules_block(p))
-            .map(|p| p.display().to_string())
-            .collect();
-        ComponentState {
-            installed: true,
-            detail: format!("injected in {}", with_block.join(", ")),
-        }
-    } else {
-        ComponentState {
-            installed: false,
-            detail: format!(
-                "not injected in {}",
-                targets
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        }
-    }
+    let with_block: Vec<String> = targets
+        .iter()
+        .filter(|p| file_has_rules_block(p))
+        .map(|p| p.display().to_string())
+        .collect();
+    let missing: Vec<String> = targets
+        .iter()
+        .filter(|p| !file_has_rules_block(p))
+        .map(|p| p.display().to_string())
+        .collect();
+    // "Installed" means every detected agent's rule file has the marker
+    // block. Partial state still renders as not installed so the user knows
+    // to re-run — but the detail string lists both sides so they can see
+    // which target is behind.
+    let installed = missing.is_empty() && !with_block.is_empty();
+    let detail = match (with_block.is_empty(), missing.is_empty()) {
+        (false, true) => format!("injected in {}", with_block.join(", ")),
+        (false, false) => format!(
+            "injected in {}; missing in {}",
+            with_block.join(", "),
+            missing.join(", ")
+        ),
+        (true, false) => format!("not injected in {}", missing.join(", ")),
+        (true, true) => "no agent home directories detected".into(),
+    };
+    ComponentState { installed, detail }
 }
 
 fn probe_skill() -> ComponentState {
-    if cmd_setup_skill::is_installed() {
-        ComponentState {
-            installed: true,
-            detail: format!("installed at {}", cmd_setup_skill::skill_path().display()),
-        }
-    } else {
-        ComponentState {
+    let expected = cmd_setup_skill::expected_paths();
+    if expected.is_empty() {
+        return ComponentState {
             installed: false,
-            detail: format!(
-                "not installed ({} missing)",
-                cmd_setup_skill::skill_path().display()
-            ),
-        }
+            detail: "no agent home directories detected".into(),
+        };
     }
+    let installed_paths = cmd_setup_skill::installed_paths();
+    let installed_set: std::collections::HashSet<&PathBuf> = installed_paths.iter().collect();
+    let present: Vec<String> = expected
+        .iter()
+        .filter(|p| installed_set.contains(p))
+        .map(|p| p.display().to_string())
+        .collect();
+    let missing: Vec<String> = expected
+        .iter()
+        .filter(|p| !installed_set.contains(p))
+        .map(|p| p.display().to_string())
+        .collect();
+    let installed = missing.is_empty() && !present.is_empty();
+    let detail = match (present.is_empty(), missing.is_empty()) {
+        (false, true) => format!("installed at {}", present.join(", ")),
+        (false, false) => format!(
+            "installed at {}; missing at {}",
+            present.join(", "),
+            missing.join(", ")
+        ),
+        (true, false) => format!("missing at {}", missing.join(", ")),
+        (true, true) => "no agent home directories detected".into(),
+    };
+    ComponentState { installed, detail }
 }
 
 fn probe_perms() -> ComponentState {
@@ -205,16 +224,11 @@ fn probe_perms() -> ComponentState {
 }
 
 fn detect_rule_files() -> Vec<PathBuf> {
-    let home = agent_comms::config::home_dir();
-    [
-        home.join(".claude").join("CLAUDE.md"),
-        home.join(".gemini").join("GEMINI.md"),
-        home.join(".codex").join("AGENTS.md"),
-        home.join(".config").join("codex").join("AGENTS.md"),
-    ]
-    .into_iter()
-    .filter(|p| p.exists())
-    .collect()
+    // Delegate to the rules module so detection stays in lockstep between
+    // the interactive menu and the direct subcommand. This picks up agents
+    // by *home-directory* presence (including Codex via `$CODEX_HOME` or
+    // `~/.codex`), not by existing rule-file presence.
+    cmd_setup_rules::detect_agent_files()
 }
 
 fn file_has_rules_block(path: &Path) -> bool {

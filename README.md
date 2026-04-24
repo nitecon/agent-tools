@@ -202,8 +202,9 @@ Add the appropriate block below to your agent's global instructions file to enab
 The fastest way to keep your agent rule files in sync with the latest agent-tools protocols is the built-in installer:
 
 ```bash
-# Detect ~/.claude/CLAUDE.md, ~/.gemini/GEMINI.md, ~/.codex/AGENTS.md,
-# ~/.config/codex/AGENTS.md and prompt for which to update:
+# Detect installed agents by home directory (~/.claude, ~/.gemini,
+# ~/.codex or $CODEX_HOME, ~/.config/codex) and prompt for which to
+# update. If the rule file doesn't exist yet it's created on the fly.
 agent-tools setup rules
 
 # Update every detected file without prompting:
@@ -219,9 +220,28 @@ agent-tools setup rules --dry-run --target ~/.claude/CLAUDE.md
 agent-tools setup rules --print
 ```
 
-The injected block is wrapped in `<agent-tools-rules>...</agent-tools-rules>` markers; re-runs replace the block in place rather than duplicating it. A `<file>.bak` sibling is written before each modification so changes are recoverable.
+Detection is by **agent home directory** rather than rule-file existence, so a fresh Codex install (with `~/.codex/` present but no `AGENTS.md`) still picks up the block on the first setup run. For Codex, `$CODEX_HOME` is honored with a fallback to `~/.codex`, matching Codex's own skill-install convention.
+
+The injected block is wrapped in `<agent-tools-rules>...</agent-tools-rules>` markers; re-runs replace the block in place rather than duplicating it. A `<file>.bak` sibling is written before each destructive modification so changes are recoverable (brand-new files skip the backup to avoid zero-byte `.bak` clutter).
 
 When the gateway is configured, the injected block includes code-exploration + comms + tasks. When the gateway is not configured, only the code-exploration section is injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
+
+### Automated install: `agent-tools setup skill`
+
+Installs the agent-tools skill file (advertises the CLI to the session so the model picks it up automatically):
+
+- Claude Code — `~/.claude/skills/agent-tools/SKILL.md` (includes `allowed-tools` frontmatter and flags the disabled native `TaskCreate*` tools).
+- Codex CLI — `$CODEX_HOME/skills/agent-tools/SKILL.md` (defaults to `~/.codex/skills/agent-tools/SKILL.md`). Body is tuned for Codex: no `allowed-tools` frontmatter (Codex doesn't read it), no references to Claude-only disabled task tools.
+
+```bash
+agent-tools setup skill              # installs to every detected agent
+agent-tools setup skill --dry-run    # preview per-target output
+agent-tools setup skill --print      # dump the Claude body to stdout
+```
+
+### Automated install: `agent-tools setup perms`
+
+Writes `TaskCreate*` / `TodoWrite` denies into `~/.claude/settings.json` so Claude-Code sessions can't route around the gateway-backed task board. **Claude-only** — Codex has no equivalent tool-deny facility in its config, so running `setup perms` is a no-op for Codex setups.
 
 If you'd rather inspect and paste the content yourself, the manual blocks below are kept in sync with the installer's output.
 

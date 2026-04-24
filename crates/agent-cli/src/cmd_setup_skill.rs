@@ -1,24 +1,85 @@
-//! `agent-tools setup skill` — install a Claude Code Agent Skill that
-//! advertises the `agent-tools` CLI to the model via auto-loaded description.
+//! `agent-tools setup skill` — install an agent skill that advertises the
+//! `agent-tools` CLI to the model via an auto-loaded frontmatter description.
 //!
-//! Skills published under `~/.claude/skills/<name>/SKILL.md` have their
-//! frontmatter `description` injected into the session system prompt (~100
-//! tokens each) at start. The full body is only loaded on-demand when the
-//! model judges the skill relevant, so this file stays out of context until
-//! it earns its place.
+//! Supported targets:
+//!   * Claude Code — `~/.claude/skills/agent-tools/SKILL.md`
+//!   * Codex CLI   — `$CODEX_HOME/skills/agent-tools/SKILL.md`
+//!     (defaults to `~/.codex/skills/agent-tools/SKILL.md`)
+//!
+//! Both agents use the same SKILL.md format with YAML frontmatter, and in
+//! both cases the `description` line is loaded into the session system
+//! prompt (~100 tokens) while the body is only pulled in when the model
+//! judges the skill relevant.
+//!
+//! Detection is by agent home directory — if `~/.claude` exists we install
+//! the Claude variant, if `~/.codex` (or `$CODEX_HOME`) exists we install
+//! the Codex variant. Both run independently so a machine with one agent
+//! isn't punished for not having the other.
 //!
 //! Idempotent: overwrites SKILL.md in place. Writes a `.bak` sibling before
 //! the first destructive overwrite so the user can recover prior content.
 
+use crate::cmd_setup_rules::codex_home;
 use agent_comms::config::home_dir;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-/// Skill body. The frontmatter `description` is deliberately specific about
-/// the **replacement** of the native Task* tools — Claude's built-in system
-/// prompt still says "Use TaskCreate to plan work," so we need an explicit
-/// override here for the model to route task tracking through `agent-tools`.
-const SKILL_BODY: &str = r#"---
+/// Install target for the skill file. Each variant carries its own target
+/// path resolver and body generator so divergent conventions (Claude's
+/// `allowed-tools` field, Codex's lack of built-in task tools) are
+/// expressed where they live, not behind runtime branching in `run()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkillTarget {
+    Claude,
+    Codex,
+}
+
+impl SkillTarget {
+    pub const ALL: [SkillTarget; 2] = [SkillTarget::Claude, SkillTarget::Codex];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SkillTarget::Claude => "Claude",
+            SkillTarget::Codex => "Codex",
+        }
+    }
+
+    /// Parent directory that must exist for the skill install to make sense.
+    /// For Codex we respect `$CODEX_HOME`, falling back to `~/.codex`.
+    pub fn agent_home(self) -> PathBuf {
+        match self {
+            SkillTarget::Claude => home_dir().join(".claude"),
+            SkillTarget::Codex => codex_home(),
+        }
+    }
+
+    /// Final SKILL.md path for this target.
+    pub fn skill_path(self) -> PathBuf {
+        self.agent_home()
+            .join("skills")
+            .join("agent-tools")
+            .join("SKILL.md")
+    }
+
+    /// True when the agent this target serves is installed on this host.
+    pub fn detected(self) -> bool {
+        self.agent_home().exists()
+    }
+
+    /// Rendered SKILL.md body for this target.
+    fn body(self) -> &'static str {
+        match self {
+            SkillTarget::Claude => SKILL_BODY_CLAUDE,
+            SkillTarget::Codex => SKILL_BODY_CODEX,
+        }
+    }
+}
+
+/// Claude Code variant. Description explicitly flags the **replacement** of
+/// the native Task* tools — Claude's built-in system prompt still says "Use
+/// TaskCreate to plan work," so we need an explicit override here for the
+/// model to route task tracking through `agent-tools`.
+const SKILL_BODY_CLAUDE: &str = r#"---
 name: agent-tools
 description: Token-efficient code exploration (tree/symbols/search), gateway-backed task board (REQUIRED — native TaskCreate/TaskUpdate/TaskList/TaskGet are disabled in this setup), cross-project comms, and persistent memory via the `agent-tools` and `memory` CLIs. Prefer for bulk exploration and ALWAYS for task tracking.
 allowed-tools: Bash(agent-tools *), Bash(memory *)
@@ -91,49 +152,161 @@ memory forget --id <uuid>                          # remove a memory
 Types: `user`, `feedback`, `project`, `reference`.
 "#;
 
+/// Codex variant. Codex has no built-in task tool to disable and doesn't
+/// understand Claude's `allowed-tools` frontmatter, so both are dropped. The
+/// description is tuned for Codex's skill-loading heuristic, which pulls the
+/// full body in on relevance match.
+const SKILL_BODY_CODEX: &str = r#"---
+name: agent-tools
+description: Token-efficient code exploration (tree/symbols/search), gateway-backed task board, cross-project comms, and persistent memory via the `agent-tools` and `memory` CLIs. Prefer for bulk exploration and use `agent-tools tasks` as the persistent task surface instead of an in-memory plan.
+metadata:
+  short-description: agent-tools + memory CLIs for exploration, tasks, comms, memory
+---
+
+# agent-tools
+
+The `agent-tools` CLI and its companion `memory` CLI give Codex sessions a
+persistent task board, cross-project messaging, and token-efficient symbol
+search that outlives any single conversation.
+
+## Code Exploration (token-efficient)
+
+Prefer symbol-aware tools over raw file reads or shell text search for bulk
+exploration. Reading a known file by path is still fine.
+
+```bash
+agent-tools tree [path] --depth <n>            # directory tree
+agent-tools symbols <file>                     # list a file's symbols
+agent-tools symbol <name> --file <path>        # extract a symbol's source
+agent-tools search <query> --type symbol|file  # project-wide index search
+agent-tools summary [path]                     # compact project overview
+agent-tools index --rebuild                    # refresh after large changes
+```
+
+## Task Board (persistent across sessions)
+
+Gateway-backed with three statuses, server-enforced ownership, 1h stale-claim
+reclaim, and 7d done falloff. Use this as your TODO surface rather than an
+in-message plan — tasks survive session turnover.
+
+```bash
+agent-tools tasks list                   # TODO + IN PROGRESS for this project
+agent-tools tasks get <id>               # full detail + comment thread
+agent-tools tasks add --title "..." [--label x] [--description "..."]
+agent-tools tasks claim <id>             # take ownership (-> in_progress)
+agent-tools tasks release <id>           # drop ownership (-> todo)
+agent-tools tasks done <id>              # mark complete
+agent-tools tasks comment <id> "<note>"  # append a note
+```
+
+## Comms (gateway-backed messaging)
+
+Project ident auto-derives from the cwd git remote; agent id is
+machine-persistent.
+
+```bash
+agent-tools comms recv                   # fetch unread at session start
+agent-tools comms confirm <id>           # ack each handled message
+agent-tools comms send "<body>"          # post to project channel
+agent-tools comms reply <id> "<body>"    # threaded reply
+agent-tools comms action <id> "<verb>"   # signal work-in-progress
+agent-tools comms whoami                 # show derived ident + agent-id
+```
+
+## Memory (persistent across sessions)
+
+Every task must begin with a `context` or `search` call and end with a `store`
+call if functionality changed. Project auto-detects from the cwd git remote.
+
+```bash
+memory context "<task description>" -k <limit>   # pre-task recall
+memory search "<query>" -k <limit>                # hybrid BM25 + vector search
+memory store "<content>" -m <type> -t "<tags>"    # post-task save
+memory get <uuid> [<uuid>...]                     # fetch full content by id
+memory forget --id <uuid>                          # remove a memory
+```
+
+Types: `user`, `feedback`, `project`, `reference`.
+"#;
+
 /// Entry point invoked from `main.rs` for `agent-tools setup skill`.
 pub fn run(dry_run: bool, print: bool) -> Result<()> {
     if print {
-        print!("{SKILL_BODY}");
+        // `--print` predates multi-target; keep it deterministic by emitting
+        // the Claude variant. Use `--target codex` (or the Codex-specific
+        // body dump below) if you need the other one.
+        print!("{}", SkillTarget::Claude.body());
         return Ok(());
     }
 
-    let target = skill_path();
+    let targets: Vec<SkillTarget> = SkillTarget::ALL
+        .iter()
+        .copied()
+        .filter(|t| t.detected())
+        .collect();
+
+    if targets.is_empty() {
+        anyhow::bail!(
+            "No agent home directories detected for skill install. Tried:\n  \
+             ~/.claude\n  \
+             ~/.codex or $CODEX_HOME\n\
+             Install Claude Code or Codex first, then re-run."
+        );
+    }
 
     if dry_run {
-        println!("--- DRY RUN: {} ---", target.display());
-        print!("{SKILL_BODY}");
-        println!("--- end preview ---");
+        for target in &targets {
+            let path = target.skill_path();
+            println!("--- DRY RUN [{}]: {} ---", target.label(), path.display());
+            print!("{}", target.body());
+            println!("--- end preview ---");
+        }
         return Ok(());
     }
 
-    let parent = target
+    for target in &targets {
+        install_one(*target)?;
+    }
+    Ok(())
+}
+
+fn install_one(target: SkillTarget) -> Result<()> {
+    let path = target.skill_path();
+    let parent = path
         .parent()
         .context("skill path has no parent directory")?;
     std::fs::create_dir_all(parent)
         .with_context(|| format!("create skill directory {}", parent.display()))?;
 
-    if let Some(backup) = backup_if_exists(&target)? {
+    if let Some(backup) = backup_if_exists(&path)? {
         println!("  backup: {}", backup.display());
     }
 
-    std::fs::write(&target, SKILL_BODY)
-        .with_context(|| format!("write skill file {}", target.display()))?;
-    println!("Installed skill at {}", target.display());
+    std::fs::write(&path, target.body())
+        .with_context(|| format!("write skill file {}", path.display()))?;
+    println!("Installed {} skill at {}", target.label(), path.display());
     Ok(())
 }
 
-/// True iff the skill file is already installed at the global path.
-pub fn is_installed() -> bool {
-    skill_path().exists()
+/// All skill paths that currently exist on disk. Used by the setup menu's
+/// probe to report "installed at X, Y" when partial or full.
+pub fn installed_paths() -> Vec<PathBuf> {
+    SkillTarget::ALL
+        .iter()
+        .map(|t| t.skill_path())
+        .filter(|p| p.exists())
+        .collect()
 }
 
-pub fn skill_path() -> PathBuf {
-    home_dir()
-        .join(".claude")
-        .join("skills")
-        .join("agent-tools")
-        .join("SKILL.md")
+/// Expected skill paths across all detected agents. Used by the probe to
+/// name the targets we'd write to if setup ran now.
+pub fn expected_paths() -> Vec<PathBuf> {
+    SkillTarget::ALL
+        .iter()
+        .copied()
+        .filter(|t| t.detected())
+        .map(|t| t.skill_path())
+        .collect()
 }
 
 fn backup_if_exists(path: &Path) -> Result<Option<PathBuf>> {
@@ -161,22 +334,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn body_has_valid_frontmatter_and_key_sections() {
-        assert!(SKILL_BODY.starts_with("---\n"));
-        // Name field drives discovery; must exist.
-        assert!(SKILL_BODY.contains("name: agent-tools"));
-        // Description is the always-loaded steering field; must mention the
-        // disabled native task tools so Claude knows not to call them.
-        assert!(SKILL_BODY.contains("disabled"));
-        assert!(SKILL_BODY.contains("TaskCreate"));
-        // Allowed-tools declaration must grant agent-tools + memory without
-        // per-call prompting.
-        assert!(SKILL_BODY.contains("allowed-tools: Bash(agent-tools *), Bash(memory *)"));
-        // Body must cover the four capability domains.
-        assert!(SKILL_BODY.contains("Code Exploration"));
-        assert!(SKILL_BODY.contains("Task Board"));
-        assert!(SKILL_BODY.contains("Comms"));
-        assert!(SKILL_BODY.contains("Memory"));
+    fn claude_body_has_valid_frontmatter_and_key_sections() {
+        let body = SkillTarget::Claude.body();
+        assert!(body.starts_with("---\n"));
+        assert!(body.contains("name: agent-tools"));
+        // Description must mention the disabled native task tools so Claude
+        // knows not to call them.
+        assert!(body.contains("disabled"));
+        assert!(body.contains("TaskCreate"));
+        assert!(body.contains("allowed-tools: Bash(agent-tools *), Bash(memory *)"));
+        assert!(body.contains("Code Exploration"));
+        assert!(body.contains("Task Board"));
+        assert!(body.contains("Comms"));
+        assert!(body.contains("Memory"));
+    }
+
+    #[test]
+    fn codex_body_has_valid_frontmatter_and_omits_claude_specifics() {
+        let body = SkillTarget::Codex.body();
+        assert!(body.starts_with("---\n"));
+        assert!(body.contains("name: agent-tools"));
+        // Codex has no TaskCreate tool; claiming it's disabled would
+        // confuse the model, so the Codex body must not include that wording.
+        assert!(!body.contains("disabled"));
+        assert!(!body.contains("TaskCreate"));
+        // allowed-tools is a Claude-ism; Codex uses plugin-level permissions.
+        assert!(!body.contains("allowed-tools:"));
+        // Capability coverage still required.
+        assert!(body.contains("Code Exploration"));
+        assert!(body.contains("Task Board"));
+        assert!(body.contains("Comms"));
+        assert!(body.contains("Memory"));
     }
 
     #[test]
@@ -186,8 +374,21 @@ mod tests {
     }
 
     #[test]
-    fn skill_path_lands_in_claude_skills() {
-        let p = skill_path();
+    fn claude_skill_path_lands_in_claude_skills() {
+        let p = SkillTarget::Claude.skill_path();
         assert!(p.ends_with(".claude/skills/agent-tools/SKILL.md"));
     }
+
+    #[test]
+    fn codex_skill_path_lands_in_codex_skills() {
+        // When CODEX_HOME is unset the path falls back to ~/.codex.
+        let prev = std::env::var("CODEX_HOME").ok();
+        std::env::remove_var("CODEX_HOME");
+        let p = SkillTarget::Codex.skill_path();
+        assert!(p.ends_with(".codex/skills/agent-tools/SKILL.md"));
+        if let Some(v) = prev {
+            std::env::set_var("CODEX_HOME", v);
+        }
+    }
+
 }
