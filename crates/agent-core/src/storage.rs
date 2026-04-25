@@ -17,16 +17,22 @@ pub fn project_data_dir(project_root: &Path) -> PathBuf {
     let identifier = resolve_project_identifier(project_root);
     let hash = blake3::hash(identifier.as_bytes()).to_hex().to_string();
 
+    if let Ok(base) = std::env::var("AGENT_TOOLS_STATE_DIR") {
+        if !base.trim().is_empty() {
+            return PathBuf::from(base).join(&hash);
+        }
+    }
+
     let user_dir = user_tools_dir().join(&hash);
     let global_dir = global_tools_dir().join(&hash);
 
     // If the user-level dir already has data for this project, use it (override)
-    if user_dir.exists() {
+    if user_dir.exists() && is_writable(&user_dir) {
         return user_dir;
     }
 
     // If the global dir already has data for this project, use it
-    if global_dir.exists() {
+    if global_dir.exists() && is_writable(&global_dir) {
         return global_dir;
     }
 

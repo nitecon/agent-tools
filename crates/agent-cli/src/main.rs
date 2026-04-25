@@ -421,6 +421,9 @@ fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result
         // Search index
         let root = std::env::current_dir()?;
         let index = agent_symbols::SymbolIndex::open_for_project(&root)?;
+        if index.is_ephemeral() {
+            index.build(&root)?;
+        }
         let results = index.search(name, kind.as_deref(), None, 10)?;
 
         if results.is_empty() {
@@ -488,6 +491,9 @@ fn cmd_search(query: &str, search_type: &str, file: Option<String>, limit: usize
     match search_type {
         "symbol" => {
             let index = agent_symbols::SymbolIndex::open_for_project(&root)?;
+            if index.is_ephemeral() {
+                index.build(&root)?;
+            }
             let results = index.search(query, None, file.as_deref(), limit)?;
 
             if results.is_empty() {
@@ -508,6 +514,9 @@ fn cmd_search(query: &str, search_type: &str, file: Option<String>, limit: usize
         }
         "file" => {
             let indexer = agent_search::indexer::FileIndexer::open_for_project(&root)?;
+            if indexer.is_ephemeral() {
+                indexer.build(&root, false)?;
+            }
             let results =
                 agent_search::query::find_files(&indexer, Some(query), None, None, None, limit)?;
 
@@ -536,8 +545,13 @@ fn cmd_index(path: Option<PathBuf>, rebuild: bool) -> Result<()> {
     if rebuild {
         let data_dir = agent_core::project_data_dir(&root);
         if data_dir.exists() {
-            std::fs::remove_dir_all(&data_dir)?;
-            println!("Cleared existing index at {}", data_dir.display());
+            match std::fs::remove_dir_all(&data_dir) {
+                Ok(()) => println!("Cleared existing index at {}", data_dir.display()),
+                Err(e) => eprintln!(
+                    "Could not clear persistent index at {} ({e}); continuing with available storage",
+                    data_dir.display()
+                ),
+            }
         }
     }
 
@@ -566,7 +580,7 @@ fn cmd_summary(path: Option<PathBuf>) -> Result<()> {
 
     // Ensure index exists
     let indexer = agent_search::indexer::FileIndexer::open_for_project(&root)?;
-    if indexer.file_count()? == 0 {
+    if indexer.is_ephemeral() || indexer.file_count()? == 0 {
         println!("No index found. Building...");
         indexer.build(&root, false)?;
     }

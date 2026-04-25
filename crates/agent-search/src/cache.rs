@@ -15,7 +15,18 @@ impl Cache {
         }
 
         let conn = Connection::open(db_path)?;
+        Self::init_schema(&conn)?;
 
+        Ok(Self { conn })
+    }
+
+    fn open_ephemeral() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        Self::init_schema(&conn)?;
+        Ok(Self { conn })
+    }
+
+    fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "
             PRAGMA journal_mode = WAL;
@@ -29,14 +40,13 @@ impl Cache {
             );
             ",
         )?;
-
-        Ok(Self { conn })
+        Ok(())
     }
 
     /// Open cache in the centralized storage directory for the given project.
     pub fn open_for_project(project_root: &Path) -> Result<Self> {
         let db_path = agent_core::project_data_dir(project_root).join("cache.db");
-        Self::open(&db_path)
+        Self::open(&db_path).or_else(|_| Self::open_ephemeral())
     }
 
     /// Get a cached value by key. Returns None if not found or expired.

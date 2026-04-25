@@ -11,6 +11,7 @@ use std::time::SystemTime;
 /// Persistent symbol index backed by SQLite.
 pub struct SymbolIndex {
     conn: Connection,
+    ephemeral: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +50,24 @@ impl SymbolIndex {
         let conn = Connection::open(db_path)
             .with_context(|| format!("Failed to open index at {}", db_path.display()))?;
 
+        Self::init_schema(&conn)?;
+
+        Ok(Self {
+            conn,
+            ephemeral: false,
+        })
+    }
+
+    fn open_ephemeral() -> Result<Self> {
+        let conn = Connection::open_in_memory().context("Failed to open in-memory symbol index")?;
+        Self::init_schema(&conn)?;
+        Ok(Self {
+            conn,
+            ephemeral: true,
+        })
+    }
+
+    fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "
             PRAGMA journal_mode = WAL;
@@ -78,14 +97,17 @@ impl SymbolIndex {
             CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
             ",
         )?;
-
-        Ok(Self { conn })
+        Ok(())
     }
 
     /// Open or create a symbol index in the centralized storage directory for the given project.
     pub fn open_for_project(project_root: &Path) -> Result<Self> {
         let db_path = agent_core::project_data_dir(project_root).join("symbols.db");
-        Self::open(&db_path)
+        Self::open(&db_path).or_else(|_| Self::open_ephemeral())
+    }
+
+    pub fn is_ephemeral(&self) -> bool {
+        self.ephemeral
     }
 
     /// Build or incrementally update the index for all supported files under root.
@@ -455,5 +477,20 @@ class DataProcessor:
         let stats2 = index.build(project_dir.path()).unwrap();
         assert_eq!(stats2.files_indexed, 0);
         assert!(stats2.files_skipped >= 2);
+    }
+
+    #[test]
+    fn test_ephemeral_index_builds_in_memory() {
+        let project_dir = TempDir::new().unwrap();
+        create_test_project(project_dir.path());
+
+        let index = SymbolIndex::open_ephemeral().unwrap();
+        assert!(index.is_ephemeral());
+
+        let stats = index.build(project_dir.path()).unwrap();
+        assert!(stats.files_indexed >= 2);
+
+        let results = index.search("main", None, None, 10).unwrap();
+        assert!(!results.is_empty());
     }
 }

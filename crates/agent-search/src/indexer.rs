@@ -8,6 +8,7 @@ use std::time::SystemTime;
 /// File indexer that maintains a SQLite-backed file index with change detection.
 pub struct FileIndexer {
     conn: Connection,
+    ephemeral: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +47,24 @@ impl FileIndexer {
         let conn = Connection::open(db_path)
             .with_context(|| format!("Failed to open file index at {}", db_path.display()))?;
 
+        Self::init_schema(&conn)?;
+
+        Ok(Self {
+            conn,
+            ephemeral: false,
+        })
+    }
+
+    fn open_ephemeral() -> Result<Self> {
+        let conn = Connection::open_in_memory().context("Failed to open in-memory file index")?;
+        Self::init_schema(&conn)?;
+        Ok(Self {
+            conn,
+            ephemeral: true,
+        })
+    }
+
+    fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "
             PRAGMA journal_mode = WAL;
@@ -66,14 +85,17 @@ impl FileIndexer {
             CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime_secs);
             ",
         )?;
-
-        Ok(Self { conn })
+        Ok(())
     }
 
     /// Open the file index in the centralized storage directory for the given project.
     pub fn open_for_project(project_root: &Path) -> Result<Self> {
         let db_path = agent_core::project_data_dir(project_root).join("files.db");
-        Self::open(&db_path)
+        Self::open(&db_path).or_else(|_| Self::open_ephemeral())
+    }
+
+    pub fn is_ephemeral(&self) -> bool {
+        self.ephemeral
     }
 
     /// Build or incrementally update the file index.
@@ -224,5 +246,20 @@ mod tests {
         let stats2 = indexer.build(root, false).unwrap();
         assert_eq!(stats2.files_indexed, 0);
         assert_eq!(stats2.files_skipped, 1);
+    }
+
+    #[test]
+    fn test_ephemeral_indexer_builds_in_memory() {
+        let project_dir = TempDir::new().unwrap();
+        let root = project_dir.path();
+
+        std::fs::write(root.join("file.txt"), "hello").unwrap();
+
+        let indexer = FileIndexer::open_ephemeral().unwrap();
+        assert!(indexer.is_ephemeral());
+
+        let stats = indexer.build(root, false).unwrap();
+        assert_eq!(stats.files_indexed, 1);
+        assert_eq!(indexer.file_count().unwrap(), 1);
     }
 }

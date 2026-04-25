@@ -363,6 +363,11 @@ impl AgentToolsServer {
                 Ok(i) => i,
                 Err(e) => return format!("Error: {e}"),
             };
+            if index.is_ephemeral() {
+                if let Err(e) = index.build(&root) {
+                    return format!("Error building index: {e}");
+                }
+            }
             let results = match index.search(&params.name, None, None, 5) {
                 Ok(r) => r,
                 Err(e) => return format!("Error: {e}"),
@@ -446,6 +451,11 @@ impl AgentToolsServer {
             Ok(i) => i,
             Err(e) => return format!("Error: {e}"),
         };
+        if index.is_ephemeral() {
+            if let Err(e) = index.build(&root) {
+                return format!("Error building index: {e}");
+            }
+        }
         let results = match index.search(&params.query, kind, file_pattern, limit) {
             Ok(r) => r,
             Err(e) => return format!("Error: {e}"),
@@ -483,7 +493,10 @@ impl AgentToolsServer {
             let data_dir = agent_core::project_data_dir(&root);
             if data_dir.exists() {
                 if let Err(e) = std::fs::remove_dir_all(&data_dir) {
-                    return format!("Error removing data dir: {e}");
+                    eprintln!(
+                        "Could not clear persistent index at {} ({e}); continuing with available storage",
+                        data_dir.display()
+                    );
                 }
             }
         }
@@ -533,6 +546,11 @@ impl AgentToolsServer {
             Ok(i) => i,
             Err(e) => return format!("Error: {e}"),
         };
+        if indexer.is_ephemeral() {
+            if let Err(e) = indexer.build(&root, false) {
+                return format!("Error building index: {e}");
+            }
+        }
 
         let results = match agent_search::query::find_files(
             &indexer, pattern, extension, min_size, max_size, limit,
@@ -568,7 +586,7 @@ impl AgentToolsServer {
             Err(e) => return format!("Error: {e}"),
         };
 
-        if indexer.file_count().unwrap_or(0) == 0 {
+        if indexer.is_ephemeral() || indexer.file_count().unwrap_or(0) == 0 {
             if let Err(e) = indexer.build(&root, false) {
                 return format!("Error building index: {e}");
             }

@@ -653,14 +653,15 @@ Three binaries are produced:
 | `agent-tools-mcp` | MCP stdio server (code tools + comms tools in one server) |
 | `agent-sync` | CLI for syncing skills, commands, and agents with the gateway |
 
-Index data is stored centrally, with a two-tier resolution:
+Index data is stored centrally, with a writable-location resolution:
 
 | Priority | Location | Scope |
 |----------|----------|-------|
-| 1 (highest) | `~/.agent-tools/<hash>/` | Per-user override |
-| 2 | `/opt/agentic/tools/<hash>/` (Unix) or `%USERPROFILE%\.agentic\tools\<hash>\` (Windows) | Global / shared |
+| 1 (highest) | `$AGENT_TOOLS_STATE_DIR/<hash>/` | Explicit override |
+| 2 | `~/.agent-tools/<hash>/` | Per-user override |
+| 3 | `/opt/agentic/tools/<hash>/` (Unix) or `%USERPROFILE%\.agentic\tools\<hash>\` (Windows) | Global / shared |
 
-If the user-level directory (`~/.agent-tools/<hash>`) exists for a project, it takes precedence. Otherwise the global directory is used. For new projects, the global directory is preferred when it exists and is writable; otherwise the user-level directory is used automatically.
+If the user-level directory (`~/.agent-tools/<hash>`) exists for a project and is writable, it takes precedence. Otherwise the writable global directory is used. For new projects, the global directory is preferred when it exists and is writable; otherwise the user-level directory is used automatically. If no persistent index database can be opened, `agent-tools` falls back to an in-memory index for that invocation; this is slower because the index is rebuilt on demand, but it keeps sandboxed agents working.
 
 The `<hash>` is a blake3 digest of the normalized git remote origin URL (e.g., `github.com/nitecon/agent-tools.git`). For non-git directories, the hash is derived from the absolute path. This keeps index data out of your project tree (no `.gitignore` needed) and enables future cross-machine sync.
 
