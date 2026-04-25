@@ -115,6 +115,34 @@ pub struct TaskCreateResponse {
     pub hint: Option<String>,
 }
 
+/// Server-owned linkage returned by the cross-project delegation endpoint.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TaskDelegation {
+    pub id: String,
+    pub source_project_ident: String,
+    pub source_task_id: String,
+    pub target_project_ident: String,
+    pub target_task_id: String,
+    #[serde(default)]
+    pub requester_agent_id: Option<String>,
+    #[serde(default)]
+    pub requester_hostname: Option<String>,
+    pub created_at: i64,
+    #[serde(default)]
+    pub completed_at: Option<i64>,
+    #[serde(default)]
+    pub completion_message_id: Option<i64>,
+}
+
+/// Response returned by `POST /tasks/delegate`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TaskDelegationResponse {
+    pub delegation: TaskDelegation,
+    pub source_task: Task,
+    pub target_task: Task,
+    pub message_id: i64,
+}
+
 // -- Request shapes ----------------------------------------------------------
 
 /// Body for `POST /v1/projects/:ident/tasks`.
@@ -127,6 +155,21 @@ pub struct CreateTaskRequest<'a> {
     pub specification: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reporter: Option<&'a str>,
+}
+
+/// Body for `POST /v1/projects/:source_ident/tasks/delegate`.
+#[derive(Serialize, Default, Debug, Clone)]
+pub struct DelegateTaskRequest<'a> {
+    pub target_project_ident: &'a str,
+    pub title: &'a str,
+    pub description: &'a str,
+    pub specification: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<&'a [String]>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -262,6 +305,30 @@ impl GatewayClient {
         decode_or_bail(resp).await
     }
 
+    /// Create a target-project task plus a source-project delegated tracker.
+    pub async fn delegate_task(
+        &self,
+        source_ident: &str,
+        req: &DelegateTaskRequest<'_>,
+        agent_id: Option<&str>,
+    ) -> Result<TaskDelegationResponse> {
+        let url = format!(
+            "{}/v1/projects/{}/tasks/delegate",
+            self.base_url(),
+            source_ident
+        );
+        let builder = self
+            .http_client()
+            .post(&url)
+            .header("Authorization", self.auth())
+            .json(req);
+        let resp = Self::add_agent_id(builder, agent_id)
+            .send()
+            .await
+            .context("POST /v1/projects/:source_ident/tasks/delegate")?;
+        decode_or_bail(resp).await
+    }
+
     /// Patch a task. The server enforces transition rules and reclaim logic.
     pub async fn update_task(
         &self,
@@ -379,6 +446,31 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["specification"], "handoff spec");
         assert!(json.get("details").is_none());
+    }
+
+    #[test]
+    fn delegate_request_requires_contract_fields_and_omits_unset_metadata() {
+        let req = DelegateTaskRequest {
+            target_project_ident: "other-project",
+            title: "Update exported API",
+            description: "Project A needs this API for integration.",
+            specification: "Add the endpoint and document the response shape.",
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["target_project_ident"], "other-project");
+        assert_eq!(json["title"], "Update exported API");
+        assert_eq!(
+            json["description"],
+            "Project A needs this API for integration."
+        );
+        assert_eq!(
+            json["specification"],
+            "Add the endpoint and document the response shape."
+        );
+        assert!(json.get("labels").is_none());
+        assert!(json.get("hostname").is_none());
+        assert!(json.get("reporter").is_none());
     }
 
     #[test]

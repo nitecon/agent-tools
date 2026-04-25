@@ -216,6 +216,13 @@ agent-tools tasks add \
   --description "Match the latest gateway task wire format." \
   --specification "Use specification for long-form handoff context; keep legacy details compatibility."
 
+# Delegate cross-project work; all handoff fields are required
+agent-tools tasks add-delegated \
+  --target-project "agent-gateway" \
+  --title "Expose delegated task creation in API docs" \
+  --description "agent-tools needs the endpoint documented for generated agent rules." \
+  --specification "Document required request fields, response ids, and target-project nudge behavior."
+
 # Pick up, discuss, and complete work
 agent-tools tasks claim <id>
 agent-tools tasks get <id>

@@ -14,8 +14,8 @@ use agent_comms::gateway::GatewayClient;
 use agent_comms::identity::load_or_generate_agent_id;
 use agent_comms::sanitize::short_project_ident;
 use agent_comms::tasks::{
-    AddCommentRequest, CreateTaskRequest, Task, TaskComment, TaskCreateResponse, TaskDetail,
-    TaskSummary, UpdateTaskRequest,
+    AddCommentRequest, CreateTaskRequest, DelegateTaskRequest, Task, TaskComment,
+    TaskCreateResponse, TaskDelegationResponse, TaskDetail, TaskSummary, UpdateTaskRequest,
 };
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -63,6 +63,35 @@ pub enum TasksCommands {
         /// Optional long-form specification / repro / handoff context.
         #[arg(long, alias = "details")]
         specification: Option<String>,
+        /// Repeatable label flag — joined into the `labels[]` array.
+        #[arg(long = "label")]
+        label: Vec<String>,
+        /// Originating host. Defaults to the local hostname.
+        #[arg(long)]
+        hostname: Option<String>,
+        /// Reporter override. Defaults to the request's X-Agent-Id (or "user").
+        #[arg(long)]
+        reporter: Option<String>,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Create a delegated task for another project and track it here.
+    AddDelegated {
+        /// Required target project ident.
+        #[arg(long = "target-project")]
+        target_project: String,
+        /// Required short title.
+        #[arg(long)]
+        title: String,
+        /// Required one-paragraph summary of why the work is needed.
+        #[arg(long)]
+        description: String,
+        /// Required implementation contract / acceptance details for the target project.
+        #[arg(long, alias = "details")]
+        specification: String,
         /// Repeatable label flag — joined into the `labels[]` array.
         #[arg(long = "label")]
         label: Vec<String>,
@@ -179,6 +208,30 @@ async fn run(cmd: TasksCommands) -> Result<()> {
             json,
         } => {
             cmd_add(
+                title,
+                description,
+                specification,
+                label,
+                hostname,
+                reporter,
+                agent_id,
+                json,
+            )
+            .await
+        }
+        TasksCommands::AddDelegated {
+            target_project,
+            title,
+            description,
+            specification,
+            label,
+            hostname,
+            reporter,
+            agent_id,
+            json,
+        } => {
+            cmd_add_delegated(
+                target_project,
                 title,
                 description,
                 specification,
@@ -377,6 +430,13 @@ fn parse_status_csv(raw: &str) -> Vec<&str> {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+fn require_nonempty_flag(flag: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("{flag} must not be empty");
+    }
+    Ok(())
 }
 
 // -- list --------------------------------------------------------------------
@@ -619,6 +679,67 @@ async fn cmd_add(
     Ok(())
 }
 
+// -- add-delegated -----------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_add_delegated(
+    target_project: String,
+    title: String,
+    description: String,
+    specification: String,
+    labels: Vec<String>,
+    hostname: Option<String>,
+    reporter: Option<String>,
+    agent_id: Option<String>,
+    json: bool,
+) -> Result<()> {
+    require_nonempty_flag("--target-project", &target_project)?;
+    require_nonempty_flag("--title", &title)?;
+    require_nonempty_flag("--description", &description)?;
+    require_nonempty_flag("--specification", &specification)?;
+
+    let ctx = resolve_context(agent_id)?;
+    ensure_registered(&ctx).await?;
+
+    let host = local_hostname_or_none(hostname);
+    let labels_slice: Option<&[String]> = if labels.is_empty() {
+        None
+    } else {
+        Some(&labels)
+    };
+
+    let req = DelegateTaskRequest {
+        target_project_ident: &target_project,
+        title: &title,
+        description: &description,
+        specification: &specification,
+        labels: labels_slice,
+        hostname: host.as_deref(),
+        reporter: reporter.as_deref(),
+    };
+
+    let response: TaskDelegationResponse = ctx
+        .gateway
+        .delegate_task(&ctx.ident, &req, Some(&ctx.agent_id))
+        .await
+        .context("create delegated task")?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+    } else {
+        println!(
+            "delegated [{}] {} → {} [{}]",
+            short_id(&response.source_task.id),
+            response.source_task.title,
+            response.delegation.target_project_ident,
+            short_id(&response.target_task.id)
+        );
+        println!("source task: {}", response.source_task.id);
+        println!("target task: {}", response.target_task.id);
+    }
+    Ok(())
+}
+
 // -- claim / release / done --------------------------------------------------
 
 async fn cmd_status_transition(
@@ -748,6 +869,12 @@ mod tests {
         assert_eq!(parse_status_csv(" done "), vec!["done"]);
         assert!(parse_status_csv("").is_empty());
         assert!(parse_status_csv(" , ").is_empty());
+    }
+
+    #[test]
+    fn require_nonempty_flag_rejects_blank_values() {
+        assert!(require_nonempty_flag("--title", "Useful title").is_ok());
+        assert!(require_nonempty_flag("--title", "   ").is_err());
     }
 
     #[test]

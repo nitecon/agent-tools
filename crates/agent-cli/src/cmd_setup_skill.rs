@@ -119,6 +119,7 @@ survive full system crashes.
 agent-tools tasks list                   # TODO + IN PROGRESS for this project
 agent-tools tasks get <id>               # full detail + comment thread
 agent-tools tasks add --title "..." [--label x] [--description "..."] [--specification "..."]
+agent-tools tasks add-delegated --target-project "..." --title "..." --description "..." --specification "..."
 agent-tools tasks claim <id>             # take ownership (-> in_progress)
 agent-tools tasks release <id>           # drop ownership (-> todo)
 agent-tools tasks done <id>              # mark complete
@@ -199,6 +200,7 @@ files because they survive full system crashes.
 agent-tools tasks list                   # TODO + IN PROGRESS for this project
 agent-tools tasks get <id>               # full detail + comment thread
 agent-tools tasks add --title "..." [--label x] [--description "..."] [--specification "..."]
+agent-tools tasks add-delegated --target-project "..." --title "..." --description "..." --specification "..."
 agent-tools tasks claim <id>             # take ownership (-> in_progress)
 agent-tools tasks release <id>           # drop ownership (-> todo)
 agent-tools tasks done <id>              # mark complete
