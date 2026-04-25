@@ -154,10 +154,9 @@ agent-tools comms action 1234 "deploying to staging"
 
 # Print what we'd send (debug)
 agent-tools comms whoami
-agent-tools comms whoami --json
 ```
 
-All subcommands accept `--json` for machine-readable output, and `--agent-id <id>` when a per-invocation override is needed (e.g. running multiple distinct agents on one machine).
+Agent-facing output is intentionally clean text only. Most subcommands accept `--agent-id <id>` when a per-invocation override is needed (e.g. running multiple distinct agents on one machine).
 
 #### Structured rendering (Discord embeds & friends)
 
@@ -403,7 +402,7 @@ Prefer symbol-level tools over raw file reads whenever possible.
 /opt/agentic/bin/agent-tools comms send "<body>"
 
 # Fetch unread messages for this project + agent
-/opt/agentic/bin/agent-tools comms recv [--json]
+/opt/agentic/bin/agent-tools comms recv
 
 # Confirm a message is handled (stops it reappearing on recv)
 /opt/agentic/bin/agent-tools comms confirm <message_id>
@@ -415,7 +414,7 @@ Prefer symbol-level tools over raw file reads whenever possible.
 /opt/agentic/bin/agent-tools comms action <message_id> "<what you're doing>"
 
 # Show derived project ident + agent id (debug / verification)
-/opt/agentic/bin/agent-tools comms whoami [--json]
+/opt/agentic/bin/agent-tools comms whoami
 ```
 
 ### Structured rendering flags (send / reply / action)
@@ -431,7 +430,7 @@ For Discord embeds (and clean Markdown on Slack / email), enrich any send / repl
 Use a structured `send` whenever the message has a clear headline + multi-line detail, e.g. a deploy summary, a build failure, or a PR-review verdict — it dramatically improves readability on Discord vs. a single run-on line.
 
 ### Notes
-- All subcommands accept `--json` for machine-readable output.
+- Agent-facing output is clean text only; JSON output flags are intentionally not exposed.
 - `--agent-id <id>` overrides the persisted agent id for a single invocation (rare — only needed when running multiple distinct agents on one machine).
 - The first `send` from a new project auto-registers the channel with the gateway; subsequent calls hit a cached marker and skip the round-trip.
 </comms_protocol>
@@ -515,11 +514,11 @@ Prefer symbol-level tools over raw file reads whenever possible.
 
 ```bash
 /opt/agentic/bin/agent-tools comms send "<body>"
-/opt/agentic/bin/agent-tools comms recv [--json]
+/opt/agentic/bin/agent-tools comms recv
 /opt/agentic/bin/agent-tools comms confirm <message_id>
 /opt/agentic/bin/agent-tools comms reply <message_id> "<body>"
 /opt/agentic/bin/agent-tools comms action <message_id> "<what you're doing>"
-/opt/agentic/bin/agent-tools comms whoami [--json]
+/opt/agentic/bin/agent-tools comms whoami
 ```
 
 ### Structured rendering flags (send / reply / action)
@@ -535,7 +534,7 @@ For Discord embeds (and clean Markdown on Slack / email), enrich any send / repl
 Prefer a structured `send` whenever the message has a clear headline and multi-line detail; the body lands inside a code block so formatting is preserved.
 
 ### Notes
-- All subcommands accept `--json` for machine-readable output.
+- Agent-facing output is clean text only; JSON output flags are intentionally not exposed.
 - `--agent-id <id>` overrides the persisted agent id for a single invocation (rare).
 - The first `send` from a new project auto-registers the channel with the gateway; subsequent calls use a cached marker.
 </comms_protocol>

@@ -12,7 +12,6 @@ use agent_comms::identity::load_or_generate_agent_id;
 use agent_comms::sanitize::short_project_ident;
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use serde::Serialize;
 use std::path::PathBuf;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -40,9 +39,6 @@ pub enum CommsCommands {
         /// Channel plugin (discord, slack, email); only used on first register.
         #[arg(long)]
         channel: Option<String>,
-        /// Emit JSON response instead of human-readable output.
-        #[arg(long)]
-        json: bool,
     },
 
     /// Fetch unread messages for this project and agent.
@@ -50,9 +46,6 @@ pub enum CommsCommands {
         /// Override the machine agent-id for this invocation.
         #[arg(long)]
         agent_id: Option<String>,
-        /// Emit JSON instead of human-readable output.
-        #[arg(long)]
-        json: bool,
     },
 
     /// Confirm a message as read.
@@ -62,8 +55,6 @@ pub enum CommsCommands {
         /// Override the machine agent-id for this invocation.
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Send a threaded reply to a specific message.
@@ -85,8 +76,6 @@ pub enum CommsCommands {
         event_at: Option<String>,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Signal that this agent is actively working on a message.
@@ -109,15 +98,10 @@ pub enum CommsCommands {
         event_at: Option<String>,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Print derived project ident + agent-id (debug / verification).
-    Whoami {
-        #[arg(long)]
-        json: bool,
-    },
+    Whoami,
 }
 
 // -- Entry -------------------------------------------------------------------
@@ -134,7 +118,7 @@ pub fn dispatch(cmd: CommsCommands) -> Result<()> {
 
 async fn run(cmd: CommsCommands) -> Result<()> {
     match cmd {
-        CommsCommands::Whoami { json } => cmd_whoami(json),
+        CommsCommands::Whoami => cmd_whoami(),
         CommsCommands::Send {
             content,
             subject,
@@ -142,17 +126,15 @@ async fn run(cmd: CommsCommands) -> Result<()> {
             event_at,
             agent_id,
             channel,
-            json,
         } => {
             let meta = ResolvedMeta::from_args(subject, hostname, event_at)?;
-            cmd_send(content, meta, agent_id, channel, json).await
+            cmd_send(content, meta, agent_id, channel).await
         }
-        CommsCommands::Recv { agent_id, json } => cmd_recv(agent_id, json).await,
+        CommsCommands::Recv { agent_id } => cmd_recv(agent_id).await,
         CommsCommands::Confirm {
             message_id,
             agent_id,
-            json,
-        } => cmd_confirm(message_id, agent_id, json).await,
+        } => cmd_confirm(message_id, agent_id).await,
         CommsCommands::Reply {
             message_id,
             content,
@@ -160,10 +142,9 @@ async fn run(cmd: CommsCommands) -> Result<()> {
             hostname,
             event_at,
             agent_id,
-            json,
         } => {
             let meta = ResolvedMeta::from_args(subject, hostname, event_at)?;
-            cmd_reply(message_id, content, meta, agent_id, json).await
+            cmd_reply(message_id, content, meta, agent_id).await
         }
         CommsCommands::Action {
             message_id,
@@ -172,10 +153,9 @@ async fn run(cmd: CommsCommands) -> Result<()> {
             hostname,
             event_at,
             agent_id,
-            json,
         } => {
             let meta = ResolvedMeta::from_args(subject, hostname, event_at)?;
-            cmd_action(message_id, message, meta, agent_id, json).await
+            cmd_action(message_id, message, meta, agent_id).await
         }
     }
 }
@@ -378,16 +358,7 @@ async fn ensure_registered(ctx: &CommsContext, channel_override: Option<&str>) -
 
 // -- whoami ------------------------------------------------------------------
 
-#[derive(Serialize)]
-struct WhoamiOutput<'a> {
-    project_ident: &'a str,
-    canonical_ident: &'a str,
-    agent_id: &'a str,
-    gateway_url: Option<&'a str>,
-    gateway_configured: bool,
-}
-
-fn cmd_whoami(json: bool) -> Result<()> {
+fn cmd_whoami() -> Result<()> {
     let canonical_ident = agent_core::project_ident_from_cwd().context("derive project ident")?;
     let ident = short_project_ident(&canonical_ident);
     let agent_id = load_or_generate_agent_id()?;
@@ -395,32 +366,21 @@ fn cmd_whoami(json: bool) -> Result<()> {
     let gateway_url = config.gateway.url.as_deref();
     let configured = gateway_url.is_some() && config.gateway.api_key.is_some();
 
-    if json {
-        let out = WhoamiOutput {
-            project_ident: &ident,
-            canonical_ident: &canonical_ident,
-            agent_id: &agent_id,
-            gateway_url,
-            gateway_configured: configured,
-        };
-        println!("{}", serde_json::to_string_pretty(&out)?);
-    } else {
-        println!("project_ident:   {ident}");
-        println!("canonical_ident: {canonical_ident}");
-        println!("agent_id:        {agent_id}");
-        match gateway_url {
-            Some(u) => println!("gateway_url:     {u}"),
-            None => println!("gateway_url:     (not configured)"),
-        }
-        println!(
-            "gateway:         {}",
-            if configured {
-                "configured"
-            } else {
-                "NOT configured -- run `agent-tools setup gateway`"
-            }
-        );
+    println!("project_ident:   {ident}");
+    println!("canonical_ident: {canonical_ident}");
+    println!("agent_id:        {agent_id}");
+    match gateway_url {
+        Some(u) => println!("gateway_url:     {u}"),
+        None => println!("gateway_url:     (not configured)"),
     }
+    println!(
+        "gateway:         {}",
+        if configured {
+            "configured"
+        } else {
+            "NOT configured -- run `agent-tools setup gateway`"
+        }
+    );
     Ok(())
 }
 
@@ -431,7 +391,6 @@ async fn cmd_send(
     meta: ResolvedMeta,
     agent_id: Option<String>,
     channel: Option<String>,
-    json: bool,
 ) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     ensure_registered(&ctx, channel.as_deref()).await?;
@@ -447,17 +406,13 @@ async fn cmd_send(
         .await
         .context("send message")?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
-    } else {
-        println!("sent (id={}, ident={})", resp.message_id, ctx.ident);
-    }
+    println!("sent (id={}, ident={})", resp.message_id, ctx.ident);
     Ok(())
 }
 
 // -- recv --------------------------------------------------------------------
 
-async fn cmd_recv(agent_id: Option<String>, json: bool) -> Result<()> {
+async fn cmd_recv(agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     ensure_registered(&ctx, None).await?;
 
@@ -466,11 +421,6 @@ async fn cmd_recv(agent_id: Option<String>, json: bool) -> Result<()> {
         .get_unread(&ctx.ident, Some(&ctx.agent_id))
         .await
         .context("fetch unread messages")?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
-        return Ok(());
-    }
 
     if resp.messages.is_empty() {
         println!("no messages");
@@ -507,7 +457,7 @@ async fn cmd_recv(agent_id: Option<String>, json: bool) -> Result<()> {
 
 // -- confirm -----------------------------------------------------------------
 
-async fn cmd_confirm(message_id: i64, agent_id: Option<String>, json: bool) -> Result<()> {
+async fn cmd_confirm(message_id: i64, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     let resp = ctx
         .gateway
@@ -515,9 +465,7 @@ async fn cmd_confirm(message_id: i64, agent_id: Option<String>, json: bool) -> R
         .await
         .context("confirm message")?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
-    } else if resp.confirmed {
+    if resp.confirmed {
         println!("confirmed (id={message_id})");
     } else {
         println!("already confirmed or not found (id={message_id})");
@@ -532,7 +480,6 @@ async fn cmd_reply(
     content: String,
     meta: ResolvedMeta,
     agent_id: Option<String>,
-    json: bool,
 ) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     ensure_registered(&ctx, None).await?;
@@ -549,14 +496,10 @@ async fn cmd_reply(
         .await
         .context("reply to message")?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
-    } else {
-        println!(
-            "reply sent (id={}, parent={})",
-            resp.message_id, resp.parent_message_id
-        );
-    }
+    println!(
+        "reply sent (id={}, parent={})",
+        resp.message_id, resp.parent_message_id
+    );
     Ok(())
 }
 
@@ -567,7 +510,6 @@ async fn cmd_action(
     message: String,
     meta: ResolvedMeta,
     agent_id: Option<String>,
-    json: bool,
 ) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     ensure_registered(&ctx, None).await?;
@@ -584,14 +526,10 @@ async fn cmd_action(
         .await
         .context("signal action")?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
-    } else {
-        println!(
-            "action signal sent (id={}, parent={})",
-            resp.message_id, resp.parent_message_id
-        );
-    }
+    println!(
+        "action signal sent (id={}, parent={})",
+        resp.message_id, resp.parent_message_id
+    );
     Ok(())
 }
 

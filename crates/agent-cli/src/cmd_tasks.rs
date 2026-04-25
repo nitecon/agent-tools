@@ -19,7 +19,6 @@ use agent_comms::tasks::{
 };
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use serde_json::Value;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
@@ -38,18 +37,14 @@ pub enum TasksCommands {
         /// Override the machine agent-id for this invocation.
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Show a single task plus its comment thread.
     Get {
-        /// Task id (full UUIDv7 or unique 4-char prefix returned by `list`).
+        /// Full task id returned by `list`.
         task_id: String,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Create a new task on the current project.
@@ -74,8 +69,6 @@ pub enum TasksCommands {
         reporter: Option<String>,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Create a delegated task for another project and track it here.
@@ -103,8 +96,6 @@ pub enum TasksCommands {
         reporter: Option<String>,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Move a task to IN PROGRESS and claim it for the current agent.
@@ -112,8 +103,6 @@ pub enum TasksCommands {
         task_id: String,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Move a task back to TODO and clear its owner.
@@ -121,8 +110,6 @@ pub enum TasksCommands {
         task_id: String,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Move a task to DONE.
@@ -130,8 +117,6 @@ pub enum TasksCommands {
         task_id: String,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Append a comment to a task.
@@ -144,8 +129,6 @@ pub enum TasksCommands {
         author_type: Option<String>,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Set a task's absolute rank (lower = higher priority within column).
@@ -154,8 +137,6 @@ pub enum TasksCommands {
         rank: i64,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -190,13 +171,8 @@ async fn run(cmd: TasksCommands) -> Result<()> {
             status,
             include_stale,
             agent_id,
-            json,
-        } => cmd_list(status, include_stale, agent_id, json).await,
-        TasksCommands::Get {
-            task_id,
-            agent_id,
-            json,
-        } => cmd_get(task_id, agent_id, json).await,
+        } => cmd_list(status, include_stale, agent_id).await,
+        TasksCommands::Get { task_id, agent_id } => cmd_get(task_id, agent_id).await,
         TasksCommands::Add {
             title,
             description,
@@ -205,7 +181,6 @@ async fn run(cmd: TasksCommands) -> Result<()> {
             hostname,
             reporter,
             agent_id,
-            json,
         } => {
             cmd_add(
                 title,
@@ -215,7 +190,6 @@ async fn run(cmd: TasksCommands) -> Result<()> {
                 hostname,
                 reporter,
                 agent_id,
-                json,
             )
             .await
         }
@@ -228,7 +202,6 @@ async fn run(cmd: TasksCommands) -> Result<()> {
             hostname,
             reporter,
             agent_id,
-            json,
         } => {
             cmd_add_delegated(
                 target_project,
@@ -239,38 +212,29 @@ async fn run(cmd: TasksCommands) -> Result<()> {
                 hostname,
                 reporter,
                 agent_id,
-                json,
             )
             .await
         }
-        TasksCommands::Claim {
-            task_id,
-            agent_id,
-            json,
-        } => cmd_status_transition(task_id, "in_progress", agent_id, json, "claimed").await,
-        TasksCommands::Release {
-            task_id,
-            agent_id,
-            json,
-        } => cmd_status_transition(task_id, "todo", agent_id, json, "released").await,
-        TasksCommands::Done {
-            task_id,
-            agent_id,
-            json,
-        } => cmd_status_transition(task_id, "done", agent_id, json, "done").await,
+        TasksCommands::Claim { task_id, agent_id } => {
+            cmd_status_transition(task_id, "in_progress", agent_id, "claimed").await
+        }
+        TasksCommands::Release { task_id, agent_id } => {
+            cmd_status_transition(task_id, "todo", agent_id, "released").await
+        }
+        TasksCommands::Done { task_id, agent_id } => {
+            cmd_status_transition(task_id, "done", agent_id, "done").await
+        }
         TasksCommands::Comment {
             task_id,
             content,
             author_type,
             agent_id,
-            json,
-        } => cmd_comment(task_id, content, author_type, agent_id, json).await,
+        } => cmd_comment(task_id, content, author_type, agent_id).await,
         TasksCommands::Rank {
             task_id,
             rank,
             agent_id,
-            json,
-        } => cmd_rank(task_id, rank, agent_id, json).await,
+        } => cmd_rank(task_id, rank, agent_id).await,
     }
 }
 
@@ -416,15 +380,6 @@ fn fmt_relative_from_now(ms: i64) -> String {
     }
 }
 
-/// First 4 chars of a UUIDv7, used as the human-friendly short id in list views.
-fn short_id(id: &str) -> &str {
-    if id.len() >= 4 {
-        &id[..4]
-    } else {
-        id
-    }
-}
-
 fn parse_status_csv(raw: &str) -> Vec<&str> {
     raw.split(',')
         .map(|s| s.trim())
@@ -439,14 +394,30 @@ fn require_nonempty_flag(flag: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn require_full_task_id(task_id: &str) -> Result<()> {
+    let bytes = task_id.as_bytes();
+    let looks_like_uuid = bytes.len() == 36
+        && bytes[8] == b'-'
+        && bytes[13] == b'-'
+        && bytes[18] == b'-'
+        && bytes[23] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(idx, b)| matches!(idx, 8 | 13 | 18 | 23) || b.is_ascii_hexdigit());
+
+    if !looks_like_uuid {
+        anyhow::bail!(
+            "short task IDs are no longer supported; run `agent-tools tasks list` and use the full task ID"
+        );
+    }
+
+    Ok(())
+}
+
 // -- list --------------------------------------------------------------------
 
-async fn cmd_list(
-    status: String,
-    include_stale: bool,
-    agent_id: Option<String>,
-    json: bool,
-) -> Result<()> {
+async fn cmd_list(status: String, include_stale: bool, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     ensure_registered(&ctx).await?;
 
@@ -461,11 +432,6 @@ async fn cmd_list(
         )
         .await
         .context("list tasks")?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&tasks)?);
-        return Ok(());
-    }
 
     if tasks.is_empty() {
         println!("(no tasks matching {status})");
@@ -521,12 +487,14 @@ fn print_summary_row(t: &TaskSummary) {
         }
         _ => labels,
     };
-    println!("  [{}] {:<50} {}", short_id(&t.id), t.title, trailing);
+    println!("  [{}] {:<50} {}", t.id, t.title, trailing);
 }
 
 // -- get ---------------------------------------------------------------------
 
-async fn cmd_get(task_id: String, agent_id: Option<String>, json: bool) -> Result<()> {
+async fn cmd_get(task_id: String, agent_id: Option<String>) -> Result<()> {
+    require_full_task_id(&task_id)?;
+
     let ctx = resolve_context(agent_id)?;
     ensure_registered(&ctx).await?;
 
@@ -536,10 +504,6 @@ async fn cmd_get(task_id: String, agent_id: Option<String>, json: bool) -> Resul
         .await
         .context("fetch task")?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&detail)?);
-        return Ok(());
-    }
     print_task_detail(&detail.task, &detail.comments);
     Ok(())
 }
@@ -625,7 +589,6 @@ async fn cmd_add(
     hostname: Option<String>,
     reporter: Option<String>,
     agent_id: Option<String>,
-    json: bool,
 ) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     ensure_registered(&ctx).await?;
@@ -654,27 +617,20 @@ async fn cmd_add(
         .context("create task")?;
     let task = &response.task;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&response)?);
-    } else {
+    println!(
+        "created [{}] {} (status={})",
+        task.id, task.title, task.status
+    );
+    if specification
+        .as_deref()
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
         println!(
-            "created [{}] {} (status={})",
-            short_id(&task.id),
-            task.title,
-            task.status
+            "hint: evaluate whether this task should include a specification. \
+             Specs on gateway-backed tasks are more durable than local plan files \
+             and survive full system crashes."
         );
-        println!("full id: {}", task.id);
-        if specification
-            .as_deref()
-            .map(|s| s.trim().is_empty())
-            .unwrap_or(true)
-        {
-            println!(
-                "hint: evaluate whether this task should include a specification. \
-                 Specs on gateway-backed tasks are more durable than local plan files \
-                 and survive full system crashes."
-            );
-        }
     }
     Ok(())
 }
@@ -691,7 +647,6 @@ async fn cmd_add_delegated(
     hostname: Option<String>,
     reporter: Option<String>,
     agent_id: Option<String>,
-    json: bool,
 ) -> Result<()> {
     require_nonempty_flag("--target-project", &target_project)?;
     require_nonempty_flag("--title", &title)?;
@@ -724,19 +679,13 @@ async fn cmd_add_delegated(
         .await
         .context("create delegated task")?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&response)?);
-    } else {
-        println!(
-            "delegated [{}] {} → {} [{}]",
-            short_id(&response.source_task.id),
-            response.source_task.title,
-            response.delegation.target_project_ident,
-            short_id(&response.target_task.id)
-        );
-        println!("source task: {}", response.source_task.id);
-        println!("target task: {}", response.target_task.id);
-    }
+    println!(
+        "delegated [{}] {} → {} [{}]",
+        response.source_task.id,
+        response.source_task.title,
+        response.delegation.target_project_ident,
+        response.target_task.id
+    );
     Ok(())
 }
 
@@ -746,9 +695,10 @@ async fn cmd_status_transition(
     task_id: String,
     new_status: &str,
     agent_id: Option<String>,
-    json: bool,
     verb: &str,
 ) -> Result<()> {
+    require_full_task_id(&task_id)?;
+
     let ctx = resolve_context(agent_id)?;
     ensure_registered(&ctx).await?;
 
@@ -763,17 +713,13 @@ async fn cmd_status_transition(
         .await
         .with_context(|| format!("transition task to {new_status}"))?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&task)?);
-    } else {
-        println!(
-            "{verb} [{}] {} (status={}, owner={})",
-            short_id(&task.id),
-            task.title,
-            task.status,
-            task.owner_agent_id.as_deref().unwrap_or("—")
-        );
-    }
+    println!(
+        "{verb} [{}] {} (status={}, owner={})",
+        task.id,
+        task.title,
+        task.status,
+        task.owner_agent_id.as_deref().unwrap_or("—")
+    );
     Ok(())
 }
 
@@ -784,8 +730,9 @@ async fn cmd_comment(
     content: String,
     author_type: Option<String>,
     agent_id: Option<String>,
-    json: bool,
 ) -> Result<()> {
+    require_full_task_id(&task_id)?;
+
     let ctx = resolve_context(agent_id)?;
     ensure_registered(&ctx).await?;
 
@@ -805,22 +752,18 @@ async fn cmd_comment(
         .await
         .context("add comment")?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&comment)?);
-    } else {
-        println!(
-            "comment added by {} ({}) on task {}",
-            comment.author,
-            comment.author_type,
-            short_id(&comment.task_id)
-        );
-    }
+    println!(
+        "comment added by {} ({}) on task {}",
+        comment.author, comment.author_type, comment.task_id
+    );
     Ok(())
 }
 
 // -- rank --------------------------------------------------------------------
 
-async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>, json: bool) -> Result<()> {
+async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>) -> Result<()> {
+    require_full_task_id(&task_id)?;
+
     let ctx = resolve_context(agent_id)?;
     ensure_registered(&ctx).await?;
 
@@ -834,25 +777,9 @@ async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>, json: bo
         .await
         .context("set rank")?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&task)?);
-    } else {
-        println!(
-            "ranked [{}] {} → rank {}",
-            short_id(&task.id),
-            task.title,
-            task.rank
-        );
-    }
+    println!("ranked [{}] {} → rank {}", task.id, task.title, task.rank);
     Ok(())
 }
-
-// Silence the unused-import warning in the case the helper above is the only
-// place `Value` is referenced. (The current code uses it implicitly via the
-// `UpdateTaskRequest` struct fields — this keeps the import explicit for
-// future patches that build raw JSON values.)
-#[allow(dead_code)]
-fn _unused_value_marker(_: Value) {}
 
 // -- tests -------------------------------------------------------------------
 
@@ -878,13 +805,14 @@ mod tests {
     }
 
     #[test]
-    fn short_id_truncates_long_uuid() {
-        assert_eq!(short_id("k7h2e16b-2f83-7a41-aaaa-bbbbbbbbbbbb"), "k7h2");
+    fn require_full_task_id_accepts_uuid() {
+        assert!(require_full_task_id("019dbaf9-2527-7782-9b19-a7a2289bdb4e").is_ok());
     }
 
     #[test]
-    fn short_id_passes_through_short() {
-        assert_eq!(short_id("abc"), "abc");
+    fn require_full_task_id_rejects_short_prefix() {
+        let err = require_full_task_id("019d").unwrap_err().to_string();
+        assert!(err.contains("short task IDs are no longer supported"));
     }
 
     #[test]

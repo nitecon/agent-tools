@@ -27,8 +27,6 @@ pub enum PatternsCommands {
         state: String,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Search the global pattern library.
@@ -44,8 +42,6 @@ pub enum PatternsCommands {
         superseded_by: Option<String>,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Fetch one pattern by gateway id or slug. Comments are not fetched.
@@ -53,8 +49,6 @@ pub enum PatternsCommands {
         id: String,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Create a pattern from a markdown file.
@@ -75,8 +69,6 @@ pub enum PatternsCommands {
         body_file: PathBuf,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Update pattern metadata or markdown body.
@@ -98,8 +90,6 @@ pub enum PatternsCommands {
         body_file: Option<PathBuf>,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Delete a pattern.
@@ -114,8 +104,6 @@ pub enum PatternsCommands {
         id: String,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Add a comment to a pattern.
@@ -124,16 +112,12 @@ pub enum PatternsCommands {
         content: String,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Validate the current directory's `.patterns` file.
     Check {
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 
     /// Validate a pattern and add its canonical gateway id to `.patterns`.
@@ -143,8 +127,6 @@ pub enum PatternsCommands {
         path: Vec<PathBuf>,
         #[arg(long)]
         agent_id: Option<String>,
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -179,7 +161,6 @@ struct CreatePatternArgs {
     state: String,
     body_file: PathBuf,
     agent_id: Option<String>,
-    json: bool,
 }
 
 struct UpdatePatternArgs {
@@ -192,7 +173,6 @@ struct UpdatePatternArgs {
     state: Option<String>,
     body_file: Option<PathBuf>,
     agent_id: Option<String>,
-    json: bool,
 }
 
 pub fn dispatch(cmd: PatternsCommands) -> Result<()> {
@@ -223,19 +203,7 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
             version,
             state,
             agent_id,
-            json,
-        } => {
-            cmd_search(
-                None,
-                label,
-                Some(version),
-                Some(state),
-                None,
-                agent_id,
-                json,
-            )
-            .await
-        }
+        } => cmd_search(None, label, Some(version), Some(state), None, agent_id).await,
         PatternsCommands::Search {
             query,
             label,
@@ -243,20 +211,8 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
             state,
             superseded_by,
             agent_id,
-            json,
-        } => {
-            cmd_search(
-                Some(query),
-                label,
-                version,
-                state,
-                superseded_by,
-                agent_id,
-                json,
-            )
-            .await
-        }
-        PatternsCommands::Get { id, agent_id, json } => cmd_get(id, agent_id, json).await,
+        } => cmd_search(Some(query), label, version, state, superseded_by, agent_id).await,
+        PatternsCommands::Get { id, agent_id } => cmd_get(id, agent_id).await,
         PatternsCommands::Create {
             title,
             slug,
@@ -266,7 +222,6 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
             state,
             body_file,
             agent_id,
-            json,
         } => {
             cmd_create(CreatePatternArgs {
                 title,
@@ -277,7 +232,6 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
                 state,
                 body_file,
                 agent_id,
-                json,
             })
             .await
         }
@@ -291,7 +245,6 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
             state,
             body_file,
             agent_id,
-            json,
         } => {
             cmd_update(UpdatePatternArgs {
                 id,
@@ -303,25 +256,18 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
                 state,
                 body_file,
                 agent_id,
-                json,
             })
             .await
         }
         PatternsCommands::Delete { id, agent_id } => cmd_delete(id, agent_id).await,
-        PatternsCommands::Comments { id, agent_id, json } => cmd_comments(id, agent_id, json).await,
+        PatternsCommands::Comments { id, agent_id } => cmd_comments(id, agent_id).await,
         PatternsCommands::Comment {
             id,
             content,
             agent_id,
-            json,
-        } => cmd_comment(id, content, agent_id, json).await,
-        PatternsCommands::Check { agent_id, json } => cmd_check(agent_id, json).await,
-        PatternsCommands::Use {
-            id,
-            path,
-            agent_id,
-            json,
-        } => cmd_use(id, path, agent_id, json).await,
+        } => cmd_comment(id, content, agent_id).await,
+        PatternsCommands::Check { agent_id } => cmd_check(agent_id).await,
+        PatternsCommands::Use { id, path, agent_id } => cmd_use(id, path, agent_id).await,
     }
 }
 
@@ -332,7 +278,6 @@ async fn cmd_search(
     state: Option<String>,
     superseded_by: Option<String>,
     agent_id: Option<String>,
-    json: bool,
 ) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     let patterns = ctx
@@ -347,9 +292,7 @@ async fn cmd_search(
         )
         .await
         .context("list patterns")?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&patterns)?);
-    } else if patterns.is_empty() {
+    if patterns.is_empty() {
         println!("(no patterns)");
     } else {
         for pattern in patterns {
@@ -359,18 +302,14 @@ async fn cmd_search(
     Ok(())
 }
 
-async fn cmd_get(id: String, agent_id: Option<String>, json: bool) -> Result<()> {
+async fn cmd_get(id: String, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     let pattern = ctx
         .gateway
         .get_pattern(&id, Some(&ctx.agent_id))
         .await
         .context("fetch pattern")?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&pattern)?);
-    } else {
-        print_pattern(&pattern);
-    }
+    print_pattern(&pattern);
     Ok(())
 }
 
@@ -394,14 +333,10 @@ async fn cmd_create(args: CreatePatternArgs) -> Result<()> {
         .create_pattern(&req, Some(&ctx.agent_id))
         .await
         .context("create pattern")?;
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&pattern)?);
-    } else {
-        println!(
-            "created pattern {} ({}, version={}, state={})",
-            pattern.id, pattern.slug, pattern.version, pattern.state
-        );
-    }
+    println!(
+        "created pattern {} ({}, version={}, state={})",
+        pattern.id, pattern.slug, pattern.version, pattern.state
+    );
     Ok(())
 }
 
@@ -429,14 +364,10 @@ async fn cmd_update(args: UpdatePatternArgs) -> Result<()> {
         .update_pattern(&args.id, &req, Some(&ctx.agent_id))
         .await
         .context("update pattern")?;
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&pattern)?);
-    } else {
-        println!(
-            "updated pattern {} ({}, version={}, state={})",
-            pattern.id, pattern.slug, pattern.version, pattern.state
-        );
-    }
+    println!(
+        "updated pattern {} ({}, version={}, state={})",
+        pattern.id, pattern.slug, pattern.version, pattern.state
+    );
     Ok(())
 }
 
@@ -450,16 +381,14 @@ async fn cmd_delete(id: String, agent_id: Option<String>) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_comments(id: String, agent_id: Option<String>, json: bool) -> Result<()> {
+async fn cmd_comments(id: String, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     let comments = ctx
         .gateway
         .list_pattern_comments(&id, Some(&ctx.agent_id))
         .await
         .context("list pattern comments")?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&comments)?);
-    } else if comments.is_empty() {
+    if comments.is_empty() {
         println!("(no comments)");
     } else {
         for comment in comments {
@@ -469,12 +398,7 @@ async fn cmd_comments(id: String, agent_id: Option<String>, json: bool) -> Resul
     Ok(())
 }
 
-async fn cmd_comment(
-    id: String,
-    content: String,
-    agent_id: Option<String>,
-    json: bool,
-) -> Result<()> {
+async fn cmd_comment(id: String, content: String, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     let req = AddPatternCommentRequest {
         content: &content,
@@ -486,15 +410,11 @@ async fn cmd_comment(
         .add_pattern_comment(&id, &req, Some(&ctx.agent_id))
         .await
         .context("add pattern comment")?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&comment)?);
-    } else {
-        println!("comment added to pattern {}", comment.pattern_id);
-    }
+    println!("comment added to pattern {}", comment.pattern_id);
     Ok(())
 }
 
-async fn cmd_check(agent_id: Option<String>, json: bool) -> Result<()> {
+async fn cmd_check(agent_id: Option<String>) -> Result<()> {
     let file = patterns_file()?;
     if !file.exists() {
         println!("no .patterns file at {}", file.display());
@@ -503,20 +423,11 @@ async fn cmd_check(agent_id: Option<String>, json: bool) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     let usages = read_patterns_file(&file)?;
     let checks = check_usages(&ctx, usages).await?;
-    if json {
-        println!("{}", render_checks_json(&checks)?);
-    } else {
-        render_checks_text(&checks);
-    }
+    render_checks_text(&checks);
     Ok(())
 }
 
-async fn cmd_use(
-    id: String,
-    paths: Vec<PathBuf>,
-    agent_id: Option<String>,
-    json: bool,
-) -> Result<()> {
+async fn cmd_use(id: String, paths: Vec<PathBuf>, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
     let pattern = ctx
         .gateway
@@ -536,13 +447,9 @@ async fn cmd_use(
     upsert_usage(&mut usages, &pattern.id, &path_strings);
     write_patterns_file(&file, &usages)?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&pattern)?);
-    } else {
-        println!("recorded pattern {} in {}", pattern.id, file.display());
-        if !path_strings.is_empty() {
-            println!("paths: {}", path_strings.join(", "));
-        }
+    println!("recorded pattern {} in {}", pattern.id, file.display());
+    if !path_strings.is_empty() {
+        println!("paths: {}", path_strings.join(", "));
     }
     Ok(())
 }
@@ -820,26 +727,6 @@ fn superseded_replacement(pattern: &Pattern) -> Option<String> {
         return Some("(replacement not specified)".to_string());
     }
     None
-}
-
-fn render_checks_json(checks: &[PatternCheck]) -> Result<String> {
-    let rows = checks
-        .iter()
-        .map(|check| {
-            serde_json::json!({
-                "id": check.pattern.id,
-                "slug": check.pattern.slug,
-                "title": check.pattern.title,
-                "version": check.pattern.version,
-                "state": check.pattern.state,
-                "paths": check.usage.paths,
-                "replacement": check.replacement,
-                "task_created": check.task_created,
-                "task_existing": check.task_existing,
-            })
-        })
-        .collect::<Vec<_>>();
-    Ok(serde_json::to_string_pretty(&rows)?)
 }
 
 fn render_checks_text(checks: &[PatternCheck]) {

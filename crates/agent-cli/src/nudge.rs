@@ -139,14 +139,10 @@ mod tests {
                 status: "todo".into(),
                 include_stale: false,
                 agent_id: None,
-                json: false,
             },
         }));
         assert!(!should_nudge(&Commands::Patterns {
-            command: PatternsCommands::Check {
-                agent_id: None,
-                json: false,
-            },
+            command: PatternsCommands::Check { agent_id: None },
         }));
     }
 
