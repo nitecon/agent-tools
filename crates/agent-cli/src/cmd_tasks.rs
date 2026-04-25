@@ -14,8 +14,8 @@ use agent_comms::gateway::GatewayClient;
 use agent_comms::identity::load_or_generate_agent_id;
 use agent_comms::sanitize::short_project_ident;
 use agent_comms::tasks::{
-    AddCommentRequest, CreateTaskRequest, Task, TaskComment, TaskDetail, TaskSummary,
-    UpdateTaskRequest,
+    AddCommentRequest, CreateTaskRequest, Task, TaskComment, TaskCreateResponse, TaskDetail,
+    TaskSummary, UpdateTaskRequest,
 };
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -60,9 +60,9 @@ pub enum TasksCommands {
         /// Optional one-paragraph summary.
         #[arg(long)]
         description: Option<String>,
-        /// Optional long-form spec / repro / context.
-        #[arg(long)]
-        details: Option<String>,
+        /// Optional long-form specification / repro / handoff context.
+        #[arg(long, alias = "details")]
+        specification: Option<String>,
         /// Repeatable label flag — joined into the `labels[]` array.
         #[arg(long = "label")]
         label: Vec<String>,
@@ -171,7 +171,7 @@ async fn run(cmd: TasksCommands) -> Result<()> {
         TasksCommands::Add {
             title,
             description,
-            details,
+            specification,
             label,
             hostname,
             reporter,
@@ -181,7 +181,7 @@ async fn run(cmd: TasksCommands) -> Result<()> {
             cmd_add(
                 title,
                 description,
-                details,
+                specification,
                 label,
                 hostname,
                 reporter,
@@ -527,9 +527,9 @@ fn print_task_detail(task: &Task, comments: &[TaskComment]) {
     }
 
     println!();
-    println!("Details:");
-    match task.details.as_deref() {
-        Some(s) if !s.trim().is_empty() => {
+    println!("Specification:");
+    match task.specification_text() {
+        Some(s) => {
             for line in s.lines() {
                 println!("  {line}");
             }
@@ -560,7 +560,7 @@ fn print_task_detail(task: &Task, comments: &[TaskComment]) {
 async fn cmd_add(
     title: String,
     description: Option<String>,
-    details: Option<String>,
+    specification: Option<String>,
     labels: Vec<String>,
     hostname: Option<String>,
     reporter: Option<String>,
@@ -580,20 +580,22 @@ async fn cmd_add(
     let req = CreateTaskRequest {
         title: &title,
         description: description.as_deref(),
-        details: details.as_deref(),
+        specification: specification.as_deref(),
+        details: None,
         labels: labels_slice,
         hostname: host.as_deref(),
         reporter: reporter.as_deref(),
     };
 
-    let task: Task = ctx
+    let response: TaskCreateResponse = ctx
         .gateway
         .create_task(&ctx.ident, &req, Some(&ctx.agent_id))
         .await
         .context("create task")?;
+    let task = &response.task;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&task)?);
+        println!("{}", serde_json::to_string_pretty(&response)?);
     } else {
         println!(
             "created [{}] {} (status={})",
@@ -602,6 +604,17 @@ async fn cmd_add(
             task.status
         );
         println!("full id: {}", task.id);
+        if specification
+            .as_deref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true)
+        {
+            println!(
+                "hint: evaluate whether this task should include a specification. \
+                 Specs on gateway-backed tasks are more durable than local plan files \
+                 and survive full system crashes."
+            );
+        }
     }
     Ok(())
 }

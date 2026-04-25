@@ -195,6 +195,34 @@ agent-tools comms action 1234 \
 
 The gateway accepts either the new structured payload or the legacy single-`content` shape, so older `agent-tools` builds and the new structured CLI can coexist against the same gateway during rollout.
 
+### Tasks (CLI)
+
+Gateway-backed tasks are the durable TODO surface for agents working in the
+current project. For complex tasks, include a specification with enough handoff
+context for a disconnected or new agent to resume the work. A gateway-backed
+task specification is more durable than a local plan file because it survives a
+full system crash.
+
+```bash
+# List open work for the current project
+agent-tools tasks list
+
+# Create a simple task
+agent-tools tasks add --title "Fix failing Windows path test" --label tests
+
+# Create a complex task with durable handoff context
+agent-tools tasks add \
+  --title "Refactor task API client" \
+  --description "Match the latest gateway task wire format." \
+  --specification "Use specification for long-form handoff context; keep legacy details compatibility."
+
+# Pick up, discuss, and complete work
+agent-tools tasks claim <id>
+agent-tools tasks get <id>
+agent-tools tasks comment <id> "Verified against gateway commit 6980730."
+agent-tools tasks done <id>
+```
+
 ### Patterns (CLI)
 
 The gateway-backed pattern library stores durable organization-wide guidance.

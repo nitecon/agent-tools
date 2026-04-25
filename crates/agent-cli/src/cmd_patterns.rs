@@ -8,7 +8,7 @@ use agent_comms::patterns::{
     UpdatePatternRequest,
 };
 use agent_comms::sanitize::short_project_ident;
-use agent_comms::tasks::{CreateTaskRequest, Task, TaskSummary};
+use agent_comms::tasks::{CreateTaskRequest, TaskSummary};
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use std::collections::BTreeSet;
@@ -615,17 +615,18 @@ async fn ensure_superseded_task(
     let req = CreateTaskRequest {
         title: &title,
         description: Some("Update repository usage from a superseded pattern to its replacement."),
-        details: Some(&details),
+        specification: Some(&details),
+        details: None,
         labels: Some(&labels),
         hostname: hostname.as_deref(),
         reporter: Some(&ctx.agent_id),
     };
-    let task: Task = ctx
+    let response = ctx
         .gateway
         .create_task(&ctx.ident, &req, Some(&ctx.agent_id))
         .await
         .context("create superseded-pattern migration task")?;
-    Ok(SupersededTask::Created(task.id))
+    Ok(SupersededTask::Created(response.task.id))
 }
 
 fn resolve_context(agent_id_override: Option<String>) -> Result<PatternsContext> {

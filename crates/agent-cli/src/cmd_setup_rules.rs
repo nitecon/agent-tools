@@ -73,12 +73,15 @@ const TASKS_SECTION: &str = r#"
 
 A real task board with three statuses, server-enforced ownership, 1h stale-
 claim reclaim, and 7d done falloff. Use this as your TODO surface — do not
-maintain task files locally when the gateway is configured.
+maintain task files locally when the gateway is configured. For complex tasks,
+add a specification with enough handoff context for a disconnected or new agent
+to resume the work; gateway-backed specifications are more durable than local
+plan files because they survive full system crashes.
 
 ```bash
 agent-tools tasks list                   # TODO + IN PROGRESS for this project
 agent-tools tasks get <id>               # full detail + comment thread
-agent-tools tasks add --title "..." [--label x] [--description "..."]
+agent-tools tasks add --title "..." [--label x] [--description "..."] [--specification "..."]
 agent-tools tasks claim <id>             # take ownership (-> in_progress)
 agent-tools tasks release <id>           # drop ownership (-> todo)
 agent-tools tasks done <id>              # mark complete

@@ -16,7 +16,8 @@ use serde_json::Value;
 
 // -- Domain types ------------------------------------------------------------
 
-/// A full task record as returned by `GET /tasks/:id` and `POST /tasks`.
+/// A full task record as returned by `GET /tasks/:id` and embedded in task
+/// create responses.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Task {
     pub id: String,
@@ -26,6 +27,8 @@ pub struct Task {
     pub description: Option<String>,
     #[serde(default)]
     pub details: Option<String>,
+    #[serde(default)]
+    pub specification: Option<String>,
     pub status: String,
     pub rank: i64,
     #[serde(default)]
@@ -41,6 +44,15 @@ pub struct Task {
     pub started_at: Option<i64>,
     #[serde(default)]
     pub done_at: Option<i64>,
+}
+
+impl Task {
+    pub fn specification_text(&self) -> Option<&str> {
+        self.specification
+            .as_deref()
+            .or(self.details.as_deref())
+            .filter(|s| !s.trim().is_empty())
+    }
 }
 
 /// Slim task shape used by the list endpoint.
@@ -94,6 +106,15 @@ pub struct TaskDetail {
     pub comments: Vec<TaskComment>,
 }
 
+/// Task create response returned by `POST /tasks`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TaskCreateResponse {
+    #[serde(flatten)]
+    pub task: Task,
+    #[serde(default)]
+    pub hint: Option<String>,
+}
+
 // -- Request shapes ----------------------------------------------------------
 
 /// Body for `POST /v1/projects/:ident/tasks`.
@@ -102,6 +123,8 @@ pub struct CreateTaskRequest<'a> {
     pub title: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub specification: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -131,6 +154,8 @@ pub struct UpdateTaskRequest<'a> {
     pub title: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub specification: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -223,7 +248,7 @@ impl GatewayClient {
         ident: &str,
         req: &CreateTaskRequest<'_>,
         agent_id: Option<&str>,
-    ) -> Result<Task> {
+    ) -> Result<TaskCreateResponse> {
         let url = format!("{}/v1/projects/{}/tasks", self.base_url(), ident);
         let builder = self
             .http_client()
@@ -326,6 +351,7 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["owner_agent_id"], Value::Null);
         assert_eq!(json["description"], Value::String("new".into()));
+        assert!(json.get("specification").is_none());
         assert!(json.get("status").is_none());
     }
 
@@ -338,7 +364,42 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["title"], "smoke");
         assert!(json.get("description").is_none());
+        assert!(json.get("specification").is_none());
+        assert!(json.get("details").is_none());
         assert!(json.get("labels").is_none());
+    }
+
+    #[test]
+    fn create_request_sends_specification_field() {
+        let req = CreateTaskRequest {
+            title: "smoke",
+            specification: Some("handoff spec"),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["specification"], "handoff spec");
+        assert!(json.get("details").is_none());
+    }
+
+    #[test]
+    fn task_specification_text_prefers_new_field_but_accepts_legacy_details() {
+        let mut task = serde_json::from_value::<Task>(serde_json::json!({
+            "id": "task-1",
+            "project_ident": "demo",
+            "title": "Demo",
+            "specification": "new spec",
+            "details": "legacy details",
+            "status": "todo",
+            "rank": 1,
+            "reporter": "agent",
+            "created_at": 1,
+            "updated_at": 1
+        }))
+        .unwrap();
+        assert_eq!(task.specification_text(), Some("new spec"));
+
+        task.specification = None;
+        assert_eq!(task.specification_text(), Some("legacy details"));
     }
 
     #[test]
