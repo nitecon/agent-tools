@@ -1,4 +1,5 @@
 mod cmd_comms;
+mod cmd_patterns;
 mod cmd_setup_menu;
 mod cmd_setup_perms;
 mod cmd_setup_rules;
@@ -156,6 +157,12 @@ enum Commands {
         command: cmd_tasks::TasksCommands,
     },
 
+    /// Global pattern library and repository `.patterns` tracking (gateway-backed)
+    Patterns {
+        #[command(subcommand)]
+        command: cmd_patterns::PatternsCommands,
+    },
+
     /// Check for updates and install the latest version
     Update,
 
@@ -251,6 +258,7 @@ fn main() -> Result<()> {
             | Commands::Setup { .. }
             | Commands::Comms { .. }
             | Commands::Tasks { .. }
+            | Commands::Patterns { .. }
     ) {
         agent_updater::auto_update_blocking();
     }
@@ -353,6 +361,8 @@ fn main() -> Result<()> {
         Commands::Comms { command } => cmd_comms::dispatch(command),
 
         Commands::Tasks { command } => cmd_tasks::dispatch(command),
+
+        Commands::Patterns { command } => cmd_patterns::dispatch(command),
 
         Commands::Update => agent_updater::manual_update_blocking(),
 

@@ -1,0 +1,999 @@
+//! `agent-tools patterns` subcommands.
+
+use agent_comms::config::{home_dir, load_config};
+use agent_comms::gateway::GatewayClient;
+use agent_comms::identity::load_or_generate_agent_id;
+use agent_comms::patterns::{
+    AddPatternCommentRequest, CreatePatternRequest, Pattern, PatternComment, PatternSummary,
+    UpdatePatternRequest,
+};
+use agent_comms::sanitize::short_project_ident;
+use agent_comms::tasks::{CreateTaskRequest, Task, TaskSummary};
+use anyhow::{Context, Result};
+use clap::Subcommand;
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::PathBuf;
+
+#[derive(Subcommand)]
+pub enum PatternsCommands {
+    /// List latest active patterns.
+    List {
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long, default_value = "latest")]
+        version: String,
+        #[arg(long, default_value = "active")]
+        state: String,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Search the global pattern library.
+    Search {
+        query: String,
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long = "superseded-by")]
+        superseded_by: Option<String>,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Fetch one pattern by gateway id or slug. Comments are not fetched.
+    Get {
+        id: String,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Create a pattern from a markdown file.
+    Create {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        slug: Option<String>,
+        #[arg(long)]
+        summary: Option<String>,
+        #[arg(long = "label")]
+        label: Vec<String>,
+        #[arg(long, default_value = "draft")]
+        version: String,
+        #[arg(long, default_value = "active")]
+        state: String,
+        #[arg(long = "body-file")]
+        body_file: PathBuf,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Update pattern metadata or markdown body.
+    Update {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        slug: Option<String>,
+        #[arg(long)]
+        summary: Option<String>,
+        #[arg(long = "label")]
+        label: Vec<String>,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long = "body-file")]
+        body_file: Option<PathBuf>,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Delete a pattern.
+    Delete {
+        id: String,
+        #[arg(long)]
+        agent_id: Option<String>,
+    },
+
+    /// Fetch comments for a pattern.
+    Comments {
+        id: String,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Add a comment to a pattern.
+    Comment {
+        id: String,
+        content: String,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Validate the current directory's `.patterns` file.
+    Check {
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Validate a pattern and add its canonical gateway id to `.patterns`.
+    Use {
+        id: String,
+        #[arg(long = "path")]
+        path: Vec<PathBuf>,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+struct PatternsContext {
+    ident: String,
+    canonical_ident: String,
+    agent_id: String,
+    gateway: GatewayClient,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PatternUsage {
+    id: String,
+    paths: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PatternCheck {
+    usage: PatternUsage,
+    pattern: Pattern,
+    replacement: Option<String>,
+    task_created: Option<String>,
+    task_existing: Option<String>,
+}
+
+struct CreatePatternArgs {
+    title: String,
+    slug: Option<String>,
+    summary: Option<String>,
+    labels: Vec<String>,
+    version: String,
+    state: String,
+    body_file: PathBuf,
+    agent_id: Option<String>,
+    json: bool,
+}
+
+struct UpdatePatternArgs {
+    id: String,
+    title: Option<String>,
+    slug: Option<String>,
+    summary: Option<String>,
+    labels: Vec<String>,
+    version: Option<String>,
+    state: Option<String>,
+    body_file: Option<PathBuf>,
+    agent_id: Option<String>,
+    json: bool,
+}
+
+pub fn dispatch(cmd: PatternsCommands) -> Result<()> {
+    ensure_gateway_configured()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime")?;
+    rt.block_on(run(cmd))
+}
+
+fn ensure_gateway_configured() -> Result<()> {
+    let cfg = load_config();
+    if cfg.gateway.url.is_none() || cfg.gateway.api_key.is_none() {
+        anyhow::bail!(
+            "Patterns are not available — agent-gateway is not configured.\n\
+             Patterns require a running agent-gateway connection. Ask the user to run\n\
+             `agent-tools setup gateway` to enable pattern guidance, then retry."
+        );
+    }
+    Ok(())
+}
+
+async fn run(cmd: PatternsCommands) -> Result<()> {
+    match cmd {
+        PatternsCommands::List {
+            label,
+            version,
+            state,
+            agent_id,
+            json,
+        } => {
+            cmd_search(
+                None,
+                label,
+                Some(version),
+                Some(state),
+                None,
+                agent_id,
+                json,
+            )
+            .await
+        }
+        PatternsCommands::Search {
+            query,
+            label,
+            version,
+            state,
+            superseded_by,
+            agent_id,
+            json,
+        } => {
+            cmd_search(
+                Some(query),
+                label,
+                version,
+                state,
+                superseded_by,
+                agent_id,
+                json,
+            )
+            .await
+        }
+        PatternsCommands::Get { id, agent_id, json } => cmd_get(id, agent_id, json).await,
+        PatternsCommands::Create {
+            title,
+            slug,
+            summary,
+            label,
+            version,
+            state,
+            body_file,
+            agent_id,
+            json,
+        } => {
+            cmd_create(CreatePatternArgs {
+                title,
+                slug,
+                summary,
+                labels: label,
+                version,
+                state,
+                body_file,
+                agent_id,
+                json,
+            })
+            .await
+        }
+        PatternsCommands::Update {
+            id,
+            title,
+            slug,
+            summary,
+            label,
+            version,
+            state,
+            body_file,
+            agent_id,
+            json,
+        } => {
+            cmd_update(UpdatePatternArgs {
+                id,
+                title,
+                slug,
+                summary,
+                labels: label,
+                version,
+                state,
+                body_file,
+                agent_id,
+                json,
+            })
+            .await
+        }
+        PatternsCommands::Delete { id, agent_id } => cmd_delete(id, agent_id).await,
+        PatternsCommands::Comments { id, agent_id, json } => cmd_comments(id, agent_id, json).await,
+        PatternsCommands::Comment {
+            id,
+            content,
+            agent_id,
+            json,
+        } => cmd_comment(id, content, agent_id, json).await,
+        PatternsCommands::Check { agent_id, json } => cmd_check(agent_id, json).await,
+        PatternsCommands::Use {
+            id,
+            path,
+            agent_id,
+            json,
+        } => cmd_use(id, path, agent_id, json).await,
+    }
+}
+
+async fn cmd_search(
+    query: Option<String>,
+    label: Option<String>,
+    version: Option<String>,
+    state: Option<String>,
+    superseded_by: Option<String>,
+    agent_id: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let ctx = resolve_context(agent_id)?;
+    let patterns = ctx
+        .gateway
+        .list_patterns(
+            query.as_deref(),
+            label.as_deref(),
+            version.as_deref(),
+            state.as_deref(),
+            superseded_by.as_deref(),
+            Some(&ctx.agent_id),
+        )
+        .await
+        .context("list patterns")?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&patterns)?);
+    } else if patterns.is_empty() {
+        println!("(no patterns)");
+    } else {
+        for pattern in patterns {
+            print_summary_row(&pattern);
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_get(id: String, agent_id: Option<String>, json: bool) -> Result<()> {
+    let ctx = resolve_context(agent_id)?;
+    let pattern = ctx
+        .gateway
+        .get_pattern(&id, Some(&ctx.agent_id))
+        .await
+        .context("fetch pattern")?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&pattern)?);
+    } else {
+        print_pattern(&pattern);
+    }
+    Ok(())
+}
+
+async fn cmd_create(args: CreatePatternArgs) -> Result<()> {
+    let ctx = resolve_context(args.agent_id)?;
+    let body = fs::read_to_string(&args.body_file)
+        .with_context(|| format!("read body file {}", args.body_file.display()))?;
+    let labels_slice = labels_if_any(&args.labels);
+    let req = CreatePatternRequest {
+        title: &args.title,
+        slug: args.slug.as_deref(),
+        summary: args.summary.as_deref(),
+        body: &body,
+        labels: labels_slice,
+        version: &args.version,
+        state: &args.state,
+        author: &ctx.agent_id,
+    };
+    let pattern = ctx
+        .gateway
+        .create_pattern(&req, Some(&ctx.agent_id))
+        .await
+        .context("create pattern")?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&pattern)?);
+    } else {
+        println!(
+            "created pattern {} ({}, version={}, state={})",
+            pattern.id, pattern.slug, pattern.version, pattern.state
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_update(args: UpdatePatternArgs) -> Result<()> {
+    let ctx = resolve_context(args.agent_id)?;
+    let body = match args.body_file {
+        Some(path) => Some(
+            fs::read_to_string(&path)
+                .with_context(|| format!("read body file {}", path.display()))?,
+        ),
+        None => None,
+    };
+    let labels_slice = labels_if_any(&args.labels);
+    let req = UpdatePatternRequest {
+        title: args.title.as_deref(),
+        slug: args.slug.as_deref(),
+        summary: args.summary.as_deref(),
+        body: body.as_deref(),
+        labels: labels_slice,
+        version: args.version.as_deref(),
+        state: args.state.as_deref(),
+    };
+    let pattern = ctx
+        .gateway
+        .update_pattern(&args.id, &req, Some(&ctx.agent_id))
+        .await
+        .context("update pattern")?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&pattern)?);
+    } else {
+        println!(
+            "updated pattern {} ({}, version={}, state={})",
+            pattern.id, pattern.slug, pattern.version, pattern.state
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_delete(id: String, agent_id: Option<String>) -> Result<()> {
+    let ctx = resolve_context(agent_id)?;
+    ctx.gateway
+        .delete_pattern(&id, Some(&ctx.agent_id))
+        .await
+        .context("delete pattern")?;
+    println!("deleted pattern {id}");
+    Ok(())
+}
+
+async fn cmd_comments(id: String, agent_id: Option<String>, json: bool) -> Result<()> {
+    let ctx = resolve_context(agent_id)?;
+    let comments = ctx
+        .gateway
+        .list_pattern_comments(&id, Some(&ctx.agent_id))
+        .await
+        .context("list pattern comments")?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&comments)?);
+    } else if comments.is_empty() {
+        println!("(no comments)");
+    } else {
+        for comment in comments {
+            print_comment(&comment);
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_comment(
+    id: String,
+    content: String,
+    agent_id: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let ctx = resolve_context(agent_id)?;
+    let req = AddPatternCommentRequest {
+        content: &content,
+        author: &ctx.agent_id,
+        author_type: "agent",
+    };
+    let comment = ctx
+        .gateway
+        .add_pattern_comment(&id, &req, Some(&ctx.agent_id))
+        .await
+        .context("add pattern comment")?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&comment)?);
+    } else {
+        println!("comment added to pattern {}", comment.pattern_id);
+    }
+    Ok(())
+}
+
+async fn cmd_check(agent_id: Option<String>, json: bool) -> Result<()> {
+    let file = patterns_file()?;
+    if !file.exists() {
+        println!("no .patterns file at {}", file.display());
+        return Ok(());
+    }
+    let ctx = resolve_context(agent_id)?;
+    let usages = read_patterns_file(&file)?;
+    let checks = check_usages(&ctx, usages).await?;
+    if json {
+        println!("{}", render_checks_json(&checks)?);
+    } else {
+        render_checks_text(&checks);
+    }
+    Ok(())
+}
+
+async fn cmd_use(
+    id: String,
+    paths: Vec<PathBuf>,
+    agent_id: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let ctx = resolve_context(agent_id)?;
+    let pattern = ctx
+        .gateway
+        .get_pattern(&id, Some(&ctx.agent_id))
+        .await
+        .context("fetch pattern")?;
+    let file = patterns_file()?;
+    let mut usages = if file.exists() {
+        read_patterns_file(&file)?
+    } else {
+        Vec::new()
+    };
+    let path_strings: Vec<String> = paths
+        .iter()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    upsert_usage(&mut usages, &pattern.id, &path_strings);
+    write_patterns_file(&file, &usages)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&pattern)?);
+    } else {
+        println!("recorded pattern {} in {}", pattern.id, file.display());
+        if !path_strings.is_empty() {
+            println!("paths: {}", path_strings.join(", "));
+        }
+    }
+    Ok(())
+}
+
+async fn check_usages(
+    ctx: &PatternsContext,
+    usages: Vec<PatternUsage>,
+) -> Result<Vec<PatternCheck>> {
+    let mut checks = Vec::new();
+    for usage in usages {
+        let pattern = ctx
+            .gateway
+            .get_pattern(&usage.id, Some(&ctx.agent_id))
+            .await
+            .with_context(|| format!("fetch pattern {}", usage.id))?;
+        let replacement = superseded_replacement(&pattern);
+        let mut task_created = None;
+        let mut task_existing = None;
+        if let Some(next) = replacement.as_deref() {
+            match ensure_superseded_task(ctx, &pattern, next, &usage).await? {
+                SupersededTask::Created(id) => task_created = Some(id),
+                SupersededTask::Existing(id) => task_existing = Some(id),
+            }
+        }
+        checks.push(PatternCheck {
+            usage,
+            pattern,
+            replacement,
+            task_created,
+            task_existing,
+        });
+    }
+    Ok(checks)
+}
+
+enum SupersededTask {
+    Created(String),
+    Existing(String),
+}
+
+async fn ensure_superseded_task(
+    ctx: &PatternsContext,
+    pattern: &Pattern,
+    replacement: &str,
+    usage: &PatternUsage,
+) -> Result<SupersededTask> {
+    ensure_registered(ctx).await?;
+    let title = format!("Migrate pattern {} to {}", pattern.id, replacement);
+    let statuses = ["todo", "in_progress"];
+    let existing: Vec<TaskSummary> = ctx
+        .gateway
+        .list_tasks(&ctx.ident, Some(&statuses), false, Some(&ctx.agent_id))
+        .await
+        .context("list tasks before creating superseded-pattern task")?;
+    if let Some(task) = existing.iter().find(|task| task.title == title) {
+        return Ok(SupersededTask::Existing(task.id.clone()));
+    }
+
+    let path_text = if usage.paths.is_empty() {
+        "No paths are recorded in .patterns.".to_string()
+    } else {
+        format!("Recorded paths:\n{}", usage.paths.join("\n"))
+    };
+    let details = format!(
+        "Pattern `{}` ({}) is superseded by `{}`.\n\n{}",
+        pattern.id, pattern.title, replacement, path_text
+    );
+    let labels = vec!["patterns".to_string(), "migration".to_string()];
+    let hostname = local_hostname();
+    let req = CreateTaskRequest {
+        title: &title,
+        description: Some("Update repository usage from a superseded pattern to its replacement."),
+        details: Some(&details),
+        labels: Some(&labels),
+        hostname: hostname.as_deref(),
+        reporter: Some(&ctx.agent_id),
+    };
+    let task: Task = ctx
+        .gateway
+        .create_task(&ctx.ident, &req, Some(&ctx.agent_id))
+        .await
+        .context("create superseded-pattern migration task")?;
+    Ok(SupersededTask::Created(task.id))
+}
+
+fn resolve_context(agent_id_override: Option<String>) -> Result<PatternsContext> {
+    let canonical_ident =
+        agent_core::project_ident_from_cwd().context("derive project ident from cwd")?;
+    let ident = short_project_ident(&canonical_ident);
+    if ident.is_empty() {
+        anyhow::bail!(
+            "could not derive a short project ident from {canonical_ident:?}; \
+             set a git origin or run from a stable project directory"
+        );
+    }
+    let agent_id = match agent_id_override {
+        Some(id) => id,
+        None => load_or_generate_agent_id()?,
+    };
+    let config = load_config();
+    let gateway_url = config
+        .gateway
+        .url
+        .clone()
+        .context("gateway URL not configured -- run `agent-tools setup gateway`")?;
+    let api_key = config
+        .gateway
+        .api_key
+        .clone()
+        .context("gateway API key not configured -- run `agent-tools setup gateway`")?;
+    let timeout_ms = config.gateway.timeout_ms.unwrap_or(5000);
+    let gateway = GatewayClient::new(gateway_url, api_key, timeout_ms)?;
+    Ok(PatternsContext {
+        ident,
+        canonical_ident,
+        agent_id,
+        gateway,
+    })
+}
+
+async fn ensure_registered(ctx: &PatternsContext) -> Result<()> {
+    let marker = registration_marker_path(&ctx.canonical_ident);
+    if read_registration_marker(&marker).as_deref() == Some(&ctx.ident) {
+        return Ok(());
+    }
+    ctx.gateway
+        .register_project(&ctx.ident, None)
+        .await
+        .context("register project")?;
+    if let Some(parent) = marker.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    fs::write(&marker, &ctx.ident).ok();
+    Ok(())
+}
+
+fn registration_marker_path(canonical_ident: &str) -> PathBuf {
+    let hash = agent_core::hash_project_ident(canonical_ident);
+    home_dir()
+        .join(".agent-tools")
+        .join(hash)
+        .join("gateway-project")
+}
+
+fn read_registration_marker(path: &PathBuf) -> Option<String> {
+    fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
+fn patterns_file() -> Result<PathBuf> {
+    Ok(std::env::current_dir()?.join(".patterns"))
+}
+
+fn read_patterns_file(path: &PathBuf) -> Result<Vec<PatternUsage>> {
+    parse_patterns_file(
+        &fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
+    )
+}
+
+fn parse_patterns_file(input: &str) -> Result<Vec<PatternUsage>> {
+    let mut usages: Vec<PatternUsage> = Vec::new();
+    let mut current: Option<String> = None;
+
+    for (idx, raw) in input.lines().enumerate() {
+        let line_no = idx + 1;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            current = None;
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            anyhow::bail!(".patterns comments are not supported (line {line_no})");
+        }
+        if raw.starts_with(' ') || raw.starts_with('\t') {
+            let Some(id) = current.as_deref() else {
+                anyhow::bail!(".patterns path entry without a pattern id on line {line_no}");
+            };
+            let path = trimmed
+                .strip_prefix("- ")
+                .context(".patterns path entries must use `  - path` syntax")?
+                .trim();
+            validate_token(path, line_no, "path")?;
+            append_paths(&mut usages, id, &[path.to_string()]);
+            continue;
+        }
+        let (id, paths) = match trimmed.split_once(':') {
+            Some((id, rest)) => {
+                let id = id.trim();
+                validate_token(id, line_no, "pattern id")?;
+                let paths = rest
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                (id.to_string(), paths)
+            }
+            None => {
+                validate_token(trimmed, line_no, "pattern id")?;
+                (trimmed.to_string(), Vec::new())
+            }
+        };
+        upsert_usage(&mut usages, &id, &paths);
+        current = if trimmed.ends_with(':') {
+            Some(id)
+        } else {
+            None
+        };
+    }
+    Ok(usages)
+}
+
+fn write_patterns_file(path: &PathBuf, usages: &[PatternUsage]) -> Result<()> {
+    let mut body = String::new();
+    for usage in usages {
+        if usage.paths.is_empty() {
+            body.push_str(&usage.id);
+            body.push('\n');
+        } else {
+            body.push_str(&usage.id);
+            body.push_str(":\n");
+            for path in &usage.paths {
+                body.push_str("  - ");
+                body.push_str(path);
+                body.push('\n');
+            }
+        }
+    }
+    fs::write(path, body).with_context(|| format!("write {}", path.display()))
+}
+
+fn upsert_usage(usages: &mut Vec<PatternUsage>, id: &str, paths: &[String]) {
+    if let Some(usage) = usages.iter_mut().find(|usage| usage.id == id) {
+        append_path_values(&mut usage.paths, paths);
+        return;
+    }
+    let mut usage = PatternUsage {
+        id: id.to_string(),
+        paths: Vec::new(),
+    };
+    append_path_values(&mut usage.paths, paths);
+    usages.push(usage);
+}
+
+fn append_paths(usages: &mut [PatternUsage], id: &str, paths: &[String]) {
+    if let Some(usage) = usages.iter_mut().find(|usage| usage.id == id) {
+        append_path_values(&mut usage.paths, paths);
+    }
+}
+
+fn append_path_values(existing: &mut Vec<String>, paths: &[String]) {
+    let mut seen: BTreeSet<String> = existing.iter().cloned().collect();
+    for path in paths {
+        if !path.is_empty() && seen.insert(path.clone()) {
+            existing.push(path.clone());
+        }
+    }
+}
+
+fn validate_token(value: &str, line_no: usize, label: &str) -> Result<()> {
+    if value.is_empty() {
+        anyhow::bail!(".patterns empty {label} on line {line_no}");
+    }
+    if value.starts_with('#') {
+        anyhow::bail!(".patterns comments are not supported (line {line_no})");
+    }
+    Ok(())
+}
+
+fn superseded_replacement(pattern: &Pattern) -> Option<String> {
+    if let Some(rest) = pattern.state.strip_prefix("superseded-by:") {
+        return Some(rest.trim().to_string());
+    }
+    if pattern.version == "superseded" || pattern.state == "superseded" {
+        return Some("(replacement not specified)".to_string());
+    }
+    None
+}
+
+fn render_checks_json(checks: &[PatternCheck]) -> Result<String> {
+    let rows = checks
+        .iter()
+        .map(|check| {
+            serde_json::json!({
+                "id": check.pattern.id,
+                "slug": check.pattern.slug,
+                "title": check.pattern.title,
+                "version": check.pattern.version,
+                "state": check.pattern.state,
+                "paths": check.usage.paths,
+                "replacement": check.replacement,
+                "task_created": check.task_created,
+                "task_existing": check.task_existing,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::to_string_pretty(&rows)?)
+}
+
+fn render_checks_text(checks: &[PatternCheck]) {
+    if checks.is_empty() {
+        println!("(no patterns listed)");
+        return;
+    }
+    for check in checks {
+        let path_suffix = if check.usage.paths.is_empty() {
+            String::new()
+        } else {
+            format!(" paths={}", check.usage.paths.join(","))
+        };
+        if let Some(replacement) = check.replacement.as_deref() {
+            println!(
+                "[superseded] {} ({}) -> {}{}",
+                check.pattern.id, check.pattern.title, replacement, path_suffix
+            );
+            if let Some(task_id) = check.task_created.as_deref() {
+                println!("  created migration task {task_id}");
+            } else if let Some(task_id) = check.task_existing.as_deref() {
+                println!("  migration task already exists {task_id}");
+            }
+        } else if check.pattern.state == "active" || check.pattern.version == "latest" {
+            println!(
+                "[active] {} ({}, version={}, state={}){}",
+                check.pattern.id,
+                check.pattern.title,
+                check.pattern.version,
+                check.pattern.state,
+                path_suffix
+            );
+        } else {
+            println!(
+                "[review] {} ({}, version={}, state={}){}",
+                check.pattern.id,
+                check.pattern.title,
+                check.pattern.version,
+                check.pattern.state,
+                path_suffix
+            );
+        }
+    }
+}
+
+fn print_summary_row(pattern: &PatternSummary) {
+    let labels = if pattern.labels.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", pattern.labels.join(","))
+    };
+    println!(
+        "[{}] {} ({}, version={}, state={}){}",
+        pattern.id, pattern.title, pattern.slug, pattern.version, pattern.state, labels
+    );
+    if !pattern.summary.trim().is_empty() {
+        println!("  {}", pattern.summary);
+    }
+}
+
+fn print_pattern(pattern: &Pattern) {
+    println!(
+        "{} ({})\nid: {}\nversion: {}\nstate: {}\nlabels: {}\n",
+        pattern.title,
+        pattern.slug,
+        pattern.id,
+        pattern.version,
+        pattern.state,
+        pattern.labels.join(", ")
+    );
+    print!("{}", pattern.body);
+    if !pattern.body.ends_with('\n') {
+        println!();
+    }
+}
+
+fn print_comment(comment: &PatternComment) {
+    println!(
+        "[{}] {} ({}): {}",
+        comment.created_at, comment.author, comment.author_type, comment.content
+    );
+}
+
+fn labels_if_any(labels: &[String]) -> Option<&[String]> {
+    if labels.is_empty() {
+        None
+    } else {
+        Some(labels)
+    }
+}
+
+fn local_hostname() -> Option<String> {
+    let host = gethostname::gethostname()
+        .to_string_lossy()
+        .trim()
+        .to_string();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_patterns_accepts_yaml_lists_and_bare_ids() {
+        let parsed =
+            parse_patterns_file("abc:\n  - src/main.rs\n  - /etc/app.py\n\ndef\n").unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                PatternUsage {
+                    id: "abc".to_string(),
+                    paths: vec!["src/main.rs".to_string(), "/etc/app.py".to_string()],
+                },
+                PatternUsage {
+                    id: "def".to_string(),
+                    paths: Vec::new(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_patterns_accepts_colon_comma_shorthand() {
+        let parsed = parse_patterns_file("abc:src/main.rs, crates/lib.rs\n").unwrap();
+        assert_eq!(
+            parsed[0],
+            PatternUsage {
+                id: "abc".to_string(),
+                paths: vec!["src/main.rs".to_string(), "crates/lib.rs".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn parse_patterns_rejects_comments() {
+        let err = parse_patterns_file("# note\n").unwrap_err().to_string();
+        assert!(err.contains("comments are not supported"));
+    }
+
+    #[test]
+    fn upsert_usage_deduplicates_paths() {
+        let mut usages = vec![PatternUsage {
+            id: "abc".to_string(),
+            paths: vec!["a.rs".to_string()],
+        }];
+        upsert_usage(
+            &mut usages,
+            "abc",
+            &["a.rs".to_string(), "b.rs".to_string()],
+        );
+        assert_eq!(usages[0].paths, vec!["a.rs", "b.rs"]);
+    }
+}

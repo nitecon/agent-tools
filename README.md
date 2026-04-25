@@ -87,6 +87,8 @@ Commands:
   mkdir     Create directories recursively
   rm        Remove a file or directory
   comms     Send / receive messages via the gateway
+  tasks     Per-project task board via the gateway
+  patterns  Global pattern library and .patterns tracking via the gateway
   setup     Setup and configuration commands
   init      Configure gateway connection (alias for `setup gateway`)
   update    Check for updates and install the latest version
@@ -193,6 +195,46 @@ agent-tools comms action 1234 \
 
 The gateway accepts either the new structured payload or the legacy single-`content` shape, so older `agent-tools` builds and the new structured CLI can coexist against the same gateway during rollout.
 
+### Patterns (CLI)
+
+The gateway-backed pattern library stores durable organization-wide guidance.
+Repositories can opt into known guidance with a `.patterns` file in the current
+working directory. The file is intentionally minimal: gateway pattern ids as
+keys, with optional paths as values, and no comments.
+
+```yaml
+01JZEXAMPLEPATTERNID:
+  - src/main.rs
+  - crates/agent-cli/src/cmd_patterns.rs
+```
+
+```bash
+# Search approved guidance before implementing established practices
+agent-tools patterns search "systemd service" --version latest --state active
+
+# Fetch the pattern body only; comments are opt-in review state
+agent-tools patterns get 01JZEXAMPLEPATTERNID
+
+# Iterating on a pattern: fetch both the body and comments first
+agent-tools patterns get 01JZEXAMPLEPATTERNID
+agent-tools patterns comments 01JZEXAMPLEPATTERNID
+agent-tools patterns update 01JZEXAMPLEPATTERNID --body-file /tmp/pattern.md
+
+# Validate $PWD/.patterns. Superseded patterns create migration tasks.
+agent-tools patterns check
+
+# Record use of a pattern with relevant paths
+agent-tools patterns use 01JZEXAMPLEPATTERNID --path src/main.rs
+
+# Create draft guidance from a markdown file
+agent-tools patterns create \
+  --title "Deploying Eventic Applications" \
+  --version draft \
+  --state active \
+  --label deploy \
+  --body-file pattern.md
+```
+
 ## Agent Directives
 
 Add the appropriate block below to your agent's global instructions file to enable CLI-based tool usage.
@@ -224,7 +266,7 @@ Detection is by **agent home directory** rather than rule-file existence, so a f
 
 The injected block is wrapped in `<agent-tools-rules>...</agent-tools-rules>` markers; re-runs replace the block in place rather than duplicating it. A `<file>.bak` sibling is written before each destructive modification so changes are recoverable (brand-new files skip the backup to avoid zero-byte `.bak` clutter).
 
-When the gateway is configured, the injected block includes code-exploration + comms + tasks. When the gateway is not configured, only the code-exploration section is injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
+When the gateway is configured, the injected block includes code-exploration + comms + tasks + patterns. When the gateway is not configured, only the code-exploration section is injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
 
 ### Automated install: `agent-tools setup skill`
 

@@ -7,7 +7,7 @@
 //!
 //! Quiet by default when:
 //! - the gateway isn't configured (no point pointing at an unreachable system);
-//! - the invoking command is itself a `tasks ...` call or an admin command;
+//! - the invoking command is itself a `tasks ...` / `patterns ...` call or an admin command;
 //! - the user has set `AGENT_TOOLS_NUDGE=off`.
 //!
 //! Rationale: avoids destructive scan/import of the user's local task files,
@@ -28,6 +28,7 @@ pub fn should_nudge(cmd: &Commands) -> bool {
     !matches!(
         cmd,
         Commands::Tasks { .. }
+            | Commands::Patterns { .. }
             | Commands::Setup { .. }
             | Commands::Init
             | Commands::Version
@@ -106,6 +107,7 @@ fn should_emit_at(count: u64, interval: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cmd_patterns::PatternsCommands;
     use crate::cmd_tasks::TasksCommands;
     use std::path::PathBuf;
 
@@ -136,6 +138,12 @@ mod tests {
             command: TasksCommands::List {
                 status: "todo".into(),
                 include_stale: false,
+                agent_id: None,
+                json: false,
+            },
+        }));
+        assert!(!should_nudge(&Commands::Patterns {
+            command: PatternsCommands::Check {
                 agent_id: None,
                 json: false,
             },

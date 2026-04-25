@@ -87,6 +87,51 @@ agent-tools tasks rank <id> <n>          # set ordering within a column
 ```
 "#;
 
+const PATTERNS_SECTION: &str = r#"
+### Patterns (gateway-backed global guidance)
+
+Patterns are durable organization-wide implementation guidance. Before
+implementing work that may involve established practice, search latest active
+patterns first.
+
+```bash
+agent-tools patterns search "<query>" --version latest --state active
+agent-tools patterns get <id-or-slug>
+agent-tools patterns comments <id-or-slug>
+agent-tools patterns update <id-or-slug> --body-file /tmp/pattern.md
+agent-tools patterns check                 # validate $PWD/.patterns
+agent-tools patterns use <id-or-slug> --path src/main.rs
+```
+
+At the start of implementation work, if `$PWD/.patterns` exists, validate it
+with `agent-tools patterns check` before relying on the listed guidance.
+`.patterns` is intentionally minimal repository metadata: use gateway pattern
+ids as keys and optional file paths as values, with no comments or explanatory
+text.
+
+When you use a pattern, ensure its canonical gateway id is listed in
+`.patterns` with the relevant paths. If a listed pattern is superseded,
+`patterns check` will create a migration task for the replacement and report it.
+
+If you implement something net new, or discover an approach that worked well and
+should be reused, search for an existing pattern. If none exists, propose
+creating a new draft pattern with the user. Do not fetch pattern comments unless
+the user explicitly asks to review or address comments.
+
+When the user asks to iterate on, revise, update, or edit a specific pattern,
+fetch both the pattern body and its comments before making changes:
+
+```bash
+agent-tools patterns get <id-or-slug>
+agent-tools patterns comments <id-or-slug>
+```
+
+Treat comments as review context only for that requested pattern-editing task.
+Apply the user's requested edits to a local markdown draft, then update the
+gateway pattern with `agent-tools patterns update <id-or-slug> --body-file
+<draft.md>`. Preserve unrelated sections unless the user asks to change them.
+"#;
+
 /// Entry point invoked from `main.rs` for `agent-tools setup rules`.
 pub fn run(target: Option<PathBuf>, all: bool, dry_run: bool, print: bool) -> Result<()> {
     let gateway_on = gateway_configured();
@@ -233,6 +278,7 @@ fn build_block(include_gateway_sections: bool) -> String {
     if include_gateway_sections {
         body.push_str(COMMS_SECTION);
         body.push_str(TASKS_SECTION);
+        body.push_str(PATTERNS_SECTION);
     }
     format!("{OPEN_MARKER}\n{body}{CLOSE_MARKER}\n")
 }
@@ -362,19 +408,21 @@ mod tests {
         assert!(b.contains("agent-tools symbol"));
         assert!(b.contains("agent-tools comms recv"));
         assert!(b.contains("agent-tools tasks list"));
+        assert!(b.contains("agent-tools patterns check"));
         // Markers appear exactly once each — the body text never repeats them.
         assert_eq!(b.matches(OPEN_MARKER).count(), 1);
         assert_eq!(b.matches(CLOSE_MARKER).count(), 1);
     }
 
     #[test]
-    fn build_block_without_gateway_omits_comms_and_tasks() {
+    fn build_block_without_gateway_omits_gateway_sections() {
         let b = build_block(false);
         assert!(b.starts_with(OPEN_MARKER));
         assert!(b.trim_end().ends_with(CLOSE_MARKER));
         assert!(b.contains("agent-tools symbol"));
         assert!(!b.contains("agent-tools comms"));
         assert!(!b.contains("agent-tools tasks"));
+        assert!(!b.contains("agent-tools patterns"));
     }
 
     #[test]
@@ -423,7 +471,7 @@ mod tests {
     fn re_running_with_different_gateway_state_swaps_block() {
         // Simulates: first run on a machine without gateway, then user
         // configures gateway and re-runs. The block should grow to include
-        // comms + tasks without leaving any of the old single-section block
+        // gateway sections without leaving any of the old single-section block
         // behind.
         let bare = build_block(false);
         let full = build_block(true);
@@ -431,6 +479,7 @@ mod tests {
         let after_second = compute_new_content(&after_first, &full, true);
         assert!(after_second.contains("agent-tools comms recv"));
         assert!(after_second.contains("agent-tools tasks list"));
+        assert!(after_second.contains("agent-tools patterns check"));
         assert_eq!(after_second.matches(OPEN_MARKER).count(), 1);
         assert_eq!(after_second.matches(CLOSE_MARKER).count(), 1);
     }
