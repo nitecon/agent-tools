@@ -227,6 +227,10 @@ agent-tools tasks claim <id>
 agent-tools tasks get <id>
 agent-tools tasks comment <id> "Verified against gateway commit 6980730."
 agent-tools tasks done <id>
+
+# Inspect Eventic build status for the current project
+agent-tools tasks builds
+agent-tools tasks builds --repo nitecon/agent-tools
 ```
 
 ### Patterns (CLI)
