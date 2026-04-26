@@ -391,13 +391,7 @@ impl GatewayClient {
         repo: Option<&str>,
         agent_id: Option<&str>,
     ) -> Result<Value> {
-        let mut url = format!("{}/v1/projects/{}/builds", self.base_url(), ident);
-        if let Some(repo) = repo {
-            if !repo.trim().is_empty() {
-                url.push_str("?repo=");
-                url.push_str(&encode_query_component(repo));
-            }
-        }
+        let url = build_eventic_status_url(self.base_url(), ident, repo);
         let builder = self
             .http_client()
             .get(&url)
@@ -405,7 +399,7 @@ impl GatewayClient {
         let resp = Self::add_agent_id(builder, agent_id)
             .send()
             .await
-            .context("GET /v1/projects/:ident/builds")?;
+            .context("GET /v1/projects/:ident/eventic")?;
         decode_or_bail(resp).await
     }
 }
@@ -431,6 +425,17 @@ fn encode_query_component(raw: &str) -> String {
         }
     }
     out
+}
+
+fn build_eventic_status_url(base_url: &str, ident: &str, repo: Option<&str>) -> String {
+    let mut url = format!("{base_url}/v1/projects/{ident}/eventic");
+    if let Some(repo) = repo {
+        if !repo.trim().is_empty() {
+            url.push_str("?repo=");
+            url.push_str(&encode_query_component(repo));
+        }
+    }
+    url
 }
 
 #[cfg(test)]
@@ -555,6 +560,22 @@ mod tests {
         assert_eq!(
             encode_query_component("owner/repo#main"),
             "owner%2Frepo%23main"
+        );
+    }
+
+    #[test]
+    fn build_eventic_status_url_uses_deployed_endpoint() {
+        assert_eq!(
+            build_eventic_status_url("https://gateway.example", "agent-tools", None),
+            "https://gateway.example/v1/projects/agent-tools/eventic"
+        );
+        assert_eq!(
+            build_eventic_status_url(
+                "https://gateway.example",
+                "agent-tools",
+                Some("nitecon/agent-tools")
+            ),
+            "https://gateway.example/v1/projects/agent-tools/eventic?repo=nitecon%2Fagent-tools"
         );
     }
 }

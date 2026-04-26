@@ -823,15 +823,34 @@ fn print_build_status(project_ident: &str, repo_override: Option<&str>, status: 
         return;
     }
 
-    print_field(status, "status", &["status", "current_status", "state"]);
+    let build = find_first(status, &["status"])
+        .filter(|value| value.is_object())
+        .unwrap_or(status);
+
+    if build.is_object() {
+        print_field(build, "status", &["state", "action", "current_status"]);
+    } else {
+        print_field(status, "status", &["status", "current_status", "state"]);
+    }
     print_field(
         status,
         "eventic server",
-        &["eventic_server", "server", "server_url", "eventic_url"],
+        &[
+            "eventic_server",
+            "server",
+            "server_name",
+            "server_url",
+            "eventic_url",
+            "base_url",
+        ],
     );
-    print_field(status, "repo", &["repo", "repository", "repo_url"]);
-    print_field(status, "ref", &["ref", "ref_name", "branch"]);
-    print_field(status, "commit", &["commit", "commit_hash", "sha"]);
+    print_field(
+        status,
+        "repo",
+        &["repo", "repository", "repo_url", "repo_full_name"],
+    );
+    print_field(build, "ref", &["ref", "ref_name", "branch"]);
+    print_field(build, "commit", &["commit", "commit_hash", "hash", "sha"]);
 
     if let Some(mapping) = find_first(status, &["repo_mapping", "mapping", "repository_mapping"]) {
         println!();
@@ -847,12 +866,21 @@ fn print_build_status(project_ident: &str, repo_override: Option<&str>, status: 
                 "default_ref",
             ],
         );
+    } else if find_first(status, &["repo_provider", "repo_full_name"]).is_some() {
+        println!();
+        println!("Repo mapping:");
+        print_object_summary(
+            status,
+            &["repo_provider", "repo_full_name", "server_name", "base_url"],
+        );
     }
 
     if let Some(current) = find_first(
         status,
         &["current", "current_build", "build", "latest_build"],
-    ) {
+    )
+    .or_else(|| build.is_object().then_some(build))
+    {
         println!();
         println!("Current build:");
         print_object_summary(
@@ -866,6 +894,7 @@ fn print_build_status(project_ident: &str, repo_override: Option<&str>, status: 
                 "ref_name",
                 "commit",
                 "commit_hash",
+                "hash",
                 "sha",
                 "started_at",
                 "updated_at",
@@ -878,17 +907,39 @@ fn print_build_status(project_ident: &str, repo_override: Option<&str>, status: 
     if let Some(output) = find_first(
         status,
         &["latest_output", "output", "log_tail", "latest_log"],
-    ) {
+    )
+    .or_else(|| {
+        find_first(
+            build,
+            &["latest_output", "output", "log_tail", "latest_log"],
+        )
+    }) {
         println!();
         println!("Latest output:");
         print_indented_lines(&render_value(output), 2);
     }
 
     print_array_section(status, "Recent events", &["recent_events", "events"]);
+    print_array_section(build, "Recent events", &["recent_events", "events"]);
     print_array_section(
         status,
         "Configured hooks",
-        &["hooks", "configured_hooks", "event_rows"],
+        &[
+            "hooks",
+            "configured_hooks",
+            "event_rows",
+            "configured_events",
+        ],
+    );
+    print_array_section(
+        build,
+        "Configured hooks",
+        &[
+            "hooks",
+            "configured_hooks",
+            "event_rows",
+            "configured_events",
+        ],
     );
 
     if should_print_actionable_config_hint(status) {
