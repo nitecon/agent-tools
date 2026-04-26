@@ -381,6 +381,33 @@ impl GatewayClient {
             .context("POST /v1/projects/:ident/tasks/:id/comments")?;
         decode_or_bail(resp).await
     }
+
+    /// Fetch Eventic build status for the project. The endpoint is project
+    /// scoped, so it lives beside the task board API even though it surfaces
+    /// build metadata rather than task rows.
+    pub async fn get_build_status(
+        &self,
+        ident: &str,
+        repo: Option<&str>,
+        agent_id: Option<&str>,
+    ) -> Result<Value> {
+        let mut url = format!("{}/v1/projects/{}/builds", self.base_url(), ident);
+        if let Some(repo) = repo {
+            if !repo.trim().is_empty() {
+                url.push_str("?repo=");
+                url.push_str(&encode_query_component(repo));
+            }
+        }
+        let builder = self
+            .http_client()
+            .get(&url)
+            .header("Authorization", self.auth());
+        let resp = Self::add_agent_id(builder, agent_id)
+            .send()
+            .await
+            .context("GET /v1/projects/:ident/builds")?;
+        decode_or_bail(resp).await
+    }
 }
 
 /// Shared response handler: bail with a useful message on non-2xx, decode JSON otherwise.
@@ -391,6 +418,19 @@ async fn decode_or_bail<T: serde::de::DeserializeOwned>(resp: reqwest::Response)
         anyhow::bail!("gateway error {status}: {body}");
     }
     resp.json::<T>().await.context("decode tasks response")
+}
+
+fn encode_query_component(raw: &str) -> String {
+    let mut out = String::new();
+    for b in raw.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(b));
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -504,5 +544,17 @@ mod tests {
         assert_eq!(json["content"], "hi");
         assert!(json.get("author").is_none());
         assert!(json.get("author_type").is_none());
+    }
+
+    #[test]
+    fn encode_query_component_escapes_repo_override() {
+        assert_eq!(
+            encode_query_component("github.com/nitecon/agent-tools.git"),
+            "github.com%2Fnitecon%2Fagent-tools.git"
+        );
+        assert_eq!(
+            encode_query_component("owner/repo#main"),
+            "owner%2Frepo%23main"
+        );
     }
 }

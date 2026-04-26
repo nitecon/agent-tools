@@ -19,6 +19,7 @@ use agent_comms::tasks::{
 };
 use anyhow::{Context, Result};
 use clap::Subcommand;
+use serde_json::Value;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
@@ -138,6 +139,15 @@ pub enum TasksCommands {
         #[arg(long)]
         agent_id: Option<String>,
     },
+
+    /// Show Eventic build status for the current project.
+    Builds {
+        /// Override the repo mapping to inspect.
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long)]
+        agent_id: Option<String>,
+    },
 }
 
 // -- Entry -------------------------------------------------------------------
@@ -235,6 +245,7 @@ async fn run(cmd: TasksCommands) -> Result<()> {
             rank,
             agent_id,
         } => cmd_rank(task_id, rank, agent_id).await,
+        TasksCommands::Builds { repo, agent_id } => cmd_builds(repo, agent_id).await,
     }
 }
 
@@ -779,6 +790,247 @@ async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>) -> Resul
 
     println!("ranked [{}] {} → rank {}", task.id, task.title, task.rank);
     Ok(())
+}
+
+// -- builds ------------------------------------------------------------------
+
+async fn cmd_builds(repo: Option<String>, agent_id: Option<String>) -> Result<()> {
+    if let Some(repo) = repo.as_deref() {
+        require_nonempty_flag("--repo", repo)?;
+    }
+
+    let ctx = resolve_context(agent_id)?;
+    ensure_registered(&ctx).await?;
+
+    let status = ctx
+        .gateway
+        .get_build_status(&ctx.ident, repo.as_deref(), Some(&ctx.agent_id))
+        .await
+        .context("fetch Eventic build status")?;
+
+    print_build_status(&ctx.ident, repo.as_deref(), &status);
+    Ok(())
+}
+
+fn print_build_status(project_ident: &str, repo_override: Option<&str>, status: &Value) {
+    println!("Eventic builds for project {project_ident}");
+    if let Some(repo) = repo_override {
+        println!("repo override: {repo}");
+    }
+
+    if !status.is_object() {
+        println!("status: {}", render_value(status));
+        return;
+    }
+
+    print_field(status, "status", &["status", "current_status", "state"]);
+    print_field(
+        status,
+        "eventic server",
+        &["eventic_server", "server", "server_url", "eventic_url"],
+    );
+    print_field(status, "repo", &["repo", "repository", "repo_url"]);
+    print_field(status, "ref", &["ref", "ref_name", "branch"]);
+    print_field(status, "commit", &["commit", "commit_hash", "sha"]);
+
+    if let Some(mapping) = find_first(status, &["repo_mapping", "mapping", "repository_mapping"]) {
+        println!();
+        println!("Repo mapping:");
+        print_object_summary(
+            mapping,
+            &[
+                "provider",
+                "owner",
+                "name",
+                "repo",
+                "repo_url",
+                "default_ref",
+            ],
+        );
+    }
+
+    if let Some(current) = find_first(
+        status,
+        &["current", "current_build", "build", "latest_build"],
+    ) {
+        println!();
+        println!("Current build:");
+        print_object_summary(
+            current,
+            &[
+                "status",
+                "state",
+                "event",
+                "hook",
+                "ref",
+                "ref_name",
+                "commit",
+                "commit_hash",
+                "sha",
+                "started_at",
+                "updated_at",
+                "finished_at",
+                "duration_ms",
+            ],
+        );
+    }
+
+    if let Some(output) = find_first(
+        status,
+        &["latest_output", "output", "log_tail", "latest_log"],
+    ) {
+        println!();
+        println!("Latest output:");
+        print_indented_lines(&render_value(output), 2);
+    }
+
+    print_array_section(status, "Recent events", &["recent_events", "events"]);
+    print_array_section(
+        status,
+        "Configured hooks",
+        &["hooks", "configured_hooks", "event_rows"],
+    );
+
+    if should_print_actionable_config_hint(status) {
+        println!();
+        println!(
+            "hint: add a repo mapping for this project, or tell the user Eventic is not configured. Eventic provides build information."
+        );
+    } else if let Some(hint) = find_first(status, &["hint", "message"]) {
+        println!();
+        println!("hint: {}", render_value(hint));
+    }
+}
+
+fn print_field(root: &Value, label: &str, keys: &[&str]) {
+    if let Some(value) = find_first(root, keys) {
+        println!("{label}: {}", render_value(value));
+    }
+}
+
+fn print_object_summary(value: &Value, preferred_keys: &[&str]) {
+    if let Some(obj) = value.as_object() {
+        let mut printed = false;
+        for key in preferred_keys {
+            if let Some(v) = obj.get(*key).filter(|v| !v.is_null()) {
+                println!("  {key}: {}", render_value(v));
+                printed = true;
+            }
+        }
+        if !printed {
+            println!("  {}", render_value(value));
+        }
+    } else {
+        println!("  {}", render_value(value));
+    }
+}
+
+fn print_array_section(root: &Value, title: &str, keys: &[&str]) {
+    let Some(value) = find_first(root, keys) else {
+        return;
+    };
+    let Some(items) = value.as_array() else {
+        return;
+    };
+    if items.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("{title}:");
+    for item in items.iter().take(10) {
+        println!("  - {}", render_compact_row(item));
+    }
+    if items.len() > 10 {
+        println!("  ... {} more", items.len() - 10);
+    }
+}
+
+fn print_indented_lines(text: &str, indent: usize) {
+    let pad = " ".repeat(indent);
+    for line in text.lines().take(40) {
+        println!("{pad}{line}");
+    }
+}
+
+fn render_compact_row(value: &Value) -> String {
+    if let Some(obj) = value.as_object() {
+        let keys = [
+            "at",
+            "created_at",
+            "updated_at",
+            "event",
+            "hook",
+            "status",
+            "state",
+            "ref",
+            "ref_name",
+            "commit",
+            "commit_hash",
+            "sha",
+            "message",
+        ];
+        let parts: Vec<String> = keys
+            .iter()
+            .filter_map(|key| obj.get(*key).map(|v| format!("{key}={}", render_value(v))))
+            .collect();
+        if !parts.is_empty() {
+            return parts.join("  ");
+        }
+    }
+    render_value(value)
+}
+
+fn render_value(value: &Value) -> String {
+    match value {
+        Value::Null => "—".to_string(),
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Array(_) | Value::Object(_) => {
+            serde_json::to_string(value).unwrap_or_else(|_| "<unprintable>".to_string())
+        }
+    }
+}
+
+fn find_first<'a>(root: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    let obj = root.as_object()?;
+    keys.iter()
+        .filter_map(|key| obj.get(*key))
+        .find(|value| !value.is_null())
+}
+
+fn should_print_actionable_config_hint(status: &Value) -> bool {
+    let explicit_false = [
+        "configured",
+        "eventic_configured",
+        "repo_mapped",
+        "mapping_configured",
+    ]
+    .iter()
+    .any(|key| {
+        find_first(status, &[*key])
+            .and_then(Value::as_bool)
+            .map(|value| !value)
+            .unwrap_or(false)
+    });
+    if explicit_false {
+        return true;
+    }
+
+    ["status", "hint", "message", "error"].iter().any(|key| {
+        find_first(status, &[*key])
+            .and_then(Value::as_str)
+            .map(|s| {
+                let s = s.to_ascii_lowercase();
+                s.contains("not configured")
+                    || s.contains("no repo")
+                    || s.contains("no mapping")
+                    || s.contains("missing repo")
+                    || s.contains("missing eventic")
+            })
+            .unwrap_or(false)
+    })
 }
 
 // -- tests -------------------------------------------------------------------
