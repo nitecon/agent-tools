@@ -111,12 +111,7 @@ impl GatewayClient {
         doc_id: &str,
         agent_id: Option<&str>,
     ) -> Result<ApiDoc> {
-        let url = format!(
-            "{}/v1/projects/{}/api-docs/{}",
-            self.base_url(),
-            ident,
-            encode_query_component(doc_id)
-        );
+        let url = build_api_doc_url(self.base_url(), ident, doc_id);
         let builder = self
             .http_client()
             .get(&url)
@@ -126,6 +121,24 @@ impl GatewayClient {
             .await
             .context("GET /v1/projects/:ident/api-docs/:id")?;
         decode_or_bail(resp).await
+    }
+
+    pub async fn delete_api_doc(
+        &self,
+        ident: &str,
+        doc_id: &str,
+        agent_id: Option<&str>,
+    ) -> Result<()> {
+        let url = build_api_doc_url(self.base_url(), ident, doc_id);
+        let builder = self
+            .http_client()
+            .delete(&url)
+            .header("Authorization", self.auth());
+        let resp = Self::add_agent_id(builder, agent_id)
+            .send()
+            .await
+            .context("DELETE /v1/projects/:ident/api-docs/:id")?;
+        empty_or_bail(resp).await
     }
 
     pub async fn publish_api_doc(
@@ -175,6 +188,15 @@ async fn decode_or_bail<T: serde::de::DeserializeOwned>(resp: reqwest::Response)
     resp.json::<T>().await.context("decode api-docs response")
 }
 
+async fn empty_or_bail(resp: reqwest::Response) -> Result<()> {
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("gateway error {status}: {body}");
+    }
+    Ok(())
+}
+
 fn build_api_docs_url(
     base_url: &str,
     ident: &str,
@@ -196,6 +218,13 @@ fn build_api_docs_url(
         url.push_str(&parts.join("&"));
     }
     url
+}
+
+fn build_api_doc_url(base_url: &str, ident: &str, doc_id: &str) -> String {
+    format!(
+        "{base_url}/v1/projects/{ident}/api-docs/{}",
+        encode_query_component(doc_id)
+    )
 }
 
 fn push_query(parts: &mut Vec<String>, key: &str, value: Option<&str>) {
@@ -274,6 +303,14 @@ mod tests {
                 &filters
             ),
             "https://gateway.example/v1/projects/agent-tools/api-docs/chunks?q=refund"
+        );
+    }
+
+    #[test]
+    fn api_doc_url_encodes_doc_id_for_lifecycle_calls() {
+        assert_eq!(
+            build_api_doc_url("https://gateway.example", "agent-tools", "doc/id#1"),
+            "https://gateway.example/v1/projects/agent-tools/api-docs/doc%2Fid%231"
         );
     }
 }

@@ -59,6 +59,16 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
+    /// Delete one API context document.
+    #[command(alias = "remove")]
+    Delete {
+        id: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        agent_id: Option<String>,
+    },
+
     /// Fetch RAG-ready chunks from the API context registry.
     Chunks {
         #[arg(long)]
@@ -193,6 +203,7 @@ pub fn dispatch(cmd: DocsCommands) -> Result<()> {
         cmd,
         DocsCommands::List { .. }
             | DocsCommands::Get { .. }
+            | DocsCommands::Delete { .. }
             | DocsCommands::Chunks { .. }
             | DocsCommands::Publish { .. }
     ) {
@@ -240,6 +251,11 @@ async fn run(cmd: DocsCommands) -> Result<()> {
             project,
             agent_id,
         } => cmd_get(id, project, agent_id).await,
+        DocsCommands::Delete {
+            id,
+            project,
+            agent_id,
+        } => cmd_delete(id, project, agent_id).await,
         DocsCommands::Chunks {
             app,
             label,
@@ -345,6 +361,22 @@ async fn cmd_get(id: String, project: Option<String>, agent_id: Option<String>) 
         .await
         .context("fetch API context doc")?;
     print_doc_detail(&doc);
+    Ok(())
+}
+
+async fn cmd_delete(id: String, project: Option<String>, agent_id: Option<String>) -> Result<()> {
+    require_nonempty("--id", &id)?;
+    let ctx = resolve_context(project, agent_id)?;
+    ensure_registered(&ctx).await?;
+    ctx.gateway
+        .delete_api_doc(&ctx.ident, &id, Some(&ctx.agent_id))
+        .await
+        .with_context(|| {
+            format!(
+                "delete API context doc {id}; if this was a short or stale id, run `agent-tools docs list` and retry with the full id"
+            )
+        })?;
+    print_delete_success(&id, &ctx.ident);
     Ok(())
 }
 
@@ -714,6 +746,14 @@ fn print_doc_detail(doc: &ApiDoc) {
     );
 }
 
+fn print_delete_success(id: &str, project_ident: &str) {
+    println!("{}", render_delete_success(id, project_ident));
+}
+
+fn render_delete_success(id: &str, project_ident: &str) -> String {
+    format!("deleted agent API context [{id}] from project {project_ident}")
+}
+
 fn print_chunks(project_ident: &str, chunks: &[ApiDocChunk]) {
     println!("Agent API context chunks for project {project_ident}");
     if chunks.is_empty() {
@@ -962,6 +1002,13 @@ content:
         );
         assert_eq!(file.app, "payments");
         assert_eq!(file.labels, vec!["internal"]);
+    }
+
+    #[test]
+    fn delete_success_message_names_doc_and_project() {
+        let rendered = render_delete_success("doc-1", "agent-tools");
+        assert!(rendered.contains("deleted agent API context [doc-1]"));
+        assert!(rendered.contains("project agent-tools"));
     }
 
     #[test]
