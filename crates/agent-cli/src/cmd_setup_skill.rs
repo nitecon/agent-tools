@@ -126,6 +126,27 @@ agent-tools tasks done <id>              # mark complete
 agent-tools tasks comment <id> "<note>"  # append a note
 ```
 
+## API Context Docs (gateway-backed)
+
+Before searching code for API behavior or implementing API-related work, check
+the agent-first API context registry. If no context exists, tell the user that
+future agents will work faster if a docs-first file is created, and ask whether
+to add one.
+
+```bash
+agent-tools docs search "<api-or-workflow>"
+agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
+agent-tools docs get <id>
+agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL]
+agent-tools docs validate --file .agent/api/<app>.yaml
+agent-tools docs publish --file .agent/api/<app>.yaml
+```
+
+When creating or materially changing API-related files, publish the
+corresponding agent API context with `agent-tools docs publish`; for substantial
+work, track that publish step as an `agent-tools tasks` subtask or checklist
+item.
+
 ## Comms (gateway-backed messaging)
 
 Project ident auto-derives from the cwd git remote; agent id is
@@ -206,6 +227,27 @@ agent-tools tasks release <id>           # drop ownership (-> todo)
 agent-tools tasks done <id>              # mark complete
 agent-tools tasks comment <id> "<note>"  # append a note
 ```
+
+## API Context Docs (gateway-backed)
+
+Before searching code for API behavior or implementing API-related work, check
+the agent-first API context registry. If no context exists, tell the user that
+future agents will work faster if a docs-first file is created, and ask whether
+to add one.
+
+```bash
+agent-tools docs search "<api-or-workflow>"
+agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
+agent-tools docs get <id>
+agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL]
+agent-tools docs validate --file .agent/api/<app>.yaml
+agent-tools docs publish --file .agent/api/<app>.yaml
+```
+
+When creating or materially changing API-related files, publish the
+corresponding agent API context with `agent-tools docs publish`; for substantial
+work, track that publish step as an `agent-tools tasks` subtask or checklist
+item.
 
 ## Comms (gateway-backed messaging)
 
@@ -353,6 +395,8 @@ mod tests {
         assert!(body.contains("allowed-tools: Bash(agent-tools *), Bash(memory *)"));
         assert!(body.contains("Code Exploration"));
         assert!(body.contains("Task Board"));
+        assert!(body.contains("API Context Docs"));
+        assert!(body.contains("agent-tools docs publish"));
         assert!(body.contains("Comms"));
         assert!(body.contains("Memory"));
     }
@@ -371,6 +415,8 @@ mod tests {
         // Capability coverage still required.
         assert!(body.contains("Code Exploration"));
         assert!(body.contains("Task Board"));
+        assert!(body.contains("API Context Docs"));
+        assert!(body.contains("agent-tools docs publish"));
         assert!(body.contains("Comms"));
         assert!(body.contains("Memory"));
     }

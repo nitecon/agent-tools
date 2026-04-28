@@ -1,4 +1,5 @@
 mod cmd_comms;
+mod cmd_docs;
 mod cmd_patterns;
 mod cmd_setup_menu;
 mod cmd_setup_perms;
@@ -157,6 +158,12 @@ enum Commands {
         command: cmd_tasks::TasksCommands,
     },
 
+    /// Agent-first API context registry (gateway-backed)
+    Docs {
+        #[command(subcommand)]
+        command: cmd_docs::DocsCommands,
+    },
+
     /// Global pattern library and repository `.patterns` tracking (gateway-backed)
     Patterns {
         #[command(subcommand)]
@@ -258,6 +265,7 @@ fn main() -> Result<()> {
             | Commands::Setup { .. }
             | Commands::Comms { .. }
             | Commands::Tasks { .. }
+            | Commands::Docs { .. }
             | Commands::Patterns { .. }
     ) {
         agent_updater::auto_update_blocking();
@@ -361,6 +369,8 @@ fn main() -> Result<()> {
         Commands::Comms { command } => cmd_comms::dispatch(command),
 
         Commands::Tasks { command } => cmd_tasks::dispatch(command),
+
+        Commands::Docs { command } => cmd_docs::dispatch(command),
 
         Commands::Patterns { command } => cmd_patterns::dispatch(command),
 
@@ -534,7 +544,42 @@ fn cmd_search(query: &str, search_type: &str, file: Option<String>, limit: usize
             std::process::exit(1);
         }
     }
+    maybe_print_api_context_hint(query);
     Ok(())
+}
+
+fn maybe_print_api_context_hint(query: &str) {
+    if !looks_api_related(query) {
+        return;
+    }
+    eprintln!(
+        "hint: API-related search detected. Also check agent API context with \
+         `agent-tools docs search \"{query}\"` or \
+         `agent-tools docs chunks --query \"{query}\"`. If no docs exist, ask \
+         whether to create .agent/api/<app>.yaml or agent-api.yaml and publish \
+         it with `agent-tools docs publish --file PATH` for future agents."
+    );
+}
+
+fn looks_api_related(query: &str) -> bool {
+    query
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| {
+            let part = part.to_ascii_lowercase();
+            matches!(
+                part.as_str(),
+                "api"
+                    | "apis"
+                    | "endpoint"
+                    | "endpoints"
+                    | "route"
+                    | "routes"
+                    | "openapi"
+                    | "swagger"
+                    | "graphql"
+                    | "rest"
+            )
+        })
 }
 
 /// Build or rebuild the project file and symbol index.
@@ -588,4 +633,24 @@ fn cmd_summary(path: Option<PathBuf>) -> Result<()> {
     let summary = agent_search::query::project_summary(&indexer)?;
     print!("{}", agent_search::query::render_summary_text(&summary));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_hint_detects_api_search_terms() {
+        assert!(looks_api_related("billing api"));
+        assert!(looks_api_related("GET endpoints"));
+        assert!(looks_api_related("openapi.yaml"));
+        assert!(looks_api_related("GraphQL resolver"));
+    }
+
+    #[test]
+    fn api_hint_ignores_non_api_words() {
+        assert!(!looks_api_related("capitalization"));
+        assert!(!looks_api_related("happier path"));
+        assert!(!looks_api_related("config loader"));
+    }
 }

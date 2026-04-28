@@ -91,6 +91,31 @@ agent-tools tasks rank <id> <n>          # set ordering within a column
 ```
 "#;
 
+const DOCS_SECTION: &str = r#"
+### API Context Docs (gateway-backed)
+
+Gateway API docs are agent-first context: they capture API intent, workflows,
+auth expectations, safety constraints, cross-app relationships, copyable
+examples, operations, and schemas. Before searching code for API behavior or
+implementing API-related work, look up existing context:
+
+```bash
+agent-tools docs search "<api-or-workflow>"
+agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
+agent-tools docs get <id>
+agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL]
+agent-tools docs validate --file .agent/api/<app>.yaml
+agent-tools docs publish --file .agent/api/<app>.yaml
+```
+
+If no API context exists, tell the user that future agents will work faster if
+one is created, and ask whether to add a docs-first file such as
+`.agent/api/<app>.yaml` or `agent-api.yaml`. When you create or materially
+change API-related files, publish the corresponding agent API context with
+`agent-tools docs publish`; for substantial work, track that publish step as an
+`agent-tools tasks` subtask or checklist item so it is not skipped.
+"#;
+
 const PATTERNS_SECTION: &str = r#"
 ### Patterns (gateway-backed global guidance)
 
@@ -282,6 +307,7 @@ fn build_block(include_gateway_sections: bool) -> String {
     if include_gateway_sections {
         body.push_str(COMMS_SECTION);
         body.push_str(TASKS_SECTION);
+        body.push_str(DOCS_SECTION);
         body.push_str(PATTERNS_SECTION);
     }
     format!("{OPEN_MARKER}\n{body}{CLOSE_MARKER}\n")
@@ -412,6 +438,8 @@ mod tests {
         assert!(b.contains("agent-tools symbol"));
         assert!(b.contains("agent-tools comms recv"));
         assert!(b.contains("agent-tools tasks list"));
+        assert!(b.contains("agent-tools docs search"));
+        assert!(b.contains("publish the corresponding agent API context"));
         assert!(b.contains("agent-tools patterns check"));
         // Markers appear exactly once each — the body text never repeats them.
         assert_eq!(b.matches(OPEN_MARKER).count(), 1);
@@ -426,6 +454,7 @@ mod tests {
         assert!(b.contains("agent-tools symbol"));
         assert!(!b.contains("agent-tools comms"));
         assert!(!b.contains("agent-tools tasks"));
+        assert!(!b.contains("agent-tools docs"));
         assert!(!b.contains("agent-tools patterns"));
     }
 
@@ -483,6 +512,7 @@ mod tests {
         let after_second = compute_new_content(&after_first, &full, true);
         assert!(after_second.contains("agent-tools comms recv"));
         assert!(after_second.contains("agent-tools tasks list"));
+        assert!(after_second.contains("agent-tools docs search"));
         assert!(after_second.contains("agent-tools patterns check"));
         assert_eq!(after_second.matches(OPEN_MARKER).count(), 1);
         assert_eq!(after_second.matches(CLOSE_MARKER).count(), 1);

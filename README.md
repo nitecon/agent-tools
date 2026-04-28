@@ -233,6 +233,27 @@ agent-tools tasks builds
 agent-tools tasks builds --repo nitecon/agent-tools
 ```
 
+### API Context Docs (CLI)
+
+Gateway-backed API docs are agent-first context for services and apps: intent,
+workflows, auth expectations, safety constraints, cross-app relationships,
+copyable examples, operations, and schemas. OpenAPI/Swagger can feed this
+registry, but it is not required.
+
+```bash
+# Look up API context before searching code for API behavior
+agent-tools docs search "billing refunds"
+agent-tools docs chunks --query "billing refunds"
+
+# Validate and publish a docs-first file
+agent-tools docs validate --file .agent/api/billing.yaml
+agent-tools docs publish --file .agent/api/billing.yaml
+
+# Create a starter file, optionally from OpenAPI/Swagger
+agent-tools docs bootstrap --app billing --output .agent/api/billing.yaml
+agent-tools docs bootstrap --app billing --openapi openapi.yaml --output .agent/api/billing.yaml
+```
+
 ### Patterns (CLI)
 
 The gateway-backed pattern library stores durable organization-wide guidance.
@@ -387,6 +408,32 @@ Prefer symbol-level tools over raw file reads whenever possible.
 ```
 </code_exploration_protocol>
 
+<api_context_protocol>
+## API Context Docs (MANDATORY when API-related)
+
+Before searching code for API behavior or implementing API-related work, look
+up the gateway-backed agent API context:
+
+```bash
+/opt/agentic/bin/agent-tools docs search "<api-or-workflow>"
+/opt/agentic/bin/agent-tools docs chunks --query "<api-or-workflow>"
+/opt/agentic/bin/agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
+```
+
+If no API context exists, tell the user that future agents will work faster if
+one is created, and ask whether to add `.agent/api/<app>.yaml` or
+`agent-api.yaml`. When creating or materially changing API-related files,
+publish the corresponding context with:
+
+```bash
+/opt/agentic/bin/agent-tools docs validate --file .agent/api/<app>.yaml
+/opt/agentic/bin/agent-tools docs publish --file .agent/api/<app>.yaml
+```
+
+For substantial API work, track the publish step as an `agent-tools tasks`
+subtask or checklist item.
+</api_context_protocol>
+
 <comms_protocol>
 ## Communication Tools (MANDATORY — CLI only)
 
@@ -501,6 +548,32 @@ Prefer symbol-level tools over raw file reads whenever possible.
 /opt/agentic/bin/agent-tools rm <path>
 ```
 </code_exploration_protocol>
+
+<api_context_protocol>
+## API Context Docs (MANDATORY when API-related)
+
+Before searching code for API behavior or implementing API-related work, look
+up the gateway-backed agent API context:
+
+```bash
+/opt/agentic/bin/agent-tools docs search "<api-or-workflow>"
+/opt/agentic/bin/agent-tools docs chunks --query "<api-or-workflow>"
+/opt/agentic/bin/agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
+```
+
+If no API context exists, tell the user that future agents will work faster if
+one is created, and ask whether to add `.agent/api/<app>.yaml` or
+`agent-api.yaml`. When creating or materially changing API-related files,
+publish the corresponding context with:
+
+```bash
+/opt/agentic/bin/agent-tools docs validate --file .agent/api/<app>.yaml
+/opt/agentic/bin/agent-tools docs publish --file .agent/api/<app>.yaml
+```
+
+For substantial API work, track the publish step as an `agent-tools tasks`
+subtask or checklist item.
+</api_context_protocol>
 
 <comms_protocol>
 ## Communication Tools (MANDATORY — CLI only)
