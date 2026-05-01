@@ -71,12 +71,9 @@ agent-tools comms whoami                 # show derived ident + agent-id
 const TASKS_SECTION: &str = r#"
 ### Tasks (gateway-backed per-project board)
 
-A real task board with three statuses, server-enforced ownership, 1h stale-
-claim reclaim, and 7d done falloff. Use this as your TODO surface — do not
-maintain task files locally when the gateway is configured. For complex tasks,
-add a specification with enough handoff context for a disconnected or new agent
-to resume the work; gateway-backed specifications are more durable than local
-plan files because they survive full system crashes.
+Use this as your TODO surface when the gateway is configured. For complex tasks
+include a `--specification` with enough handoff context for a fresh agent to
+resume; specifications survive crashes that local plan files do not.
 
 ```bash
 agent-tools tasks list                   # TODO + IN PROGRESS for this project
@@ -94,10 +91,9 @@ agent-tools tasks rank <id> <n>          # set ordering within a column
 const DOCS_SECTION: &str = r#"
 ### API Context Docs (gateway-backed)
 
-Gateway API docs are agent-first context: they capture API intent, workflows,
-auth expectations, safety constraints, cross-app relationships, copyable
-examples, operations, and schemas. Before searching code for API behavior or
-implementing API-related work, look up existing context:
+Agent-first context for API intent, workflows, auth, safety, schemas, and
+copyable examples. Look up existing context before searching code for API
+behavior; after materially changing API files, publish updated context.
 
 ```bash
 agent-tools docs search "<api-or-workflow>"
@@ -108,57 +104,35 @@ agent-tools docs validate --file .agent/api/<app>.yaml
 agent-tools docs publish --file .agent/api/<app>.yaml
 ```
 
-If no API context exists, tell the user that future agents will work faster if
-one is created, and ask whether to add a docs-first file such as
-`.agent/api/<app>.yaml` or `agent-api.yaml`. When you create or materially
-change API-related files, publish the corresponding agent API context with
-`agent-tools docs publish`; for substantial work, track that publish step as an
-`agent-tools tasks` subtask or checklist item so it is not skipped.
+If no docs exist for an app, propose adding `.agent/api/<app>.yaml` and track
+the `docs publish` step as a task subtask so it isn't skipped.
 "#;
 
 const PATTERNS_SECTION: &str = r#"
 ### Patterns (gateway-backed global guidance)
 
-Patterns are durable organization-wide implementation guidance. Before
-implementing work that may involve established practice, search latest active
-patterns first.
+Durable organization-wide implementation guidance. At the start of work that
+may involve established practice, search latest active patterns; if
+`$PWD/.patterns` exists, run `agent-tools patterns check` before relying on it.
 
 ```bash
 agent-tools patterns search "<query>" --version latest --state active
 agent-tools patterns get <id-or-slug>
-agent-tools patterns comments <id-or-slug>
+agent-tools patterns comments <id-or-slug>      # only when iterating on a pattern
 agent-tools patterns update <id-or-slug> --body-file /tmp/pattern.md
-agent-tools patterns check                 # validate $PWD/.patterns
+agent-tools patterns check                       # validate $PWD/.patterns
 agent-tools patterns use <id-or-slug> --path src/main.rs
 ```
 
-At the start of implementation work, if `$PWD/.patterns` exists, validate it
-with `agent-tools patterns check` before relying on the listed guidance.
-`.patterns` is intentionally minimal repository metadata: use gateway pattern
-ids as keys and optional file paths as values, with no comments or explanatory
-text.
+`.patterns` is minimal repo metadata: gateway pattern ids as keys, optional
+file paths as values, no comments. When you use a pattern, ensure its id is
+listed there with relevant paths.
 
-When you use a pattern, ensure its canonical gateway id is listed in
-`.patterns` with the relevant paths. If a listed pattern is superseded,
-`patterns check` will create a migration task for the replacement and report it.
-
-If you implement something net new, or discover an approach that worked well and
-should be reused, search for an existing pattern. If none exists, propose
-creating a new draft pattern with the user. Do not fetch pattern comments unless
-the user explicitly asks to review or address comments.
-
-When the user asks to iterate on, revise, update, or edit a specific pattern,
-fetch both the pattern body and its comments before making changes:
-
-```bash
-agent-tools patterns get <id-or-slug>
-agent-tools patterns comments <id-or-slug>
-```
-
-Treat comments as review context only for that requested pattern-editing task.
-Apply the user's requested edits to a local markdown draft, then update the
-gateway pattern with `agent-tools patterns update <id-or-slug> --body-file
-<draft.md>`. Preserve unrelated sections unless the user asks to change them.
+When the user asks to iterate on a pattern, fetch its body and comments, edit
+a local markdown draft, then `patterns update --body-file <draft.md>` —
+preserve unrelated sections unless asked to change them. If you implement a
+net-new approach worth reusing and no pattern exists, propose drafting one
+with the user.
 "#;
 
 /// Entry point invoked from `main.rs` for `agent-tools setup rules`.
@@ -439,7 +413,7 @@ mod tests {
         assert!(b.contains("agent-tools comms recv"));
         assert!(b.contains("agent-tools tasks list"));
         assert!(b.contains("agent-tools docs search"));
-        assert!(b.contains("publish the corresponding agent API context"));
+        assert!(b.contains("publish updated context"));
         assert!(b.contains("agent-tools patterns check"));
         // Markers appear exactly once each — the body text never repeats them.
         assert_eq!(b.matches(OPEN_MARKER).count(), 1);
