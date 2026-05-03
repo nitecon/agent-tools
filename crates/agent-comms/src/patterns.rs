@@ -13,6 +13,8 @@ pub struct Pattern {
     pub body: String,
     #[serde(default)]
     pub labels: Vec<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
     pub version: String,
     pub state: String,
     pub author: String,
@@ -28,6 +30,8 @@ pub struct PatternSummary {
     pub summary: String,
     #[serde(default)]
     pub labels: Vec<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
     pub version: String,
     pub state: String,
     pub author: String,
@@ -57,6 +61,8 @@ pub struct CreatePatternRequest<'a> {
     pub body: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<&'a [String]>,
     pub version: &'a str,
     pub state: &'a str,
     pub author: &'a str,
@@ -75,6 +81,8 @@ pub struct UpdatePatternRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<&'a [String]>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<&'a str>,
@@ -87,23 +95,30 @@ pub struct AddPatternCommentRequest<'a> {
     pub author_type: &'a str,
 }
 
+#[derive(Default, Debug, Clone)]
+pub struct PatternFilters<'a> {
+    pub query: Option<&'a str>,
+    pub label: Option<&'a str>,
+    pub category: Option<&'a str>,
+    pub version: Option<&'a str>,
+    pub state: Option<&'a str>,
+    pub superseded_by: Option<&'a str>,
+}
+
 impl GatewayClient {
     pub async fn list_patterns(
         &self,
-        query: Option<&str>,
-        label: Option<&str>,
-        version: Option<&str>,
-        state: Option<&str>,
-        superseded_by: Option<&str>,
+        filters: &PatternFilters<'_>,
         agent_id: Option<&str>,
     ) -> Result<Vec<PatternSummary>> {
         let mut url = format!("{}/v1/patterns", self.base_url());
         let mut parts: Vec<String> = Vec::new();
-        push_query_part(&mut parts, "q", query);
-        push_query_part(&mut parts, "label", label);
-        push_query_part(&mut parts, "version", version);
-        push_query_part(&mut parts, "state", state);
-        push_query_part(&mut parts, "superseded_by", superseded_by);
+        push_query_part(&mut parts, "q", filters.query);
+        push_query_part(&mut parts, "label", filters.label);
+        push_query_part(&mut parts, "category", filters.category);
+        push_query_part(&mut parts, "version", filters.version);
+        push_query_part(&mut parts, "state", filters.state);
+        push_query_part(&mut parts, "superseded_by", filters.superseded_by);
         if !parts.is_empty() {
             url.push('?');
             url.push_str(&parts.join("&"));
@@ -276,5 +291,32 @@ mod tests {
     fn pct_encode_escapes_query_chars() {
         assert_eq!(pct_encode("deploy tags"), "deploy%20tags");
         assert_eq!(pct_encode("a/b?c=d"), "a%2Fb%3Fc%3Dd");
+    }
+
+    #[test]
+    fn list_patterns_url_includes_category_filter() {
+        let filters = PatternFilters {
+            query: Some("go router"),
+            label: Some("go"),
+            category: Some("programming-language/golang"),
+            version: Some("latest"),
+            state: Some("active"),
+            superseded_by: None,
+        };
+        let mut url = format!("{}/v1/patterns", "https://gateway.example");
+        let mut parts = Vec::new();
+        push_query_part(&mut parts, "q", filters.query);
+        push_query_part(&mut parts, "label", filters.label);
+        push_query_part(&mut parts, "category", filters.category);
+        push_query_part(&mut parts, "version", filters.version);
+        push_query_part(&mut parts, "state", filters.state);
+        if !parts.is_empty() {
+            url.push('?');
+            url.push_str(&parts.join("&"));
+        }
+        assert_eq!(
+            url,
+            "https://gateway.example/v1/patterns?q=go%20router&label=go&category=programming-language%2Fgolang&version=latest&state=active"
+        );
     }
 }

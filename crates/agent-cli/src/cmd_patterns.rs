@@ -4,16 +4,17 @@ use agent_comms::config::{home_dir, load_config};
 use agent_comms::gateway::GatewayClient;
 use agent_comms::identity::load_or_generate_agent_id;
 use agent_comms::patterns::{
-    AddPatternCommentRequest, CreatePatternRequest, Pattern, PatternComment, PatternSummary,
-    UpdatePatternRequest,
+    AddPatternCommentRequest, CreatePatternRequest, Pattern, PatternComment, PatternFilters,
+    PatternSummary, UpdatePatternRequest,
 };
 use agent_comms::sanitize::short_project_ident;
 use agent_comms::tasks::{CreateTaskRequest, TaskSummary};
 use anyhow::{Context, Result};
 use clap::Subcommand;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Subcommand)]
 pub enum PatternsCommands {
@@ -21,6 +22,8 @@ pub enum PatternsCommands {
     List {
         #[arg(long)]
         label: Option<String>,
+        #[arg(long)]
+        category: Option<String>,
         #[arg(long, default_value = "latest")]
         version: String,
         #[arg(long, default_value = "active")]
@@ -34,6 +37,8 @@ pub enum PatternsCommands {
         query: String,
         #[arg(long)]
         label: Option<String>,
+        #[arg(long)]
+        category: Option<String>,
         #[arg(long)]
         version: Option<String>,
         #[arg(long)]
@@ -61,6 +66,8 @@ pub enum PatternsCommands {
         summary: Option<String>,
         #[arg(long = "label")]
         label: Vec<String>,
+        #[arg(long = "category")]
+        category: Vec<String>,
         #[arg(long, default_value = "draft")]
         version: String,
         #[arg(long, default_value = "active")]
@@ -82,6 +89,8 @@ pub enum PatternsCommands {
         summary: Option<String>,
         #[arg(long = "label")]
         label: Vec<String>,
+        #[arg(long = "category")]
+        category: Vec<String>,
         #[arg(long)]
         version: Option<String>,
         #[arg(long)]
@@ -112,6 +121,58 @@ pub enum PatternsCommands {
         content: String,
         #[arg(long)]
         agent_id: Option<String>,
+    },
+
+    /// Publish one pattern file or a markdown catalog into the gateway.
+    Publish {
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        slug: Option<String>,
+        #[arg(long)]
+        summary: Option<String>,
+        #[arg(long = "label")]
+        label: Vec<String>,
+        #[arg(long = "category")]
+        category: Vec<String>,
+        #[arg(long, default_value = "latest")]
+        version: String,
+        #[arg(long, default_value = "active")]
+        state: String,
+        #[arg(long)]
+        author: Option<String>,
+        #[arg(long)]
+        agent_id: Option<String>,
+    },
+
+    /// Validate a JSON/YAML pattern file or markdown pattern catalog.
+    Validate {
+        #[arg(long)]
+        file: PathBuf,
+    },
+
+    /// Render the pattern publish payload that would be sent to the gateway.
+    Preview {
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        slug: Option<String>,
+        #[arg(long)]
+        summary: Option<String>,
+        #[arg(long = "label")]
+        label: Vec<String>,
+        #[arg(long = "category")]
+        category: Vec<String>,
+        #[arg(long, default_value = "latest")]
+        version: String,
+        #[arg(long, default_value = "active")]
+        state: String,
+        #[arg(long)]
+        author: Option<String>,
     },
 
     /// Validate the current directory's `.patterns` file.
@@ -157,6 +218,7 @@ struct CreatePatternArgs {
     slug: Option<String>,
     summary: Option<String>,
     labels: Vec<String>,
+    categories: Vec<String>,
     version: String,
     state: String,
     body_file: PathBuf,
@@ -169,14 +231,57 @@ struct UpdatePatternArgs {
     slug: Option<String>,
     summary: Option<String>,
     labels: Vec<String>,
+    categories: Vec<String>,
     version: Option<String>,
     state: Option<String>,
     body_file: Option<PathBuf>,
     agent_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PatternFile {
+    title: String,
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+    body: String,
+    #[serde(default)]
+    labels: Vec<String>,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PatternCatalogFile {
+    patterns: Vec<PatternFile>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PublishPatternOverrides {
+    title: Option<String>,
+    slug: Option<String>,
+    summary: Option<String>,
+    labels: Vec<String>,
+    categories: Vec<String>,
+    version: String,
+    state: String,
+    author: Option<String>,
+}
+
 pub fn dispatch(cmd: PatternsCommands) -> Result<()> {
-    ensure_gateway_configured()?;
+    if !matches!(
+        cmd,
+        PatternsCommands::Validate { .. } | PatternsCommands::Preview { .. }
+    ) {
+        ensure_gateway_configured()?;
+    }
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -200,24 +305,49 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
     match cmd {
         PatternsCommands::List {
             label,
+            category,
             version,
             state,
             agent_id,
-        } => cmd_search(None, label, Some(version), Some(state), None, agent_id).await,
+        } => {
+            cmd_search(
+                None,
+                label,
+                category,
+                Some(version),
+                Some(state),
+                None,
+                agent_id,
+            )
+            .await
+        }
         PatternsCommands::Search {
             query,
             label,
+            category,
             version,
             state,
             superseded_by,
             agent_id,
-        } => cmd_search(Some(query), label, version, state, superseded_by, agent_id).await,
+        } => {
+            cmd_search(
+                Some(query),
+                label,
+                category,
+                version,
+                state,
+                superseded_by,
+                agent_id,
+            )
+            .await
+        }
         PatternsCommands::Get { id, agent_id } => cmd_get(id, agent_id).await,
         PatternsCommands::Create {
             title,
             slug,
             summary,
             label,
+            category,
             version,
             state,
             body_file,
@@ -228,6 +358,7 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
                 slug,
                 summary,
                 labels: label,
+                categories: category,
                 version,
                 state,
                 body_file,
@@ -241,6 +372,7 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
             slug,
             summary,
             label,
+            category,
             version,
             state,
             body_file,
@@ -252,6 +384,7 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
                 slug,
                 summary,
                 labels: label,
+                categories: category,
                 version,
                 state,
                 body_file,
@@ -266,6 +399,58 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
             content,
             agent_id,
         } => cmd_comment(id, content, agent_id).await,
+        PatternsCommands::Publish {
+            file,
+            title,
+            slug,
+            summary,
+            label,
+            category,
+            version,
+            state,
+            author,
+            agent_id,
+        } => {
+            cmd_publish(
+                file,
+                PublishPatternOverrides {
+                    title,
+                    slug,
+                    summary,
+                    labels: label,
+                    categories: category,
+                    version,
+                    state,
+                    author,
+                },
+                agent_id,
+            )
+            .await
+        }
+        PatternsCommands::Validate { file } => cmd_validate(file),
+        PatternsCommands::Preview {
+            file,
+            title,
+            slug,
+            summary,
+            label,
+            category,
+            version,
+            state,
+            author,
+        } => cmd_preview(
+            file,
+            PublishPatternOverrides {
+                title,
+                slug,
+                summary,
+                labels: label,
+                categories: category,
+                version,
+                state,
+                author,
+            },
+        ),
         PatternsCommands::Check { agent_id } => cmd_check(agent_id).await,
         PatternsCommands::Use { id, path, agent_id } => cmd_use(id, path, agent_id).await,
     }
@@ -274,24 +459,31 @@ async fn run(cmd: PatternsCommands) -> Result<()> {
 async fn cmd_search(
     query: Option<String>,
     label: Option<String>,
+    category: Option<String>,
     version: Option<String>,
     state: Option<String>,
     superseded_by: Option<String>,
     agent_id: Option<String>,
 ) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
-    let patterns = ctx
+    let request_label_storage = category.as_deref().map(category_marker);
+    let request_label = label.as_deref().or(request_label_storage.as_deref());
+    let filters = PatternFilters {
+        query: query.as_deref(),
+        label: request_label,
+        category: category.as_deref(),
+        version: version.as_deref(),
+        state: state.as_deref(),
+        superseded_by: superseded_by.as_deref(),
+    };
+    let mut patterns = ctx
         .gateway
-        .list_patterns(
-            query.as_deref(),
-            label.as_deref(),
-            version.as_deref(),
-            state.as_deref(),
-            superseded_by.as_deref(),
-            Some(&ctx.agent_id),
-        )
+        .list_patterns(&filters, Some(&ctx.agent_id))
         .await
         .context("list patterns")?;
+    if let Some(category) = category.as_deref() {
+        patterns.retain(|pattern| summary_matches_category(pattern, category));
+    }
     if patterns.is_empty() {
         println!("(no patterns)");
     } else {
@@ -317,13 +509,16 @@ async fn cmd_create(args: CreatePatternArgs) -> Result<()> {
     let ctx = resolve_context(args.agent_id)?;
     let body = fs::read_to_string(&args.body_file)
         .with_context(|| format!("read body file {}", args.body_file.display()))?;
-    let labels_slice = labels_if_any(&args.labels);
+    let merged_labels = labels_with_category_markers(&args.labels, &args.categories);
+    let labels_slice = labels_if_any(&merged_labels);
+    let categories_slice = labels_if_any(&args.categories);
     let req = CreatePatternRequest {
         title: &args.title,
         slug: args.slug.as_deref(),
         summary: args.summary.as_deref(),
         body: &body,
         labels: labels_slice,
+        categories: categories_slice,
         version: &args.version,
         state: &args.state,
         author: &ctx.agent_id,
@@ -349,13 +544,16 @@ async fn cmd_update(args: UpdatePatternArgs) -> Result<()> {
         ),
         None => None,
     };
-    let labels_slice = labels_if_any(&args.labels);
+    let merged_labels = labels_with_category_markers(&args.labels, &args.categories);
+    let labels_slice = labels_if_any(&merged_labels);
+    let categories_slice = labels_if_any(&args.categories);
     let req = UpdatePatternRequest {
         title: args.title.as_deref(),
         slug: args.slug.as_deref(),
         summary: args.summary.as_deref(),
         body: body.as_deref(),
         labels: labels_slice,
+        categories: categories_slice,
         version: args.version.as_deref(),
         state: args.state.as_deref(),
     };
@@ -411,6 +609,91 @@ async fn cmd_comment(id: String, content: String, agent_id: Option<String>) -> R
         .await
         .context("add pattern comment")?;
     println!("comment added to pattern {}", comment.pattern_id);
+    Ok(())
+}
+
+async fn cmd_publish(
+    file: PathBuf,
+    overrides: PublishPatternOverrides,
+    agent_id: Option<String>,
+) -> Result<()> {
+    let mut patterns = load_and_prepare_patterns(&file, overrides)?;
+    validate_pattern_files(&patterns)?;
+
+    let ctx = resolve_context(agent_id)?;
+    for pattern in &mut patterns {
+        if pattern.author.is_none() {
+            pattern.author = Some(ctx.agent_id.clone());
+        }
+    }
+
+    let mut created = 0usize;
+    let mut updated = 0usize;
+    for pattern in patterns {
+        let merged_labels = labels_with_category_markers(&pattern.labels, &pattern.categories);
+        let labels = labels_if_any(&merged_labels);
+        let categories = labels_if_any(&pattern.categories);
+        if let Some(slug) = pattern.slug.as_deref() {
+            if let Ok(existing) = ctx.gateway.get_pattern(slug, Some(&ctx.agent_id)).await {
+                let req = UpdatePatternRequest {
+                    title: Some(&pattern.title),
+                    slug: Some(slug),
+                    summary: pattern.summary.as_deref(),
+                    body: Some(&pattern.body),
+                    labels,
+                    categories,
+                    version: pattern.version.as_deref(),
+                    state: pattern.state.as_deref(),
+                };
+                let saved = ctx
+                    .gateway
+                    .update_pattern(&existing.id, &req, Some(&ctx.agent_id))
+                    .await
+                    .with_context(|| format!("update pattern {slug}"))?;
+                println!("updated pattern {} ({})", saved.id, saved.slug);
+                updated += 1;
+                continue;
+            }
+        }
+
+        let version = pattern.version.as_deref().unwrap_or("latest");
+        let state = pattern.state.as_deref().unwrap_or("active");
+        let author = pattern.author.as_deref().unwrap_or(&ctx.agent_id);
+        let req = CreatePatternRequest {
+            title: &pattern.title,
+            slug: pattern.slug.as_deref(),
+            summary: pattern.summary.as_deref(),
+            body: &pattern.body,
+            labels,
+            categories,
+            version,
+            state,
+            author,
+        };
+        let saved = ctx
+            .gateway
+            .create_pattern(&req, Some(&ctx.agent_id))
+            .await
+            .with_context(|| format!("create pattern {}", pattern.title))?;
+        println!("created pattern {} ({})", saved.id, saved.slug);
+        created += 1;
+    }
+
+    println!("published patterns: created={created}, updated={updated}");
+    Ok(())
+}
+
+fn cmd_validate(file: PathBuf) -> Result<()> {
+    let patterns = load_and_prepare_patterns(&file, PublishPatternOverrides::default())?;
+    validate_pattern_files(&patterns)?;
+    println!("valid pattern publish file: {} pattern(s)", patterns.len());
+    Ok(())
+}
+
+fn cmd_preview(file: PathBuf, overrides: PublishPatternOverrides) -> Result<()> {
+    let patterns = load_and_prepare_patterns(&file, overrides)?;
+    validate_pattern_files(&patterns)?;
+    println!("{}", serde_json::to_string_pretty(&patterns)?);
     Ok(())
 }
 
@@ -585,6 +868,279 @@ async fn ensure_registered(ctx: &PatternsContext) -> Result<()> {
     }
     fs::write(&marker, &ctx.ident).ok();
     Ok(())
+}
+
+fn load_and_prepare_patterns(
+    path: &Path,
+    overrides: PublishPatternOverrides,
+) -> Result<Vec<PatternFile>> {
+    let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let mut patterns = parse_publish_patterns_file(path, &text)?;
+    apply_publish_overrides(&mut patterns, overrides)?;
+    Ok(patterns)
+}
+
+fn parse_publish_patterns_file(path: &Path, text: &str) -> Result<Vec<PatternFile>> {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "md" | "markdown" => parse_markdown_pattern_catalog(text),
+        "json" => parse_structured_patterns_file(path, text, |s| {
+            serde_json::from_str::<serde_json::Value>(s).context("parse JSON pattern file")
+        }),
+        "yaml" | "yml" | "" => parse_structured_patterns_file(path, text, |s| {
+            serde_yaml::from_str::<serde_json::Value>(s).context("parse YAML pattern file")
+        }),
+        other => {
+            anyhow::bail!("unsupported pattern file extension .{other}; use MD, JSON, YAML, or YML")
+        }
+    }
+}
+
+fn parse_structured_patterns_file<F>(path: &Path, text: &str, parse: F) -> Result<Vec<PatternFile>>
+where
+    F: FnOnce(&str) -> Result<serde_json::Value>,
+{
+    let value = parse(text).with_context(|| format!("parse {}", path.display()))?;
+    if value.is_array() {
+        return serde_json::from_value(value).with_context(|| format!("decode {}", path.display()));
+    }
+    if value.get("patterns").is_some() {
+        let catalog: PatternCatalogFile =
+            serde_json::from_value(value).with_context(|| format!("decode {}", path.display()))?;
+        return Ok(catalog.patterns);
+    }
+    let pattern: PatternFile =
+        serde_json::from_value(value).with_context(|| format!("decode {}", path.display()))?;
+    Ok(vec![pattern])
+}
+
+fn apply_publish_overrides(
+    patterns: &mut [PatternFile],
+    overrides: PublishPatternOverrides,
+) -> Result<()> {
+    let has_singleton_override =
+        overrides.title.is_some() || overrides.slug.is_some() || overrides.summary.is_some();
+    if has_singleton_override && patterns.len() != 1 {
+        anyhow::bail!("--title, --slug, and --summary can only override single-pattern files");
+    }
+    for pattern in patterns {
+        if let Some(title) = overrides.title.clone() {
+            pattern.title = title;
+        }
+        if let Some(slug) = overrides.slug.clone() {
+            pattern.slug = Some(slug);
+        }
+        if overrides.summary.is_some() {
+            pattern.summary = overrides.summary.clone();
+        }
+        if !overrides.labels.is_empty() {
+            pattern.labels = overrides.labels.clone();
+        }
+        if !overrides.categories.is_empty() {
+            pattern.categories = overrides.categories.clone();
+        }
+        if pattern.version.is_none() {
+            pattern.version = Some(if overrides.version.is_empty() {
+                "latest".to_string()
+            } else {
+                overrides.version.clone()
+            });
+        }
+        if pattern.state.is_none() {
+            pattern.state = Some(if overrides.state.is_empty() {
+                "active".to_string()
+            } else {
+                overrides.state.clone()
+            });
+        }
+        if pattern.author.is_none() {
+            pattern.author = overrides.author.clone();
+        }
+    }
+    Ok(())
+}
+
+fn validate_pattern_files(patterns: &[PatternFile]) -> Result<()> {
+    if patterns.is_empty() {
+        anyhow::bail!("pattern file does not contain any publishable patterns");
+    }
+    let mut slugs = BTreeSet::new();
+    for (idx, pattern) in patterns.iter().enumerate() {
+        let label = format!("patterns[{}]", idx + 1);
+        require_nonempty(&format!("{label}.title"), &pattern.title)?;
+        require_nonempty(&format!("{label}.body"), &pattern.body)?;
+        if let Some(slug) = pattern.slug.as_deref() {
+            require_nonempty(&format!("{label}.slug"), slug)?;
+            if !slugs.insert(slug.to_string()) {
+                anyhow::bail!("duplicate pattern slug {slug}");
+            }
+        }
+        if let Some(version) = pattern.version.as_deref() {
+            require_nonempty(&format!("{label}.version"), version)?;
+        }
+        if let Some(state) = pattern.state.as_deref() {
+            require_nonempty(&format!("{label}.state"), state)?;
+        }
+    }
+    Ok(())
+}
+
+fn require_nonempty(name: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("{name} must not be empty");
+    }
+    Ok(())
+}
+
+fn parse_markdown_pattern_catalog(text: &str) -> Result<Vec<PatternFile>> {
+    let mut sections = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    let mut fence: Option<char> = None;
+    let mut starts = Vec::new();
+
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        update_markdown_fence(trimmed, &mut fence);
+        if fence.is_some() {
+            continue;
+        }
+        if markdown_heading_level(trimmed) == 2 {
+            starts.push(idx);
+        }
+    }
+
+    starts.push(lines.len());
+    for pair in starts.windows(2) {
+        let start = pair[0];
+        let end = pair[1];
+        let section = lines[start..end].join("\n");
+        let Some(slug) = pattern_slug_from_section(&section) else {
+            continue;
+        };
+        let title = markdown_heading_text(lines[start].trim_start(), 2);
+        sections.push(PatternFile {
+            title,
+            slug: Some(slug.clone()),
+            summary: scope_summary_from_section(&section),
+            body: ensure_trailing_newline(section.trim_end()),
+            labels: inferred_pattern_labels(&slug),
+            categories: inferred_pattern_categories(&slug),
+            version: Some("latest".to_string()),
+            state: Some("active".to_string()),
+            author: None,
+        });
+    }
+
+    Ok(sections)
+}
+
+fn pattern_slug_from_section(section: &str) -> Option<String> {
+    section.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let rest = trimmed.strip_prefix("<!-- pattern-slug:")?;
+        let slug = rest.strip_suffix("-->")?.trim();
+        if slug.is_empty() || slug.eq_ignore_ascii_case("none") {
+            None
+        } else {
+            Some(slug.to_string())
+        }
+    })
+}
+
+fn scope_summary_from_section(section: &str) -> Option<String> {
+    let mut in_scope = false;
+    let mut parts = Vec::new();
+    for line in section.lines() {
+        let trimmed = line.trim();
+        if markdown_heading_level(trimmed) == 3 {
+            if in_scope {
+                break;
+            }
+            in_scope = markdown_heading_text(trimmed, 3).eq_ignore_ascii_case("Scope");
+            continue;
+        }
+        if in_scope {
+            if trimmed.is_empty() {
+                if !parts.is_empty() {
+                    break;
+                }
+                continue;
+            }
+            parts.push(trimmed.to_string());
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
+fn inferred_pattern_labels(slug: &str) -> Vec<String> {
+    if slug.starts_with("go-") {
+        vec!["go".to_string()]
+    } else if slug.starts_with("ndesign-") {
+        vec!["ndesign".to_string()]
+    } else if slug.starts_with("fullstack-") {
+        vec!["fullstack".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
+fn inferred_pattern_categories(slug: &str) -> Vec<String> {
+    if slug.starts_with("go-") {
+        vec!["programming-language/golang".to_string()]
+    } else if slug.starts_with("ndesign-") {
+        vec!["frontend/ndesign".to_string()]
+    } else if slug.starts_with("fullstack-") {
+        vec!["application-architecture/fullstack".to_string()]
+    } else {
+        vec!["general".to_string()]
+    }
+}
+
+fn ensure_trailing_newline(value: &str) -> String {
+    let mut out = value.to_string();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn update_markdown_fence(trimmed: &str, fence: &mut Option<char>) {
+    let Some(ch) = trimmed.chars().next() else {
+        return;
+    };
+    if ch != '`' && ch != '~' {
+        return;
+    }
+    if trimmed.chars().take_while(|c| *c == ch).count() < 3 {
+        return;
+    }
+    match fence {
+        Some(open) if *open == ch => *fence = None,
+        None => *fence = Some(ch),
+        _ => {}
+    }
+}
+
+fn markdown_heading_level(trimmed: &str) -> usize {
+    let level = trimmed.chars().take_while(|c| *c == '#').count();
+    let bytes = trimmed.as_bytes();
+    if level > 0 && level <= 6 && level < bytes.len() && bytes[level] == b' ' {
+        level
+    } else {
+        0
+    }
+}
+
+fn markdown_heading_text(trimmed: &str, level: usize) -> String {
+    trimmed[level + 1..].trim().to_string()
 }
 
 fn registration_marker_path(canonical_ident: &str) -> PathBuf {
@@ -773,14 +1329,21 @@ fn render_checks_text(checks: &[PatternCheck]) {
 }
 
 fn print_summary_row(pattern: &PatternSummary) {
-    let labels = if pattern.labels.is_empty() {
+    let visible_labels = visible_labels(&pattern.labels);
+    let labels = if visible_labels.is_empty() {
         String::new()
     } else {
-        format!(" [{}]", pattern.labels.join(","))
+        format!(" [{}]", visible_labels.join(","))
+    };
+    let categories = effective_categories(&pattern.categories, &pattern.labels);
+    let categories = if categories.is_empty() {
+        String::new()
+    } else {
+        format!(" categories={}", categories.join(","))
     };
     println!(
-        "[{}] {} ({}, version={}, state={}){}",
-        pattern.id, pattern.title, pattern.slug, pattern.version, pattern.state, labels
+        "[{}] {} ({}, version={}, state={}){}{}",
+        pattern.id, pattern.title, pattern.slug, pattern.version, pattern.state, labels, categories
     );
     if !pattern.summary.trim().is_empty() {
         println!("  {}", pattern.summary);
@@ -788,14 +1351,17 @@ fn print_summary_row(pattern: &PatternSummary) {
 }
 
 fn print_pattern(pattern: &Pattern) {
+    let visible_labels = visible_labels(&pattern.labels);
+    let categories = effective_categories(&pattern.categories, &pattern.labels);
     println!(
-        "{} ({})\nid: {}\nversion: {}\nstate: {}\nlabels: {}\n",
+        "{} ({})\nid: {}\nversion: {}\nstate: {}\nlabels: {}\ncategories: {}\n",
         pattern.title,
         pattern.slug,
         pattern.id,
         pattern.version,
         pattern.state,
-        pattern.labels.join(", ")
+        visible_labels.join(", "),
+        categories.join(", ")
     );
     print!("{}", pattern.body);
     if !pattern.body.ends_with('\n') {
@@ -815,6 +1381,68 @@ fn labels_if_any(labels: &[String]) -> Option<&[String]> {
         None
     } else {
         Some(labels)
+    }
+}
+
+fn labels_with_category_markers(labels: &[String], categories: &[String]) -> Vec<String> {
+    let mut merged = Vec::new();
+    append_unique(
+        &mut merged,
+        labels
+            .iter()
+            .filter(|label| !is_category_marker(label))
+            .cloned(),
+    );
+    append_unique(
+        &mut merged,
+        categories.iter().map(|category| category_marker(category)),
+    );
+    merged
+}
+
+fn visible_labels(labels: &[String]) -> Vec<String> {
+    labels
+        .iter()
+        .filter(|label| !is_category_marker(label))
+        .cloned()
+        .collect()
+}
+
+fn effective_categories(categories: &[String], labels: &[String]) -> Vec<String> {
+    let mut values = Vec::new();
+    append_unique(&mut values, categories.iter().cloned());
+    append_unique(
+        &mut values,
+        labels
+            .iter()
+            .filter_map(|label| label.strip_prefix("category:").map(ToString::to_string)),
+    );
+    values
+}
+
+fn summary_matches_category(pattern: &PatternSummary, category: &str) -> bool {
+    effective_categories(&pattern.categories, &pattern.labels)
+        .iter()
+        .any(|value| value == category)
+}
+
+fn category_marker(category: &str) -> String {
+    format!("category:{category}")
+}
+
+fn is_category_marker(label: &str) -> bool {
+    label.starts_with("category:")
+}
+
+fn append_unique<I>(values: &mut Vec<String>, items: I)
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut seen: BTreeSet<String> = values.iter().cloned().collect();
+    for item in items {
+        if !item.trim().is_empty() && seen.insert(item.clone()) {
+            values.push(item);
+        }
     }
 }
 
@@ -883,5 +1511,76 @@ mod tests {
             &["a.rs".to_string(), "b.rs".to_string()],
         );
         assert_eq!(usages[0].paths, vec!["a.rs", "b.rs"]);
+    }
+
+    #[test]
+    fn markdown_catalog_extracts_pattern_sections() {
+        let body = "# Guide\n\n## Intro\n\nnot publishable\n\n## Router\n<!-- pattern-slug: go-router-chi -->\n\n### Scope\n\nUse chi routers.\n\n### Body\n\nDetails.\n\n## Appendix A\n\nignore me\n";
+        let patterns = parse_markdown_pattern_catalog(body).unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].title, "Router");
+        assert_eq!(patterns[0].slug.as_deref(), Some("go-router-chi"));
+        assert_eq!(patterns[0].summary.as_deref(), Some("Use chi routers."));
+        assert_eq!(patterns[0].labels, vec!["go"]);
+        assert_eq!(patterns[0].categories, vec!["programming-language/golang"]);
+        assert!(patterns[0].body.contains("### Body"));
+    }
+
+    #[test]
+    fn publish_overrides_reject_single_pattern_metadata_for_catalogs() {
+        let mut patterns = vec![
+            PatternFile {
+                title: "A".to_string(),
+                slug: Some("a".to_string()),
+                summary: None,
+                body: "body".to_string(),
+                labels: Vec::new(),
+                categories: Vec::new(),
+                version: None,
+                state: None,
+                author: None,
+            },
+            PatternFile {
+                title: "B".to_string(),
+                slug: Some("b".to_string()),
+                summary: None,
+                body: "body".to_string(),
+                labels: Vec::new(),
+                categories: Vec::new(),
+                version: None,
+                state: None,
+                author: None,
+            },
+        ];
+        let err = apply_publish_overrides(
+            &mut patterns,
+            PublishPatternOverrides {
+                title: Some("Only One".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("single-pattern files"));
+    }
+
+    #[test]
+    fn category_markers_are_hidden_from_labels_and_exposed_as_categories() {
+        let labels = vec![
+            "go".to_string(),
+            "category:programming-language/golang".to_string(),
+        ];
+        assert_eq!(visible_labels(&labels), vec!["go"]);
+        assert_eq!(
+            effective_categories(&[], &labels),
+            vec!["programming-language/golang"]
+        );
+        assert_eq!(
+            labels_with_category_markers(
+                &["go".to_string()],
+                &["programming-language/golang".to_string()]
+            ),
+            vec!["go", "category:programming-language/golang"]
+        );
     }
 }

@@ -1,0 +1,97 @@
+app: agent-tools
+title: Agent Tools gateway API context
+summary: Agent-first context for gateway-backed agent-tools workflows, including API docs and global patterns.
+kind: agent_context
+source_format: agent_context
+source_ref: .agent/api/agent-tools.yaml
+labels:
+  - agent-tools
+  - gateway
+  - patterns
+content:
+  purpose: >
+    Agent Tools exposes gateway-backed command surfaces for project API context,
+    global implementation patterns, task tracking, and comms. Agents should use
+    this context before changing the matching CLI or gateway client contracts.
+  workflows:
+    - name: Publish global patterns
+      steps:
+        - Validate a pattern file or markdown catalog with agent-tools patterns validate --file PATH.
+        - Preview extracted payloads with agent-tools patterns preview --file PATH.
+        - Publish or update by slug with agent-tools patterns publish --file PATH.
+        - Use --category to classify patterns, for example programming-language/golang.
+    - name: Search pattern guidance
+      steps:
+        - Run agent-tools patterns search QUERY --version latest --state active.
+        - Add --category or --label when the desired guidance family is known.
+        - Fetch full bodies with agent-tools patterns get ID_OR_SLUG before editing or applying a pattern.
+  endpoints:
+    - method: GET
+      path: /v1/patterns
+      purpose: List or search global patterns.
+      query:
+        - q
+        - label
+        - category
+        - version
+        - state
+        - superseded_by
+    - method: GET
+      path: /v1/patterns/:id
+      purpose: Fetch one pattern by id or slug.
+    - method: POST
+      path: /v1/patterns
+      purpose: Create a global pattern.
+    - method: PATCH
+      path: /v1/patterns/:id
+      purpose: Update pattern metadata or body.
+    - method: DELETE
+      path: /v1/patterns/:id
+      purpose: Delete a pattern.
+    - method: GET
+      path: /v1/patterns/:id/comments
+      purpose: List comments for a pattern.
+    - method: POST
+      path: /v1/patterns/:id/comments
+      purpose: Add an agent comment to a pattern.
+  auth:
+    scheme: gateway_api_key
+    header: Authorization
+    agent_id_header: X-Agent-ID
+  safety:
+    - Keep CLI output concise and agent-facing; do not add JSON output flags for agent workflows.
+    - Fetch pattern body and comments before editing an existing gateway pattern.
+    - Treat categories as routing metadata and labels as looser search tags.
+    - Preserve slug stability for published pattern catalogs so repeat publishes update existing records.
+  schemas:
+    pattern:
+      fields:
+        - id
+        - title
+        - slug
+        - summary
+        - body
+        - labels
+        - categories
+        - version
+        - state
+        - author
+        - created_at
+        - updated_at
+    create_pattern_request:
+      required:
+        - title
+        - body
+        - version
+        - state
+        - author
+      optional:
+        - slug
+        - summary
+        - labels
+        - categories
+  examples:
+    - name: Publish DevelopWithGo catalog
+      command: agent-tools patterns publish --file DevelopWithGo.md
+    - name: Search Go patterns by category
+      command: agent-tools patterns search router --category programming-language/golang --version latest --state active
