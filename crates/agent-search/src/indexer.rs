@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, ErrorCode};
 use serde::Serialize;
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
+
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// File indexer that maintains a SQLite-backed file index with change detection.
 pub struct FileIndexer {
@@ -40,14 +42,21 @@ impl std::fmt::Display for IndexStats {
 
 impl FileIndexer {
     pub fn open(db_path: &Path) -> Result<Self> {
+        Self::open_with_busy_timeout(db_path, SQLITE_BUSY_TIMEOUT)
+    }
+
+    fn open_with_busy_timeout(db_path: &Path, busy_timeout: Duration) -> Result<Self> {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         let conn = Connection::open(db_path)
             .with_context(|| format!("Failed to open file index at {}", db_path.display()))?;
+        conn.busy_timeout(busy_timeout)
+            .context("Failed to configure file index lock timeout")?;
 
-        Self::init_schema(&conn)?;
+        Self::init_schema(&conn)
+            .with_context(|| format!("Failed to initialize file index at {}", db_path.display()))?;
 
         Ok(Self {
             conn,
@@ -91,11 +100,24 @@ impl FileIndexer {
     /// Open the file index in the centralized storage directory for the given project.
     pub fn open_for_project(project_root: &Path) -> Result<Self> {
         let db_path = agent_core::project_data_dir(project_root).join("files.db");
-        Self::open(&db_path).or_else(|_| Self::open_ephemeral())
+        Self::open_persistent_or_ephemeral(&db_path, SQLITE_BUSY_TIMEOUT)
     }
 
     pub fn is_ephemeral(&self) -> bool {
         self.ephemeral
+    }
+
+    fn open_persistent_or_ephemeral(db_path: &Path, busy_timeout: Duration) -> Result<Self> {
+        match Self::open_with_busy_timeout(db_path, busy_timeout) {
+            Ok(indexer) => Ok(indexer),
+            Err(err) if is_sqlite_lock_error(&err) => Err(err.context(format!(
+                "Persistent file index at {} is busy or locked after waiting {}ms; \
+                 another agent-tools process may be indexing this project",
+                db_path.display(),
+                busy_timeout.as_millis()
+            ))),
+            Err(_) => Self::open_ephemeral(),
+        }
     }
 
     /// Build or incrementally update the file index.
@@ -205,6 +227,19 @@ impl FileIndexer {
     }
 }
 
+fn is_sqlite_lock_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<rusqlite::Error>()
+            .is_some_and(|sqlite_err| {
+                matches!(
+                    sqlite_err.sqlite_error_code(),
+                    Some(ErrorCode::DatabaseBusy) | Some(ErrorCode::DatabaseLocked)
+                )
+            })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +296,26 @@ mod tests {
         let stats = indexer.build(root, false).unwrap();
         assert_eq!(stats.files_indexed, 1);
         assert_eq!(indexer.file_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_locked_persistent_index_does_not_fallback_to_ephemeral() {
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("files.db");
+        let locker = Connection::open(&db_path).unwrap();
+        locker.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+
+        let err =
+            match FileIndexer::open_persistent_or_ephemeral(&db_path, Duration::from_millis(0)) {
+                Ok(_) => {
+                    panic!("locked persistent index should not fall back to ephemeral storage")
+                }
+                Err(err) => err,
+            };
+        let message = format!("{err:#}");
+        assert!(message.contains("busy or locked"), "{message}");
+        assert!(message.contains("files.db"), "{message}");
+
+        locker.execute_batch("ROLLBACK;").unwrap();
     }
 }
