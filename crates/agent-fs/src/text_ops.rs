@@ -160,9 +160,9 @@ pub struct FileIdentity {
     pub windows: Option<WindowsFileIdentity>,
     /// Cross-platform fallback used when the OS does not expose stable file IDs.
     ///
-    /// Windows builds fill `windows` when supported by `std`; all platforms keep
-    /// this fallback so sed write preflight can still compare canonical path,
-    /// length, modified time, and content hash before mutation.
+    /// Reserved for stable OS-specific IDs; all platforms keep this fallback so
+    /// sed write preflight can still compare canonical path, length, modified
+    /// time, and content hash before mutation.
     pub fallback: FileIdentityFallback,
 }
 
@@ -554,13 +554,8 @@ fn unix_identity(_metadata: &Metadata) -> Option<UnixFileIdentity> {
 }
 
 #[cfg(windows)]
-fn windows_identity(metadata: &Metadata) -> Option<WindowsFileIdentity> {
-    use std::os::windows::fs::MetadataExt;
-
-    Some(WindowsFileIdentity {
-        volume_serial_number: metadata.volume_serial_number(),
-        file_index: metadata.file_index(),
-    })
+fn windows_identity(_metadata: &Metadata) -> Option<WindowsFileIdentity> {
+    None
 }
 
 #[cfg(not(windows))]
