@@ -1571,8 +1571,6 @@ fn sed_write_detects_drift_and_skips_with_partial_failure_exit() {
     // The drift path is also covered by `drift_check_flags_changed_bytes`
     // below at the agent-fs layer. This end-to-end test instead asserts the
     // partial-failure exit class is reachable through the write command.
-    let root = sed_write_fixture("sed_write_drift");
-
     // Stage a file with a known content, then mutate during the same shell
     // invocation by running a second write that points at the same file.
     // We can't truly race the binary, so we test the partial-failure exit
@@ -1582,6 +1580,7 @@ fn sed_write_detects_drift_and_skips_with_partial_failure_exit() {
     {
         use std::os::unix::fs::PermissionsExt;
 
+        let root = sed_write_fixture("sed_write_drift");
         let target_dir = root.join("readonly");
         fs::create_dir_all(&target_dir).unwrap();
         let target = target_dir.join("locked.txt");
