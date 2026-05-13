@@ -1,0 +1,1 @@
+crates/agent-cli/tests/fixtures/grep_sed/platform/crlf.txt -text -diff

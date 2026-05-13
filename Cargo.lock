@@ -21,6 +21,7 @@ dependencies = [
  "anyhow",
  "clap",
  "gethostname",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",

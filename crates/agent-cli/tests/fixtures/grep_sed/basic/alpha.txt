@@ -1,0 +1,3 @@
+first needle line
+second line with needle and needle
+final old value

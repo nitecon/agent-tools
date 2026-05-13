@@ -4,7 +4,9 @@ use agent_core::{
     TextRecord, TextRenderOptions, TextSummaryCounters,
 };
 use agent_fs::text_ops::{
-    collect_text_files, TextFile, TextFileClassification, TextFileSet, TextInput, TextTargetOptions,
+    atomic_write_bytes, collect_text_files, encode_text_with_bom, recheck_file_drift,
+    relative_path_hash, stable_content_hash, DriftCheck, TextFile, TextFileClassification,
+    TextFileSet, TextInput, TextTargetOptions,
 };
 use anyhow::Result;
 use regex::{Regex, RegexBuilder};
@@ -89,7 +91,6 @@ impl<'a> TextCommandContext<'a> {
         self.text
     }
 
-    #[allow(dead_code)]
     fn text_file(&self) -> Option<&TextFile> {
         match self.source {
             TextCommandSource::Stdin => None,
@@ -107,6 +108,10 @@ struct TextCommandOutcome {
     warnings: usize,
     errors: usize,
     no_op: bool,
+    /// True when this file contributed a recoverable but non-success outcome
+    /// (sed write drift / write failure) that must escalate the traversal
+    /// exit class to 3 without aborting subsequent files.
+    partial_failure: bool,
 }
 
 impl TextCommandOutcome {
@@ -120,6 +125,7 @@ impl TextCommandOutcome {
             warnings: 0,
             errors: 0,
             no_op: !matched,
+            partial_failure: false,
         }
     }
 
@@ -134,6 +140,28 @@ impl TextCommandOutcome {
             warnings: 0,
             errors: 0,
             no_op: !changed,
+            partial_failure: false,
+        }
+    }
+
+    fn sed_write(
+        records: Vec<TextRecord>,
+        replacements: usize,
+        changed: bool,
+        warnings: usize,
+        errors: usize,
+        partial_failure: bool,
+    ) -> Self {
+        Self {
+            operation: TextOperationKind::SedWrite,
+            records,
+            matched: changed,
+            changed,
+            replacements,
+            warnings,
+            errors,
+            no_op: !changed,
+            partial_failure,
         }
     }
 }
@@ -183,40 +211,78 @@ fn run_text_command<F>(operation: TextOperationKind, f: F) -> !
 where
     F: FnOnce() -> Result<TextCommandResult>,
 {
-    match f() {
-        Ok(result) => {
-            let code = result.exit_code;
-            if let Some(bytes) = result.stdout_bytes {
-                if let Err(err) = io::stdout().write_all(&bytes) {
-                    eprintln!("error: invalid-input: {err}");
-                    std::process::exit(
-                        classify_text_exit_code(&TextExitClassificationInput::invalid_input(
-                            operation,
-                        ))
-                        .code(),
-                    );
-                }
-            } else {
-                print!("{}", result.stdout);
-            }
+    let result = match f() {
+        Ok(result) => result,
+        Err(err) => render_text_fallback_error_result(operation, &err.to_string()),
+    };
+    exit_text_command_result(operation, result)
+}
+
+fn exit_text_command_result(operation: TextOperationKind, result: TextCommandResult) -> ! {
+    let code = result.exit_code;
+    if let Some(bytes) = result.stdout_bytes {
+        if let Err(err) = io::stdout().write_all(&bytes) {
+            let result = render_text_error_result(
+                TextErrorLabel::InvalidInput,
+                &err.to_string(),
+                TextExitClassificationInput::invalid_input(operation),
+            );
             if !result.stderr.is_empty() {
                 eprint!("{}", result.stderr);
             }
-            std::process::exit(code);
+            std::process::exit(result.exit_code);
         }
-        Err(err) => {
-            let message = err.to_string();
-            if message.starts_with("error: ") {
-                eprintln!("{message}");
-            } else {
-                eprintln!("error: invalid-input: {message}");
-            }
-            std::process::exit(
-                classify_text_exit_code(&TextExitClassificationInput::invalid_input(operation))
-                    .code(),
-            );
-        }
+    } else {
+        print!("{}", result.stdout);
     }
+    if !result.stderr.is_empty() {
+        eprint!("{}", result.stderr);
+    }
+    std::process::exit(code);
+}
+
+fn render_text_fallback_error_result(
+    operation: TextOperationKind,
+    message: &str,
+) -> TextCommandResult {
+    let (label, reason) = if message.starts_with("error: invalid-expression: ") {
+        (
+            TextErrorLabel::InvalidExpression,
+            strip_error_label(message, "error: invalid-expression: "),
+        )
+    } else if message.starts_with("error: invalid-input: ") {
+        (
+            TextErrorLabel::InvalidInput,
+            strip_error_label(message, "error: invalid-input: "),
+        )
+    } else if message.starts_with("error: invalid-path: ") {
+        (
+            TextErrorLabel::InvalidPath,
+            strip_error_label(message, "error: invalid-path: "),
+        )
+    } else if message.starts_with("error: unsupported: ") {
+        (
+            TextErrorLabel::Unsupported,
+            strip_error_label(message, "error: unsupported: "),
+        )
+    } else if message.starts_with("error: partial-traversal-failure: ") {
+        (
+            TextErrorLabel::PartialTraversalFailure,
+            strip_error_label(message, "error: partial-traversal-failure: "),
+        )
+    } else if message.starts_with("error: write-failed: ") {
+        (
+            TextErrorLabel::WriteFailed,
+            strip_error_label(message, "error: write-failed: "),
+        )
+    } else {
+        (TextErrorLabel::InvalidInput, message)
+    };
+    render_text_error_result(
+        label,
+        reason,
+        TextExitClassificationInput::invalid_input(operation),
+    )
 }
 
 pub(crate) fn cmd_grep(args: GrepArgs) -> Result<()> {
@@ -387,6 +453,9 @@ where
         let input = String::from_utf8(buffer)
             .map_err(|_| anyhow::anyhow!("error: invalid-input: stdin is not valid UTF-8"))?;
         let outcome = run_operation(TextCommandContext::stdin(TextPath::new("<stdin>"), &input))?;
+        if outcome.partial_failure {
+            partial_traversal_failure = true;
+        }
         aggregate_text_command_outcome(
             operation,
             outcome,
@@ -410,6 +479,9 @@ where
                         &decoded.text,
                         file,
                     ))?;
+                    if outcome.partial_failure {
+                        partial_traversal_failure = true;
+                    }
                     aggregate_text_command_outcome(
                         operation,
                         outcome,
@@ -765,8 +837,9 @@ pub(crate) struct SedArgs {
     pub(crate) glob_globs: Vec<String>,
     pub(crate) line: Option<String>,
     /// Explicit preview-mode marker. Preview is the v1 default, so this flag
-    /// only exists to document intent in scripts; T007 will read it to disallow
-    /// `--preview --write` combinations beyond clap's built-in conflict.
+    /// only exists to document intent in scripts; clap's `conflicts_with`
+    /// already rejects `--preview --write` at parse time so we never observe
+    /// both set here.
     #[allow(dead_code)]
     pub(crate) preview: bool,
     pub(crate) write: bool,
@@ -810,18 +883,32 @@ impl LineRange {
 }
 
 pub(crate) fn cmd_sed(args: SedArgs) -> Result<()> {
-    run_text_command(TextOperationKind::SedPreview, || run_sed(args))
+    let operation = resolve_sed_operation(&args);
+    run_text_command(operation, || run_sed(args, operation))
 }
 
-fn run_sed(args: SedArgs) -> Result<TextCommandResult> {
-    // T006 implements preview only. T007 will wire --write through the same
-    // shared finalize path with TextOperationKind::SedWrite. Until then we
-    // diagnose the flag here with a stable label.
+fn resolve_sed_operation(args: &SedArgs) -> TextOperationKind {
     if args.write {
+        TextOperationKind::SedWrite
+    } else {
+        TextOperationKind::SedPreview
+    }
+}
+
+fn run_sed(args: SedArgs, operation: TextOperationKind) -> Result<TextCommandResult> {
+    // The contract reserves a specific diagnostic for `--write -`, distinct
+    // from the generic invalid-path stdin marker. Resolve it before path
+    // collection so the message is byte-identical to SS-A008.
+    if args.write
+        && args
+            .paths
+            .iter()
+            .any(|path| path == std::path::Path::new(agent_fs::text_ops::STDIN_MARKER))
+    {
         return Ok(render_text_error_result(
-            TextErrorLabel::Unsupported,
-            "sed --write is implemented by a follow-up task",
-            TextExitClassificationInput::invalid_input(TextOperationKind::SedWrite),
+            TextErrorLabel::InvalidInput,
+            "--write cannot target stdin",
+            TextExitClassificationInput::invalid_input(operation),
         ));
     }
 
@@ -829,16 +916,16 @@ fn run_sed(args: SedArgs) -> Result<TextCommandResult> {
         return Ok(render_text_error_result(
             TextErrorLabel::Unsupported,
             "stdin payload modes are deferred",
-            TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+            TextExitClassificationInput::invalid_input(operation),
         ));
     }
 
-    let substitution = match resolve_sed_substitution(&args) {
+    let substitution = match resolve_sed_substitution(&args, operation) {
         Ok(sub) => sub,
         Err(result) => return Ok(result),
     };
 
-    let line_range = match parse_line_range(args.line.as_deref()) {
+    let line_range = match parse_line_range(args.line.as_deref(), operation) {
         Ok(range) => range,
         Err(result) => return Ok(result),
     };
@@ -847,7 +934,7 @@ fn run_sed(args: SedArgs) -> Result<TextCommandResult> {
         return Ok(render_text_error_result(
             TextErrorLabel::InvalidInput,
             "--limit must be greater than zero",
-            TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+            TextExitClassificationInput::invalid_input(operation),
         ));
     }
 
@@ -861,7 +948,7 @@ fn run_sed(args: SedArgs) -> Result<TextCommandResult> {
             return Ok(render_text_error_result(
                 TextErrorLabel::InvalidExpression,
                 strip_error_label(&err.to_string(), "error: invalid-expression: "),
-                TextExitClassificationInput::invalid_expression(TextOperationKind::SedPreview),
+                TextExitClassificationInput::invalid_expression(operation),
             ));
         }
     };
@@ -871,7 +958,7 @@ fn run_sed(args: SedArgs) -> Result<TextCommandResult> {
             return Ok(render_text_error_result(
                 TextErrorLabel::InvalidExpression,
                 strip_error_label(&err, "error: invalid-expression: "),
-                TextExitClassificationInput::invalid_expression(TextOperationKind::SedPreview),
+                TextExitClassificationInput::invalid_expression(operation),
             ));
         }
     }
@@ -889,17 +976,35 @@ fn run_sed(args: SedArgs) -> Result<TextCommandResult> {
     let files = match collect_text_files(&cwd, &args.paths, &options) {
         Ok(files) => files,
         Err(err) => {
-            return text_error_from_message(TextOperationKind::SedPreview, &err.to_string());
+            return text_error_from_message(operation, &err.to_string());
         }
     };
 
-    let collected =
-        collect_text_command_outcomes(TextOperationKind::SedPreview, &files, |context| {
-            let path = context.path().clone();
-            let (records, replacements) =
-                sed_preview_records(&path, context.text(), &matcher, &substitution, line_range);
+    let collected = collect_text_command_outcomes(operation, &files, |context| {
+        let path = context.path().clone();
+        let (records, replacements) =
+            sed_preview_records(&path, context.text(), &matcher, &substitution, line_range);
+        if operation == TextOperationKind::SedWrite {
+            // The write path consumes the same preview records to derive a
+            // canonical replacement record id for the first replacement, then
+            // applies the substitution to the decoded text and atomically
+            // rewrites the file on disk. Drift / IO failures surface as
+            // recoverable per-file outcomes; subsequent files are still
+            // processed per the partial-failure contract.
+            Ok(sed_write_outcome(SedWriteInput {
+                path: &path,
+                text: context.text(),
+                matcher: &matcher,
+                substitution: &substitution,
+                range: line_range,
+                replacements,
+                preview_records: records,
+                text_file: context.text_file(),
+            }))
+        } else {
             Ok(TextCommandOutcome::sed_preview(records, replacements))
-        })?;
+        }
+    })?;
 
     Ok(finalize_text_command_output(
         collected,
@@ -913,6 +1018,215 @@ fn run_sed(args: SedArgs) -> Result<TextCommandResult> {
     ))
 }
 
+/// Apply the validated sed substitution to one file's decoded text and produce
+/// the shared `TextCommandOutcome` for the write traversal pass. Behavior:
+///
+/// - Files with zero replacements emit no write/skip record and leave disk
+///   untouched (the no-op-write contract).
+/// - Files where the rewritten bytes are byte-identical to the original
+///   (e.g. the regex matched but the replacement string equals the match)
+///   are NOT rewritten and a `warning: write-unchanged` is recorded.
+/// - Files whose on-disk snapshot drifted between preview classification and
+///   write time emit `warning: write-drift` and are not mutated. Drift flips
+///   partial-failure so the command exits 3 per the contract.
+/// - Atomic write or rename failures emit `error: write-failed` and also flip
+///   partial-failure. Traversal continues so later files still get a chance.
+struct SedWriteInput<'a> {
+    path: &'a TextPath,
+    text: &'a str,
+    matcher: &'a Regex,
+    substitution: &'a SedSubstitution,
+    range: LineRange,
+    replacements: usize,
+    preview_records: Vec<TextRecord>,
+    text_file: Option<&'a TextFile>,
+}
+
+fn sed_write_outcome(input: SedWriteInput<'_>) -> TextCommandOutcome {
+    let SedWriteInput {
+        path,
+        text,
+        matcher,
+        substitution,
+        range,
+        replacements,
+        preview_records,
+        text_file,
+    } = input;
+
+    // Zero replacements: the file was scanned and has nothing to rewrite. The
+    // write path emits neither a write record nor a skip; the shared summary
+    // counts it as unchanged.
+    if replacements == 0 {
+        return TextCommandOutcome::sed_write(Vec::new(), 0, false, 0, 0, false);
+    }
+
+    let snapshot = match text_file.and_then(|tf| tf.snapshot.as_ref()) {
+        Some(snapshot) => snapshot,
+        None => {
+            // Stdin or otherwise non-file context. Sed write rejects stdin
+            // earlier, so reaching this branch implies a programmer error.
+            return TextCommandOutcome::sed_write(
+                vec![TextRecord::Error {
+                    label: TextErrorLabel::WriteFailed,
+                    path: Some(path.clone()),
+                    reason: "no preview snapshot available for write preflight".to_string(),
+                }],
+                0,
+                false,
+                0,
+                1,
+                true,
+            );
+        }
+    };
+
+    let new_text = apply_sed_substitution(text, matcher, substitution, range);
+    let new_bytes = encode_text_with_bom(&new_text, snapshot);
+    let old_size = snapshot.len;
+
+    // Byte-identical rewrite. Per the contract this must NOT touch disk and
+    // produces a `warning: write-unchanged` so users can audit which files
+    // matched but produced no net change (e.g. replacing `foo` with `foo`).
+    if new_bytes.len() as u64 == old_size {
+        // Cheap path-equality short circuit before re-reading the original
+        // bytes: if sizes match AND the encoded body equals the snapshot's
+        // content hash of the original, we know they're identical.
+        let same_hash = stable_content_hash(&new_bytes) == snapshot.content_hash;
+        if same_hash {
+            return TextCommandOutcome::sed_write(
+                vec![TextRecord::Warning {
+                    label: agent_core::TextWarningLabel::WriteUnchanged,
+                    path: Some(path.clone()),
+                    reason: "rewritten content is byte-identical to source".to_string(),
+                }],
+                0,
+                false,
+                1,
+                0,
+                false,
+            );
+        }
+    }
+
+    // Drift check: re-read the file at write time and compare to the preview
+    // snapshot. Any mismatch in size, hash, or identity means the file
+    // changed under us; we MUST NOT overwrite stale content.
+    match recheck_file_drift(&snapshot.opened_path, snapshot) {
+        DriftCheck::Unchanged => {}
+        DriftCheck::Drifted { reason } | DriftCheck::Missing { reason } => {
+            return TextCommandOutcome::sed_write(
+                vec![TextRecord::Warning {
+                    label: agent_core::TextWarningLabel::WriteDrift,
+                    path: Some(path.clone()),
+                    reason,
+                }],
+                0,
+                false,
+                1,
+                0,
+                true,
+            );
+        }
+    }
+
+    // Derive a stable write record id from the first preview record so
+    // preview and write outputs cross-reference cleanly.
+    let record_id = preview_records
+        .iter()
+        .find_map(|record| match record {
+            TextRecord::SedPreview { record_id, .. } => Some(record_id.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| ReplacementRecordId::new(format!("r:{}:write", path.as_str())));
+
+    match atomic_write_bytes(&snapshot.opened_path, &new_bytes, snapshot) {
+        Ok(new_size) => TextCommandOutcome::sed_write(
+            vec![TextRecord::SedWrite {
+                record_id,
+                path: path.clone(),
+                replacements,
+                old_size,
+                new_size,
+            }],
+            replacements,
+            true,
+            0,
+            0,
+            false,
+        ),
+        Err(err) => TextCommandOutcome::sed_write(
+            vec![TextRecord::Error {
+                label: TextErrorLabel::WriteFailed,
+                path: Some(path.clone()),
+                reason: err.to_string(),
+            }],
+            0,
+            false,
+            0,
+            1,
+            true,
+        ),
+    }
+}
+
+/// Apply the validated substitution to decoded line text and return the new
+/// decoded body. Line endings inside `text` are preserved character-by-
+/// character because we walk lines via `split_inclusive('\n')`, which keeps
+/// the per-line terminator (LF or CRLF) attached. The trailing-newline
+/// presence is preserved by the same iteration: if the source body had no
+/// terminator after the last line, neither does the output.
+fn apply_sed_substitution(
+    text: &str,
+    matcher: &Regex,
+    substitution: &SedSubstitution,
+    range: LineRange,
+) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (index, line_with_term) in text.split_inclusive('\n').enumerate() {
+        let line_number = index + 1;
+        if !range.contains(line_number) {
+            out.push_str(line_with_term);
+            continue;
+        }
+        // Separate the line text from its terminator so the matcher operates
+        // on decoded content without seeing `\n` or `\r\n` sequences.
+        let (line_text, term) = split_line_terminator(line_with_term);
+
+        let mut rewritten = String::with_capacity(line_text.len());
+        let mut last_end = 0usize;
+        for found in matcher.find_iter(line_text) {
+            rewritten.push_str(&line_text[last_end..found.start()]);
+            if substitution.fixed {
+                rewritten.push_str(&substitution.replacement);
+            } else {
+                let caps = matcher
+                    .captures(&line_text[found.start()..])
+                    .expect("captures must match a slice that already matched");
+                caps.expand(&substitution.replacement, &mut rewritten);
+            }
+            last_end = found.end();
+            if !substitution.global {
+                break;
+            }
+        }
+        rewritten.push_str(&line_text[last_end..]);
+        out.push_str(&rewritten);
+        out.push_str(term);
+    }
+    out
+}
+
+fn split_line_terminator(line: &str) -> (&str, &str) {
+    if let Some(stripped) = line.strip_suffix("\r\n") {
+        (stripped, "\r\n")
+    } else if let Some(stripped) = line.strip_suffix('\n') {
+        (stripped, "\n")
+    } else {
+        (line, "")
+    }
+}
+
 /// Compose pattern/replacement/flags from the supported channels:
 ///   * `--regex P --replace R` argv form
 ///   * `--fixed OLD NEW` argv form
@@ -923,25 +1237,26 @@ fn run_sed(args: SedArgs) -> Result<TextCommandResult> {
 /// so e.g. `--ignore-case` plus `s/foo/bar/g` is equivalent to `s/foo/bar/gi`.
 fn resolve_sed_substitution(
     args: &SedArgs,
+    operation: TextOperationKind,
 ) -> std::result::Result<SedSubstitution, TextCommandResult> {
     let mut chosen: Option<SedSubstitution> = None;
 
     if let Some(regex) = args.regex.as_ref() {
         let replacement = match (args.replace.as_ref(), args.replacement_file.as_ref()) {
             (Some(replace), None) => replace.clone(),
-            (None, Some(path)) => read_payload_file(path, "replacement-file")?,
+            (None, Some(path)) => read_payload_file(path, "replacement-file", operation)?,
             (None, None) => {
                 return Err(render_text_error_result(
                     TextErrorLabel::InvalidInput,
                     "--regex requires --replace or --replacement-file",
-                    TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                    TextExitClassificationInput::invalid_input(operation),
                 ));
             }
             (Some(_), Some(_)) => {
                 return Err(render_text_error_result(
                     TextErrorLabel::InvalidInput,
                     "--replace and --replacement-file conflict",
-                    TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                    TextExitClassificationInput::invalid_input(operation),
                 ));
             }
         };
@@ -959,14 +1274,14 @@ fn resolve_sed_substitution(
             return Err(render_text_error_result(
                 TextErrorLabel::InvalidInput,
                 "--fixed conflicts with other payload channels",
-                TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                TextExitClassificationInput::invalid_input(operation),
             ));
         }
         if args.fixed.len() != 2 {
             return Err(render_text_error_result(
                 TextErrorLabel::InvalidInput,
                 "--fixed requires exactly OLD and NEW",
-                TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                TextExitClassificationInput::invalid_input(operation),
             ));
         }
         chosen = Some(SedSubstitution {
@@ -983,25 +1298,25 @@ fn resolve_sed_substitution(
             return Err(render_text_error_result(
                 TextErrorLabel::InvalidInput,
                 "--pattern-file conflicts with other payload channels",
-                TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                TextExitClassificationInput::invalid_input(operation),
             ));
         }
-        let pattern = read_payload_file(path, "pattern-file")?;
+        let pattern = read_payload_file(path, "pattern-file", operation)?;
         let replacement = match (args.replace.as_ref(), args.replacement_file.as_ref()) {
             (Some(replace), None) => replace.clone(),
-            (None, Some(path)) => read_payload_file(path, "replacement-file")?,
+            (None, Some(path)) => read_payload_file(path, "replacement-file", operation)?,
             (None, None) => {
                 return Err(render_text_error_result(
                     TextErrorLabel::InvalidInput,
                     "--pattern-file requires --replace or --replacement-file",
-                    TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                    TextExitClassificationInput::invalid_input(operation),
                 ));
             }
             (Some(_), Some(_)) => {
                 return Err(render_text_error_result(
                     TextErrorLabel::InvalidInput,
                     "--replace and --replacement-file conflict",
-                    TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                    TextExitClassificationInput::invalid_input(operation),
                 ));
             }
         };
@@ -1019,7 +1334,7 @@ fn resolve_sed_substitution(
             return Err(render_text_error_result(
                 TextErrorLabel::InvalidInput,
                 "sed expression conflicts with explicit payload flags",
-                TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                TextExitClassificationInput::invalid_input(operation),
             ));
         }
         match parse_sed_expression(expression) {
@@ -1030,7 +1345,7 @@ fn resolve_sed_substitution(
                 return Err(render_text_error_result(
                     TextErrorLabel::InvalidExpression,
                     &reason,
-                    TextExitClassificationInput::invalid_expression(TextOperationKind::SedPreview),
+                    TextExitClassificationInput::invalid_expression(operation),
                 ));
             }
         }
@@ -1040,7 +1355,7 @@ fn resolve_sed_substitution(
         render_text_error_result(
             TextErrorLabel::InvalidExpression,
             "missing expression",
-            TextExitClassificationInput::invalid_expression(TextOperationKind::SedPreview),
+            TextExitClassificationInput::invalid_expression(operation),
         )
     })?;
 
@@ -1099,8 +1414,9 @@ fn resolve_text_payload_file(
 fn read_payload_file(
     path: &std::path::Path,
     field: &str,
+    operation: TextOperationKind,
 ) -> std::result::Result<String, TextCommandResult> {
-    resolve_text_payload_file(path, field, TextOperationKind::SedPreview)
+    resolve_text_payload_file(path, field, operation)
 }
 
 /// Parse `s<delim>pattern<delim>replacement<delim>flags`.
@@ -1193,7 +1509,10 @@ fn parse_sed_expression(expression: &str) -> std::result::Result<SedSubstitution
     })
 }
 
-fn parse_line_range(raw: Option<&str>) -> std::result::Result<LineRange, TextCommandResult> {
+fn parse_line_range(
+    raw: Option<&str>,
+    operation: TextOperationKind,
+) -> std::result::Result<LineRange, TextCommandResult> {
     let Some(raw) = raw else {
         return Ok(LineRange::default());
     };
@@ -1201,7 +1520,7 @@ fn parse_line_range(raw: Option<&str>) -> std::result::Result<LineRange, TextCom
         render_text_error_result(
             TextErrorLabel::InvalidInput,
             "--line must be START:END (either endpoint may be empty)",
-            TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+            TextExitClassificationInput::invalid_input(operation),
         )
     })?;
     let parse_endpoint =
@@ -1213,13 +1532,13 @@ fn parse_line_range(raw: Option<&str>) -> std::result::Result<LineRange, TextCom
                 Ok(0) => Err(render_text_error_result(
                     TextErrorLabel::InvalidInput,
                     &format!("--line {label} must be one-based"),
-                    TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                    TextExitClassificationInput::invalid_input(operation),
                 )),
                 Ok(value) => Ok(Some(value)),
                 Err(_) => Err(render_text_error_result(
                     TextErrorLabel::InvalidInput,
                     &format!("--line {label} must be a non-negative integer"),
-                    TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                    TextExitClassificationInput::invalid_input(operation),
                 )),
             }
         };
@@ -1230,7 +1549,7 @@ fn parse_line_range(raw: Option<&str>) -> std::result::Result<LineRange, TextCom
             return Err(render_text_error_result(
                 TextErrorLabel::InvalidInput,
                 "--line end is before start",
-                TextExitClassificationInput::invalid_input(TextOperationKind::SedPreview),
+                TextExitClassificationInput::invalid_input(operation),
             ));
         }
     }
@@ -1351,18 +1670,6 @@ fn sed_preview_records(
     }
 
     (records, total_replacements)
-}
-
-/// Stable, short hex hash of the normalized display path. Mirrors the FNV-1a
-/// shape used by `agent_fs::text_ops::stable_content_hash` but keeps record
-/// IDs short (16 hex chars) for human readability in CLI output.
-fn relative_path_hash(path: &str) -> String {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in path.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:016x}")
 }
 
 fn push_file_diagnostic(

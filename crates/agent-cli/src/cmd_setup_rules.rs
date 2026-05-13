@@ -40,7 +40,7 @@ from this CLI on every run of `agent-tools setup rules` — edit the source, not
 const CODE_EXPLORATION_SECTION: &str = r#"
 ### Code Exploration (token-efficient)
 
-Prefer symbol-aware tools over raw file reads or shell text search.
+- Prefer symbol-aware tools before raw file reads or shell text search.
 
 ```bash
 agent-tools tree [path] --depth <n>            # directory tree
@@ -55,8 +55,8 @@ agent-tools index --rebuild                    # refresh after large changes
 const COMMS_SECTION: &str = r#"
 ### Comms (gateway-backed messaging)
 
-Project ident auto-derives from the cwd git remote; agent id is machine-
-persistent. Do NOT use the MCP comms tools — they are deprecated.
+- Project ident auto-derives from cwd; agent id is machine-persistent.
+- Do NOT use deprecated MCP comms tools.
 
 ```bash
 agent-tools comms recv                   # fetch unread (start of session)
@@ -71,9 +71,8 @@ agent-tools comms whoami                 # show derived ident + agent-id
 const TASKS_SECTION: &str = r#"
 ### Tasks (gateway-backed per-project board)
 
-Use this as your TODO surface when the gateway is configured. For complex tasks
-include a `--specification` with enough handoff context for a fresh agent to
-resume; specifications survive crashes that local plan files do not.
+- Use this as your TODO surface when the gateway is configured.
+- For complex tasks, add `--specification` handoff context.
 
 ```bash
 agent-tools tasks list                   # TODO + IN PROGRESS for this project
@@ -91,9 +90,9 @@ agent-tools tasks rank <id> <n>          # set ordering within a column
 const DOCS_SECTION: &str = r#"
 ### API Context Docs (gateway-backed)
 
-Agent-first context for API intent, workflows, auth, safety, schemas, and
-copyable examples. Look up existing context before searching code for API
-behavior; after materially changing API files, publish updated context.
+- Before code search or API work, look up existing API context.
+- If docs are missing, propose `.agent/api/<app>.yaml`.
+- After material API file changes, publish context and track the publish step.
 
 ```bash
 agent-tools docs search "<api-or-workflow>"
@@ -103,17 +102,13 @@ agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL]
 agent-tools docs validate --file .agent/api/<app>.yaml
 agent-tools docs publish --file .agent/api/<app>.yaml
 ```
-
-If no docs exist for an app, propose adding `.agent/api/<app>.yaml` and track
-the `docs publish` step as a task subtask so it isn't skipped.
 "#;
 
 const PATTERNS_SECTION: &str = r#"
 ### Patterns (gateway-backed global guidance)
 
-Durable organization-wide implementation guidance. At the start of work that
-may involve established practice, search latest active patterns; if
-`$PWD/.patterns` exists, run `agent-tools patterns check` before relying on it.
+- Search latest active patterns before established-practice work.
+- If `$PWD/.patterns` exists, run `agent-tools patterns check` first.
 
 ```bash
 agent-tools patterns search "<query>" --version latest --state active
@@ -124,15 +119,10 @@ agent-tools patterns check                       # validate $PWD/.patterns
 agent-tools patterns use <id-or-slug> --path src/main.rs
 ```
 
-`.patterns` is minimal repo metadata: gateway pattern ids as keys, optional
-file paths as values, no comments. When you use a pattern, ensure its id is
-listed there with relevant paths.
-
-When the user asks to iterate on a pattern, fetch its body and comments, edit
-a local markdown draft, then `patterns update --body-file <draft.md>` —
-preserve unrelated sections unless asked to change them. If you implement a
-net-new approach worth reusing and no pattern exists, propose drafting one
-with the user.
+- `.patterns`: gateway ids as keys, optional paths as values, no comments.
+- When using a pattern, record it with `patterns use`.
+- Pattern edits: fetch body + comments, update via draft, preserve unrelated text.
+- New reusable approach: search first; propose a draft if no pattern exists.
 "#;
 
 /// Entry point invoked from `main.rs` for `agent-tools setup rules`.
@@ -413,7 +403,7 @@ mod tests {
         assert!(b.contains("agent-tools comms recv"));
         assert!(b.contains("agent-tools tasks list"));
         assert!(b.contains("agent-tools docs search"));
-        assert!(b.contains("publish updated context"));
+        assert!(b.contains("publish context and track the publish step"));
         assert!(b.contains("agent-tools patterns check"));
         // Markers appear exactly once each — the body text never repeats them.
         assert_eq!(b.matches(OPEN_MARKER).count(), 1);

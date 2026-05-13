@@ -6,6 +6,7 @@ mod cmd_setup_perms;
 mod cmd_setup_rules;
 mod cmd_setup_skill;
 mod cmd_tasks;
+mod cmd_text;
 mod nudge;
 
 use anyhow::Result;
@@ -97,6 +98,137 @@ enum Commands {
     Summary {
         /// Directory to summarize (default: current directory)
         path: Option<PathBuf>,
+    },
+
+    /// Portable, deterministic text search
+    #[command(
+        after_help = "Detailed docs: docs/grep-sed.md\nStable contract: docs/grep-sed-contract.md"
+    )]
+    Grep {
+        /// Regex pattern to search for, unless --fixed is set
+        pattern: Option<String>,
+        /// Files or directories to search (default: current directory)
+        paths: Vec<PathBuf>,
+        /// Treat the pattern as a literal string
+        #[arg(long, conflicts_with = "regex")]
+        fixed: bool,
+        /// Treat the pattern as a Rust regex (default)
+        #[arg(long)]
+        regex: bool,
+        /// Read the pattern from a UTF-8 file
+        #[arg(long, value_name = "FILE", conflicts_with = "pattern")]
+        pattern_file: Option<PathBuf>,
+        /// Case-insensitive matching
+        #[arg(short = 'i', long)]
+        ignore_case: bool,
+        /// Include only paths matching this glob-like pattern; repeatable
+        #[arg(long = "include", value_name = "GLOB")]
+        include_globs: Vec<String>,
+        /// Exclude paths matching this glob-like pattern; repeatable
+        #[arg(long = "exclude", value_name = "GLOB")]
+        exclude_globs: Vec<String>,
+        /// Include paths matching this glob-like pattern; repeatable
+        #[arg(long = "glob", value_name = "GLOB")]
+        glob_globs: Vec<String>,
+        /// Show this many lines of leading and trailing context
+        #[arg(short = 'C', long, default_value_t = 0)]
+        context: usize,
+        /// Show this many lines of leading context
+        #[arg(short = 'B', long = "before-context")]
+        before_context: Option<usize>,
+        /// Show this many lines of trailing context
+        #[arg(short = 'A', long = "after-context")]
+        after_context: Option<usize>,
+        /// Print per-file match counts instead of match records
+        #[arg(short = 'c', long = "count")]
+        count_only: bool,
+        /// Print only files with at least one match
+        #[arg(short = 'l', long = "files-with-matches")]
+        files_with_matches: bool,
+        /// Print only files without a match
+        #[arg(short = 'L', long = "files-without-match")]
+        files_without_match: bool,
+        /// Alias for --files-with-matches with path-match records
+        #[arg(long = "paths-only")]
+        paths_only: bool,
+        /// Emit NUL-delimited raw paths for path-family modes
+        #[arg(short = '0', long = "null")]
+        null: bool,
+        /// Maximum output records before a resume hint is emitted
+        #[arg(long, default_value_t = 1000)]
+        limit: usize,
+        /// Skip this many output records before rendering
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
+        /// Deferred v1 feature: null-delimited input path lists
+        #[arg(long = "files0-from", value_name = "FILE")]
+        files0_from: Option<PathBuf>,
+        /// Deferred v1 feature: stdin-sourced pattern payloads
+        #[arg(long = "pattern-stdin")]
+        pattern_stdin: bool,
+    },
+
+    /// Portable, deterministic stream-editor preview/rewrite
+    #[command(
+        after_help = "Detailed docs: docs/grep-sed.md\nStable contract: docs/grep-sed-contract.md"
+    )]
+    Sed {
+        /// Sed-like substitution expression, e.g. `s/foo/bar/g`. Mutually exclusive with --regex/--fixed.
+        expression: Option<String>,
+        /// Files or directories to operate on (default: current directory)
+        paths: Vec<PathBuf>,
+        /// Provide pattern and replacement explicitly via argv (regex mode)
+        #[arg(long, value_name = "PATTERN", allow_hyphen_values = true)]
+        regex: Option<String>,
+        /// Regex replacement, expanded with Rust `regex::Captures::expand`
+        #[arg(long, value_name = "REPLACEMENT", allow_hyphen_values = true)]
+        replace: Option<String>,
+        /// Provide a fixed (literal) old payload via argv. Pairs with the next positional as the new payload.
+        #[arg(long = "fixed", num_args = 2, value_names = ["OLD", "NEW"], allow_hyphen_values = true)]
+        fixed: Vec<String>,
+        /// Read the pattern from a UTF-8 file
+        #[arg(long, value_name = "FILE")]
+        pattern_file: Option<PathBuf>,
+        /// Read the replacement from a UTF-8 file
+        #[arg(long, value_name = "FILE", conflicts_with = "replace")]
+        replacement_file: Option<PathBuf>,
+        /// Case-insensitive matching (mirrors the sed-like `i` flag)
+        #[arg(short = 'i', long)]
+        ignore_case: bool,
+        /// Replace all non-overlapping matches per line (mirrors the sed-like `g` flag)
+        #[arg(short = 'g', long)]
+        global: bool,
+        /// Include only paths matching this glob-like pattern; repeatable
+        #[arg(long = "include", value_name = "GLOB")]
+        include_globs: Vec<String>,
+        /// Exclude paths matching this glob-like pattern; repeatable
+        #[arg(long = "exclude", value_name = "GLOB")]
+        exclude_globs: Vec<String>,
+        /// Include paths matching this glob-like pattern; repeatable
+        #[arg(long = "glob", value_name = "GLOB")]
+        glob_globs: Vec<String>,
+        /// Inclusive 1-based line range per file, e.g. `--line 20:60`, `--line 20:`, `--line :60`
+        #[arg(long = "line", value_name = "START:END")]
+        line: Option<String>,
+        /// Default preview mode (this is the default; the flag exists for clarity)
+        #[arg(long, conflicts_with = "write")]
+        preview: bool,
+        /// Apply the substitution by rewriting files in place using per-file
+        /// atomic temp+rename with drift detection. See docs/grep-sed-contract.md.
+        #[arg(long, conflicts_with = "preview")]
+        write: bool,
+        /// Maximum output records before a resume hint is emitted
+        #[arg(long, default_value_t = 1000)]
+        limit: usize,
+        /// Skip this many output records before rendering
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
+        /// Deferred v1 feature: stdin-sourced pattern payloads
+        #[arg(long = "pattern-stdin")]
+        pattern_stdin: bool,
+        /// Deferred v1 feature: stdin-sourced replacement payloads
+        #[arg(long = "replacement-stdin")]
+        replacement_stdin: bool,
     },
 
     /// Copy a file or directory
@@ -299,6 +431,110 @@ fn main() -> Result<()> {
         Commands::Index { path, rebuild } => cmd_index(path, rebuild),
 
         Commands::Summary { path } => cmd_summary(path),
+
+        Commands::Grep {
+            pattern,
+            paths,
+            fixed,
+            regex,
+            pattern_file,
+            ignore_case,
+            include_globs,
+            exclude_globs,
+            glob_globs,
+            context,
+            before_context,
+            after_context,
+            count_only,
+            files_with_matches,
+            files_without_match,
+            paths_only,
+            null,
+            limit,
+            skip,
+            files0_from,
+            pattern_stdin,
+        } => cmd_text::cmd_grep(cmd_text::GrepArgs {
+            pattern,
+            paths,
+            fixed,
+            regex,
+            pattern_file,
+            ignore_case,
+            include_globs,
+            exclude_globs,
+            glob_globs,
+            context,
+            before_context,
+            after_context,
+            count_only,
+            files_with_matches,
+            files_without_match,
+            paths_only,
+            null,
+            limit,
+            skip,
+            files0_from,
+            pattern_stdin,
+        }),
+
+        Commands::Sed {
+            expression,
+            mut paths,
+            regex,
+            replace,
+            fixed,
+            pattern_file,
+            replacement_file,
+            ignore_case,
+            global,
+            include_globs,
+            exclude_globs,
+            glob_globs,
+            line,
+            preview,
+            write,
+            limit,
+            skip,
+            pattern_stdin,
+            replacement_stdin,
+        } => {
+            // `expression` is a positional; if an explicit payload channel is
+            // active (--fixed/--regex/--pattern-file/--pattern-stdin), the
+            // first non-flag operand is really a path, not an expression.
+            // Restore it to the front of `paths` before dispatch.
+            let explicit_payload =
+                !fixed.is_empty() || regex.is_some() || pattern_file.is_some() || pattern_stdin;
+            let expression = if explicit_payload {
+                if let Some(value) = expression.clone() {
+                    paths.insert(0, PathBuf::from(value));
+                }
+                None
+            } else {
+                expression
+            };
+            cmd_text::cmd_sed(cmd_text::SedArgs {
+                expression,
+                paths,
+                regex,
+                replace,
+                fixed,
+                pattern_file,
+                replacement_file,
+                ignore_case,
+                global,
+                include_globs,
+                exclude_globs,
+                glob_globs,
+                line,
+                preview,
+                write,
+                limit,
+                skip,
+                pattern_stdin,
+                replacement_stdin,
+            })
+        }
 
         Commands::Cp { src, dst } => {
             agent_fs::ops::copy(&src, &dst)?;

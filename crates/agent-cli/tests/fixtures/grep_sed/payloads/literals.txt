@@ -1,0 +1,6 @@
+-leading-dash payload
+s/foo/bar/g literal expression
+a+b.$ literal metacharacters
+price=$42
+C:\temp\cache
+old token

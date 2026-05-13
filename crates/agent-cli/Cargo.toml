@@ -22,3 +22,4 @@ serde = { workspace = true }
 tokio = { workspace = true }
 time = { workspace = true }
 gethostname = { workspace = true }
+regex = { workspace = true }

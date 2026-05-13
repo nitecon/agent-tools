@@ -4,7 +4,13 @@ mod path;
 pub mod storage;
 
 pub use error::ToolError;
-pub use output::{OutputFormat, OutputFormatter};
+pub use output::{
+    classify_text_exit_code, render_null_path_records, render_text_records, render_text_result,
+    GrepContextKind, OutputFormat, OutputFormatter, ReplacementRecordId, TextErrorLabel,
+    TextExitClassificationInput, TextExitCode, TextOperationKind, TextOperationResult, TextPath,
+    TextRecord, TextRenderOptions, TextResumeToken, TextSummaryCounters, TextWarningLabel,
+    TraversalWarningLabel,
+};
 pub use path::normalize_path;
 pub use storage::{hash_project_ident, project_data_dir, project_ident, project_ident_from_cwd};
 

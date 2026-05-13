@@ -1,0 +1,412 @@
+spec_version: 1
+source_doc: ../Grep_Sed.md
+generated_at: 2026-05-12T17:35:56Z
+generated_from_revision: 6c3c25b
+metadata:
+  title: "Portable Grep And Sed For Agent Tools"
+  scope: "Add portable, predictable grep and sed command surfaces for agent-facing text search, preview, and rewrite workflows."
+phases:
+  - id: phase-0
+    name: "Phase 0 - Contract And Conformance Matrix"
+    description: "Settle shared semantics before implementation so grep and sed do not diverge."
+    tasks:
+      - id: T001
+        team: docs
+        title: "Write the shared grep/sed command contract"
+        depends_on: []
+        spec_file: docs/T001-shared-command-contract.md
+        acceptance_criteria:
+          - "A shared contract document exists and covers command-state defaults for no path, explicit paths, directories, explicit stdin markers, sed preview, and sed write."
+          - "The contract names the default traversal profile and records any intentional difference from current tree/search/symbol traversal behavior."
+          - "The contract defines regex default mode, fixed-string mode, replacement grammar, text model, encoding model, binary handling, output record families, warning labels, truncation/resume hints, mutation behavior, and exit-code classes."
+          - "The contract includes argv payload cases for leading dashes, delimiter-like text, dollars, backslashes, empty replacements, and newlines."
+          - "The contract defines exact grep and sed exit-code semantics for success with records, success with no records, invalid input, warnings/skips, and partial traversal failures."
+        touch_surface:
+          - docs/grep-sed-contract.md
+        gateway_task_id: 019e1db0-6ca3-7d11-b4fb-8418e13c6fa9
+        status: done
+        notes: |
+          This is the gating task. Implementation tasks depend on it so the command surface stays deterministic across platforms and shells.
+      - id: T002
+        team: qa
+        title: "Create conformance matrix and fixture plan"
+        depends_on: [T001]
+        spec_file: qa/T002-conformance-matrix.md
+        acceptance_criteria:
+          - "A conformance matrix lists representative grep and sed rows across command mode, input source, traversal profile, text model, dialect, output family, warning labels, mutation behavior, and exit-code class."
+          - "Each automated row includes command argv, fixture inputs, exact process status, stdout/stderr record shape or golden output, warning labels, and whether comparison is byte-exact or normalized."
+          - "Fixtures cover Linux, macOS, and Windows path handling concerns including CRLF, BOM, invalid UTF-8, binary prefiltering, hidden files, ignored files, symlinks or reparse points, and deterministic path ordering."
+          - "The matrix includes quote-resistant argv payload examples for patterns and replacements that begin with dashes or contain delimiter-like text, dollars, backslashes, empty replacements, and newlines."
+          - "The matrix maps every row to either an automated test target or a documented manual/platform validation target and names the platform validation artifact or CI target that will close manual rows."
+        touch_surface:
+          - docs/grep-sed-conformance.md
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+          - crates/agent-cli/tests/fixtures/grep_sed/
+        gateway_task_id: 019e1db4-a46b-7080-8a0f-66c32bf6322f
+        status: done
+      - id: T010
+        team: qa
+        title: "Consolidate conformance row and fixture audits"
+        depends_on: [T002]
+        spec_file: qa/T010-conformance-audit-consolidation.md
+        acceptance_criteria:
+          - "The conformance scaffold treats docs/grep-sed-conformance.md as the source of truth for row IDs by parsing automated, platform, and deferred sections instead of maintaining a second full row inventory in Rust."
+          - "The fixture audit parses the Fixture Inventory table and verifies every non-generated and non-planned fixture exists, while generated or planned fixtures are explicitly exempted by classification."
+          - "The audit cross-checks row fixture cells against inventory row mappings so row-to-fixture drift, including the GS-A001 ignored/kept.txt ambiguity, fails tests."
+          - "GS-A001 fixture semantics are made unambiguous by either including ignored/kept.txt in its expected scope or documenting/testing an isolated workspace that excludes it."
+          - "GS-P004 platform/path-order status is made explicit as generated/planned or is backed by exact seed filenames that are audited."
+        touch_surface:
+          - docs/grep-sed-conformance.md
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+          - crates/agent-cli/tests/fixtures/grep_sed/
+        gateway_task_id: 019e1dea-2784-7821-a637-2cee746f32e1
+        status: done
+  - id: phase-1
+    name: "Phase 1 - Shared Text Operations Core"
+    description: "Build reusable traversal, decoding, matching, and output primitives consumed by grep and sed."
+    tasks:
+      - id: T003
+        team: backend
+        title: "Implement shared text traversal and classification layer"
+        depends_on: [T001, T002, T010]
+        spec_file: backend/T003-shared-text-layer.md
+        acceptance_criteria:
+          - "A shared internal layer resolves file targets using the documented traversal profile, deterministic ordering, include/exclude filters, hidden/ignored file rules, symlink/reparse behavior, and binary prefiltering."
+          - "The layer exposes file classification for text, binary, invalid encoding, skipped, and errored files using stable warning labels from the contract."
+          - "The layer preserves enough file metadata and content identity for later sed write preflight checks."
+          - "Unit tests cover no-path current-directory scope, explicit file paths, directories, stdin marker behavior where supported, include/exclude precedence, invalid encoding, and binary detection."
+        touch_surface:
+          - crates/agent-cli/src/main.rs
+          - crates/agent-fs/src/text_ops.rs
+          - crates/agent-fs/src/lib.rs
+          - crates/agent-fs/Cargo.toml
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+        gateway_task_id: 019e1db4-a465-79a0-a7b7-3c6986cdda4d
+        status: done
+      - id: T004
+        team: backend
+        title: "Implement shared grep/sed output and exit-code renderer"
+        depends_on: [T001, T002, T010]
+        spec_file: backend/T004-output-exit-renderer.md
+        acceptance_criteria:
+          - "A shared renderer emits compact deterministic plain-text records for grep matches, grep context, count mode, files-with-matches mode, sed previews, write summaries, warnings, skips, truncation, and resume hints."
+          - "Exit codes match the T001 contract for grep match/no-match/error and sed preview changed/no-op/write changed/write no-op/invalid expression/invalid path/warning-only/partial traversal failure cases."
+          - "Bounded output truncates at deterministic record boundaries and prints stable resume hints."
+          - "Tests assert exact output grammar and exit codes for representative success, no-result, warning-only, invalid input, and partial traversal cases."
+        touch_surface:
+          - crates/agent-core/src/output.rs
+          - crates/agent-cli/src/main.rs
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+        gateway_task_id: 019e1db4-a46d-74a3-b6bb-4fa46ea5c429
+        status: done
+      - id: T011
+        team: backend
+        title: "Unify grep/sed warning label model across traversal diagnostics and renderer records"
+        depends_on: [T003, T004]
+        spec_file: backend/T011-unify-warning-labels.md
+        acceptance_criteria:
+          - "A single contract-owned warning label type, or a deliberately narrow wrapper with exhaustive conversion, defines binary-skipped, invalid-utf8, unsupported-encoding, path-skipped, and traversal-error."
+          - "agent-fs traversal diagnostics no longer own a duplicate label string table that can drift from agent-core renderer labels."
+          - "Conformance coverage proves a traversal diagnostic can be converted or rendered as the contracted skip/warning output without command-specific label mapping."
+          - "T005 and T006 implementation notes or task comments point command wiring at the unified label path."
+        touch_surface:
+          - crates/agent-core/src/output.rs
+          - crates/agent-core/src/lib.rs
+          - crates/agent-fs/src/text_ops.rs
+          - crates/agent-fs/src/lib.rs
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+        gateway_task_id: 019e1ea1-1bac-7042-910c-d16dc37dc212
+        status: done
+      - id: T012
+        team: qa
+        title: "Parse grep/sed expected statuses from the conformance matrix"
+        depends_on: [T004, T010]
+        spec_file: qa/T012-conformance-status-source-of-truth.md
+        acceptance_criteria:
+          - "The conformance parser extracts Expected status values from automated rows and exposes them to executable status assertions."
+          - "grep_sed_exit_status_rows_share_t002_row_ids no longer duplicates row-id to status literals that are already present in docs/grep-sed-conformance.md."
+          - "Unsupported, deferred, or platform-only rows are either skipped with an explicit reason or audited separately without weakening automated status checks."
+          - "Changing a status value in docs/grep-sed-conformance.md without updating the executable scenario mapping produces a targeted test failure."
+        touch_surface:
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+          - docs/grep-sed-conformance.md
+        gateway_task_id: 019e1ea1-2c39-7581-bdab-9e80ea5a2cb6
+        status: done
+  - id: phase-2
+    name: "Phase 2 - Grep And Sed Preview"
+    description: "Expose read-only search and rewrite preview commands on top of the shared core."
+    tasks:
+      - id: T005
+        team: backend
+        title: "Add agent-tools grep command"
+        depends_on: [T003, T004, T011, T012]
+        spec_file: backend/T005-grep-command.md
+        acceptance_criteria:
+          - "`agent-tools grep <pattern> [path ...]` supports regex-by-default search, `--fixed`, `--ignore-case`, recursive directory search, include/exclude globs, before/after context, count-only, files-with-matches, and machine-safe path output semantics per the contract."
+          - "Default output includes path, line number, and matching line in deterministic order, with bounded output and resume hints for large result sets."
+          - "Binary, invalid-encoding, hidden, ignored, symlink/reparse, and traversal-error cases produce the stable labels and exit codes defined by T001."
+          - "Tests cover explicit files, directories, no-path current-directory scope, regex/fixed matching, context, count/files modes, include/exclude filters, and null-delimited or machine-safe output variants included in v1."
+        touch_surface:
+          - crates/agent-cli/src/main.rs
+          - crates/agent-fs/src/text_ops.rs
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+          - crates/agent-cli/Cargo.toml
+          - crates/agent-fs/Cargo.toml
+          - Cargo.toml
+        gateway_task_id: 019e1db4-a468-7061-9d64-544b3d243695
+        status: done
+      - id: T013
+        team: backend
+        title: "Extract shared grep/sed text command engine before sed preview/write"
+        depends_on: [T005]
+        spec_file: backend/T013-shared-text-command-engine.md
+        acceptance_criteria:
+          - "Grep keeps existing T005 conformance output and exit codes."
+          - "CLI main keeps parsing/dispatch only for grep/sed shared text behavior."
+          - "Shared code owns pattern-source validation hooks for inline, pattern-file, and stdin-deferred modes."
+          - "Shared code builds regex/default/fixed/ignore-case matchers."
+          - "Shared code constructs TextTargetOptions from include/exclude/glob/path operands."
+          - "Shared code handles per-file match iteration, TextFile diagnostic to TextRecord/counter promotion, summary insertion, null path result selection, and TextExitClassificationInput assembly."
+          - "T006 and T007 can consume the shared engine without copying run_grep-style matcher or diagnostic logic."
+        touch_surface:
+          - crates/agent-cli/src/main.rs
+          - crates/agent-cli/src/cmd_text.rs
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+          - Cargo.toml
+          - Cargo.lock
+          - crates/agent-cli/Cargo.toml
+          - crates/agent-fs/src/text_ops.rs
+        gateway_task_id: 019e1ef1-5480-79e1-8944-db3e89dec267
+        status: done
+      - id: T015
+        team: backend
+        title: "Generalize cmd_text operation context and finalization before sed preview"
+        depends_on: [T013]
+        spec_file: backend/T015-generalize-cmd-text-engine.md
+        acceptance_criteria:
+          - "Grep conformance output and exit codes remain unchanged."
+          - "Shared traversal invokes operation callbacks with a TextCommandContext that includes TextPath plus the TextFile metadata needed by preview IDs and write preflight, with a clear stdin variant if applicable."
+          - "Operation callbacks return structured TextCommandOutcome values carrying records, matched files, changed files, replacement counts, no-op state, diagnostics, and operation kind as applicable."
+          - "Shared finalization handles summary insertion, truncation flagging, render/null-path selection where applicable, warning/error propagation, partial traversal state, and TextExitClassificationInput construction for grep, sed preview, and sed write."
+          - "T006 can implement sed preview without a second collect_text_files loop or duplicated run_grep finalization."
+          - "T007 can reuse the same per-file context for snapshot/hash/identity/preservation preflight without recomputing traversal state."
+        touch_surface:
+          - crates/agent-cli/src/cmd_text.rs
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+          - docs/Grep_Sed_spec/backend/T006-sed-preview.md
+          - docs/Grep_Sed_spec/backend/T007-sed-write.md
+        gateway_task_id: 019e1f14-3968-7c13-b801-0ec5305ac67e
+        status: done
+      - id: T006
+        team: backend
+        title: "Add agent-tools sed preview command"
+        depends_on: [T003, T004, T005, T013, T015]
+        spec_file: backend/T006-sed-preview.md
+        acceptance_criteria:
+          - "`agent-tools sed` supports the contracted substitution grammar plus canonical argv-native `--regex <pattern> --replace <replacement>` and `--fixed <old> <new>` forms."
+          - "Preview mode is the default for multi-file edits and can be requested explicitly with `--preview`; no files are mutated by this task."
+          - "Regex replacement uses the documented Rust replacement expansion contract, fixed replacements are byte-literal within the supported text model, and unsupported constructs produce stable diagnostics."
+          - "Preview records include file, line, old text, new text, replacement count, and stable replacement record IDs with deterministic ordering and truncation/resume behavior."
+          - "Tests cover line ranges, global-per-line replacement, case-insensitive matching, unchanged files, binary/invalid-encoding skips, include/exclude filters, and argv payload edge cases."
+        touch_surface:
+          - crates/agent-cli/src/main.rs
+          - crates/agent-fs/src/text_ops.rs
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+          - crates/agent-cli/Cargo.toml
+          - crates/agent-fs/Cargo.toml
+          - Cargo.toml
+        gateway_task_id: 019e1db4-f7a8-71d0-a484-adfbba2cd397
+        status: done
+      - id: T006a
+        team: backend
+        title: "Consolidate cmd_grep/cmd_sed error-handling into shared run_text_command wrapper"
+        depends_on: [T006]
+        spec_file: backend/T006a-run-text-command-wrapper.md
+        acceptance_criteria:
+          - "A shared run_text_command<F>(operation, f) helper in crates/agent-cli/src/cmd_text.rs owns the success/error dispatch path currently duplicated in cmd_grep and cmd_sed."
+          - "On Ok(TextCommandResult) the helper writes stdout/stderr and exits with the result's classified exit code; on Err it renders via render_text_error_result and exits with classify_text_exit_code over TextExitClassificationInput::invalid_input(operation)."
+          - "The thin text_error_result() wrapper is removed; render_text_error_result remains the single error renderer."
+          - "cmd_grep and cmd_sed each shrink to a single-line invocation of run_text_command bound to their TextOperationKind variant."
+          - "grep_sed_conformance.rs passes unchanged with byte-identical stdout/stderr and exit codes for every existing automated row."
+        touch_surface:
+          - crates/agent-cli/src/cmd_text.rs
+        gateway_task_id: 019e1f38-5ba0-7cf0-9b14-7e0bcdc27d16
+        status: done
+        notes: |
+          DRY follow-up to T006. Consolidates DRY-RP-001 + DRY-SD-001 + DRY-RPSD-001
+          (both peer lenses converged, worth_it 4-5). Must land before T007 so sed --write
+          inherits the unified error funnel rather than cloning a third copy.
+      - id: T006b
+        team: backend
+        title: "Extract shared resolve_text_payload_file helper for pattern/replacement file I/O"
+        depends_on: [T006, T006a]
+        spec_file: backend/T006b-resolve-text-payload-file.md
+        acceptance_criteria:
+          - "A shared resolve_text_payload_file(path, field, operation) helper in crates/agent-cli/src/cmd_text.rs centralizes std::fs::read_to_string + error wrapping for all text-command payload file reads."
+          - "resolve_text_pattern() delegates its --pattern-file branch to the helper with field=pattern and operation=TextOperationKind::Grep."
+          - "read_payload_file() delegates --pattern-file and --replacement-file reads to the helper with operation=TextOperationKind::SedPreview and the appropriate field name."
+          - "Error messages and TextExitClassificationInput::invalid_input classification are byte-identical to current behavior for both grep and sed payload-file failure rows."
+          - "The helper is callable from T007 to back --replacement-file drift/preflight policy without further duplication."
+          - "grep_sed_conformance.rs passes unchanged."
+        touch_surface:
+          - crates/agent-cli/src/cmd_text.rs
+        gateway_task_id: 019e1f38-5bdc-7a43-a8aa-caaa8fa4695d
+        status: done
+        notes: |
+          DRY follow-up to T006. Consolidates DRY-SD-003 / DRY-CONV-003 (both peers
+          endorsed at Pass 2; explicit T007 prep). Must land before T007.
+          Commit: 29b6cd5. Helper signature: resolve_text_payload_file(&Path, &str, TextOperationKind) -> Result<String, TextCommandResult>.
+      - id: T006c
+        team: backend
+        title: "Centralize sed operation selection and structured fallback error rendering"
+        depends_on: [T006a, T006b]
+        spec_file: backend/T006c-sed-operation-and-fallback-errors.md
+        acceptance_criteria:
+          - "run_text_command no longer manually formats fallback invalid-input errors or stdout-write failures with ad hoc eprintln string assembly."
+          - "Wrapper-level fallback errors are converted into TextCommandResult output through render_text_error_result or one equivalent helper, preserving existing byte output and exit codes."
+          - "cmd_sed derives a sed execution mode or TextOperationKind from SedArgs before invoking run_text_command."
+          - "Preview and write wrapper-level failures use the same operation kind as inner sed validation/finalization."
+          - "Existing sed preview conformance rows remain byte-identical."
+          - "T007 can add --write without introducing new SedPreview literals for write-mode validation, traversal, finalization, or fallback error classification."
+        touch_surface:
+          - crates/agent-cli/src/cmd_text.rs
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+        gateway_task_id: 019e218e-d961-7921-a5ba-fcc4c4441a1b
+        status: done
+        notes: |
+          DRY follow-up to T006a. Pass 2 converged on one prerequisite before T007,
+          rather than folding operation selection and fallback rendering cleanup into
+          the larger sed write task.
+          Completed 2026-05-13: run_text_command fallback/stdout-write errors now
+          route through TextCommandResult rendering helpers, and cmd_sed resolves
+          TextOperationKind from SedArgs before invoking the shared wrapper.
+          Post-wave DRY check added no new manifest tasks. It folded two notes into
+          T007/T014: keep sed preview/write behavior cohesive through a small
+          execution-mode shape if needed, and centralize text error prefix-label
+          parsing when write/partial-failure paths expand.
+  - id: phase-3
+    name: "Phase 3 - Explicit Sed Writes"
+    description: "Add mutation only after preview semantics and write-safety contract are settled."
+    tasks:
+      - id: T007
+        team: backend
+        title: "Add agent-tools sed write mode"
+        depends_on: [T006, T006a, T006b, T006c, T013, T015]
+        spec_file: backend/T007-sed-write.md
+        acceptance_criteria:
+          - "`agent-tools sed ... --write` mutates only supported text files with actual changes and refuses or skips files according to the T001 write-safety contract."
+          - "Writes preserve line endings, trailing-newline presence, BOM behavior, permissions, and relevant metadata as defined by the contract."
+          - "The implementation performs per-file atomic writes, file identity checks, content hash or preflight drift checks, and stable drift/skip reporting."
+          - "Write summaries include changed files, replacement counts, skipped files by stable label, warnings, errors, and stable replacement record IDs or manifest references where supported."
+          - "Tests cover changed files, no-op writes, drift detection, partial failures, unchanged-file avoidance, metadata preservation where practical, and cross-platform newline/BOM behavior."
+        touch_surface:
+          - crates/agent-cli/src/main.rs
+          - crates/agent-fs/src/text_ops.rs
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+          - crates/agent-cli/Cargo.toml
+          - crates/agent-fs/Cargo.toml
+          - Cargo.toml
+        gateway_task_id: 019e1db4-f7a5-7503-944d-c1d58b17e090
+        status: done
+      - id: T007a
+        team: backend
+        title: "Consolidate hash + test-fixture helpers from T007 sed --write (DRY follow-up)"
+        depends_on: [T007]
+        spec_file: backend/T007a-dry-consolidation.md
+        acceptance_criteria:
+          - "stable_content_hash_local is removed from crates/agent-cli/src/cmd_text.rs and sed write drift checks call the single canonical agent_fs::text_ops::stable_content_hash."
+          - "relative_path_hash exists in exactly one place; crates/agent-cli/tests/grep_sed_conformance.rs imports it rather than re-declaring it."
+          - "A sed_write_fixture() helper exists in the conformance test file and is used by all T007 sed write rows; grep and sed preview fixtures remain unchanged."
+          - "cargo test -p agent-cli passes with byte-identical conformance output for every existing automated row."
+          - "cargo build --workspace is warning-free."
+        touch_surface:
+          - crates/agent-cli/src/cmd_text.rs
+          - crates/agent-fs/src/text_ops.rs
+          - crates/agent-fs/src/lib.rs
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+        gateway_task_id: 019e2228-9dfc-72d1-8cfd-cc19edee3104
+        status: done
+        notes: |
+          DRY follow-up to T007. Both DRY peer lenses (refactor-proposals + semantic-duplication)
+          converged at Pass 2 on three concrete consolidations: FNV-1a hash (CONV-001),
+          relative_path_hash (UNIQUE-DRY-002), and sed_write_fixture (UNIQUE-SEM-006).
+          Should land before T014 expands cross-command test surface to prevent further
+          drift in test fixture patterns.
+      - id: T014
+        team: qa
+        title: "Add cross-command conformance for shared text validation and warning paths"
+        depends_on: [T007a, T013, T006, T007]
+        spec_file: qa/T014-cross-command-conformance.md
+        acceptance_criteria:
+          - "Shared tests or table rows assert equivalent invalid-expression, invalid-input, invalid-path, mutually exclusive output mode, zero limit, warning-summary, and partial traversal classification behavior across grep, sed preview, and sed write where the command supports the mode."
+          - "Tests demonstrate reuse of the shared engine rather than independent command-local string matching."
+          - "Existing grep golden rows remain unchanged."
+          - "Sed preview/write rows use shared helpers rather than parallel command-specific assertions."
+          - "Coverage explicitly exercises invalid-input, invalid-path, write-failed, partial-traversal-failure, stdout/stderr rendering, and classification alignment so the T006c/T007 prefix-label parsing path cannot drift silently."
+        touch_surface:
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+        gateway_task_id: 019e1ef1-7643-7281-8d26-27a38846cbaa
+        status: done
+      - id: T014a
+        team: qa
+        title: "Consolidate duplicated legacy validation-warning conformance assertions"
+        depends_on: [T014]
+        spec_file: qa/T014a-consolidate-validation-warning-tests.md
+        acceptance_criteria:
+          - "Shared validation and warning rendering expectations have one primary assertion location."
+          - "Command-local grep/sed tests retain only unique command or row semantics."
+          - "Existing grep golden rows remain byte-identical."
+          - "cargo test -p agent-cli grep_sed passes."
+          - "cargo test -p agent-cli grep passes."
+        touch_surface:
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+        gateway_task_id: 019e22ad-8165-70e0-8ab5-ee9a74fa3b97
+        status: done
+        notes: |
+          DRY follow-up to T014. Both Pass 2 peer lenses endorsed a narrow cleanup:
+          T014's shared TextCliCase/ExpectedText rows are correct, but older
+          command-local grep/sed warning and invalid-input tests still duplicate
+          shared rendering/status assertions. This is low severity and should not
+          block T008 or T009.
+  - id: phase-4
+    name: "Phase 4 - Bulk Workflow Polish And Documentation"
+    description: "Document the user-facing surface and add non-core bulk workflow affordances after the portable core exists."
+    tasks:
+      - id: T008
+        team: backend
+        title: "Add optional safer bulk workflow affordances"
+        depends_on: [T007]
+        spec_file: backend/T008-bulk-workflows.md
+        acceptance_criteria:
+          - "Richer include/exclude workflows, null-delimited modes, or optional audit manifests are implemented only if T001/T002 mark them in scope for this milestone."
+          - "Any audit manifest or replay support uses stable record IDs, content hashes, and explicit failure labels from the contract."
+          - "New modes remain opt-in and do not change default grep, sed preview, or sed write behavior."
+          - "Tests cover each added workflow and prove existing output and exit-code contracts do not regress."
+        touch_surface:
+          - crates/agent-cli/src/main.rs
+          - crates/agent-fs/src/text_ops.rs
+          - crates/agent-cli/tests/grep_sed_conformance.rs
+          - README.md
+          - docs/grep-sed.md
+          - docs/grep-sed-contract.md
+          - docs/grep-sed-conformance.md
+        gateway_task_id: 019e1db4-f7d7-76d3-9cda-763ca572a885
+        status: done
+      - id: T009
+        team: docs
+        title: "Publish user-facing grep/sed documentation"
+        depends_on: [T005, T006, T007, T008]
+        spec_file: docs/T009-user-docs.md
+        acceptance_criteria:
+          - "User-facing docs describe grep and sed commands with argv-native examples first and sed-like expression examples only where their grammar is explicitly documented."
+          - "Docs include stable exit-code tables, output record examples, skip/warning labels, traversal rules, regex and replacement dialects, binary/encoding behavior, and write-safety behavior."
+          - "Examples cover Windows/macOS/Linux-safe commands and payloads containing leading dashes, delimiter-like text, dollars, backslashes, empty replacements, and newlines."
+          - "README or CLI help points users to the detailed contract without duplicating stale semantics."
+        touch_surface:
+          - README.md
+          - docs/grep-sed.md
+          - docs/grep-sed-contract.md
+          - docs/grep-sed-conformance.md
+          - crates/agent-cli/src/main.rs
+        gateway_task_id: 019e1db4-f7d5-7932-beb5-1693bcec411b
+        status: done

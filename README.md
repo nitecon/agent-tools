@@ -79,6 +79,8 @@ Commands:
   symbol    Extract a symbol's source code by name
   symbols   List all symbols in a file
   search    Search the project-wide symbol index
+  grep      Portable, deterministic text search
+  sed       Portable, deterministic stream-editor preview/rewrite
   index     Build or update the project index
   summary   Show a compact project summary
   doc       Markdown reading helpers (outline / section extraction)
@@ -122,6 +124,10 @@ agent-tools search handle --type fn
 # Search files by name
 agent-tools search config --type file
 
+# Portable text search and rewrite
+agent-tools grep needle src
+agent-tools sed --fixed old new src --preview
+
 # Project overview
 agent-tools summary
 
@@ -131,6 +137,11 @@ agent-tools doc outline docs/Architecture.md
 # Markdown — pull just one section by heading name (case-insensitive)
 agent-tools doc section docs/Architecture.md "Data Flow"
 ```
+
+Portable grep/sed user workflows are documented in
+[docs/grep-sed.md](docs/grep-sed.md). The stable behavior contract and test
+matrix live in [docs/grep-sed-contract.md](docs/grep-sed-contract.md) and
+[docs/grep-sed-conformance.md](docs/grep-sed-conformance.md).
 
 ### Communication tools (CLI)
 
