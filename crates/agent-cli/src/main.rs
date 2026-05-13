@@ -383,7 +383,25 @@ enum DocCommands {
     },
 }
 
+#[cfg(windows)]
 fn main() -> Result<()> {
+    let handle = std::thread::Builder::new()
+        .name("agent-tools-main".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(main_inner)?;
+
+    match handle.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+#[cfg(not(windows))]
+fn main() -> Result<()> {
+    main_inner()
+}
+
+fn main_inner() -> Result<()> {
     let cli = Cli::parse();
 
     // Auto-update check on every invocation (rate-limited, non-blocking for most calls)
