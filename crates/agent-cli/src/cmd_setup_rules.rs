@@ -41,6 +41,7 @@ const CODE_EXPLORATION_SECTION: &str = r#"
 ### Code Exploration (token-efficient)
 
 - Prefer symbol-aware tools before raw file reads or shell text search.
+- Use `agent-tools grep` and `agent-tools sed` when you need Linux-compatible grep/sed behavior without depending on the host environment.
 
 ```bash
 agent-tools tree [path] --depth <n>            # directory tree
@@ -400,6 +401,8 @@ mod tests {
         assert!(b.starts_with(OPEN_MARKER));
         assert!(b.trim_end().ends_with(CLOSE_MARKER));
         assert!(b.contains("agent-tools symbol"));
+        assert!(b.contains("agent-tools grep"));
+        assert!(b.contains("agent-tools sed"));
         assert!(b.contains("agent-tools comms recv"));
         assert!(b.contains("agent-tools tasks list"));
         assert!(b.contains("agent-tools docs search"));
@@ -416,6 +419,8 @@ mod tests {
         assert!(b.starts_with(OPEN_MARKER));
         assert!(b.trim_end().ends_with(CLOSE_MARKER));
         assert!(b.contains("agent-tools symbol"));
+        assert!(b.contains("agent-tools grep"));
+        assert!(b.contains("agent-tools sed"));
         assert!(!b.contains("agent-tools comms"));
         assert!(!b.contains("agent-tools tasks"));
         assert!(!b.contains("agent-tools docs"));

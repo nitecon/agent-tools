@@ -379,6 +379,7 @@ Prefer symbol-level tools over raw file reads whenever possible.
 - **Discovery**: Use `tree` to understand structure; `summary` for the "big picture."
 - **Analysis**: Use `symbols` to list a file's API; `symbol` to read specific implementation.
 - **Search**: Use `search` (symbol-index) instead of `grep` (raw text) whenever possible.
+- **Portable text tools**: Use `agent-tools grep` and `agent-tools sed` when you need Linux-compatible grep/sed behavior without depending on the host environment.
 - **Docs**: Use `doc outline` to scan a markdown file's headings, then `doc section "<heading>"` to read just the relevant part — never `cat` a long doc.
 
 ### CLI Commands (run via Bash):
@@ -520,6 +521,7 @@ Prefer symbol-level tools over raw file reads whenever possible.
 - **Discovery**: Use `tree` to understand structure; `summary` for the "big picture."
 - **Analysis**: Use `symbols` to list a file's API; `symbol` to read specific implementation.
 - **Search**: Use `search` (symbol-index) instead of `grep` (raw text) whenever possible.
+- **Portable text tools**: Use `agent-tools grep` and `agent-tools sed` when you need Linux-compatible grep/sed behavior without depending on the host environment.
 - **Docs**: Use `doc outline` to scan a markdown file's headings, then `doc section "<heading>"` to read just the relevant part — never `cat` a long doc.
 
 ### CLI Commands (run via shell):
