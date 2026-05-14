@@ -21,10 +21,13 @@ dependencies = [
  "anyhow",
  "clap",
  "gethostname",
+ "hex",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "time",
  "tokio",
 ]

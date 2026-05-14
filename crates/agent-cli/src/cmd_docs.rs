@@ -9,8 +9,10 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use time::OffsetDateTime;
 
 const DEFAULT_KIND: &str = "agent_context";
 const DEFAULT_SOURCE_FORMAT: &str = "agent_context";
@@ -154,6 +156,28 @@ pub enum DocsCommands {
         #[arg(long = "openapi")]
         openapi: Option<PathBuf>,
     },
+
+    /// Export one artifact-backed API context to a source-adjacent docs file.
+    Export {
+        /// API context id/artifact id. If omitted, --app must match exactly one doc.
+        id: Option<String>,
+        #[arg(long)]
+        app: Option<String>,
+        #[arg(long, default_value = ".agent/api")]
+        output_dir: PathBuf,
+        #[arg(long = "manifest-file")]
+        manifest_file: Option<PathBuf>,
+        /// Write over an existing changed file instead of proposing a sibling file.
+        #[arg(long)]
+        overwrite: bool,
+        /// Permit export when the docs artifact has no accepted version.
+        #[arg(long = "current-version")]
+        current_version: bool,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        agent_id: Option<String>,
+    },
 }
 
 struct DocsContext {
@@ -202,10 +226,12 @@ pub fn dispatch(cmd: DocsCommands) -> Result<()> {
     if matches!(
         cmd,
         DocsCommands::List { .. }
+            | DocsCommands::Search { .. }
             | DocsCommands::Get { .. }
             | DocsCommands::Delete { .. }
             | DocsCommands::Chunks { .. }
             | DocsCommands::Publish { .. }
+            | DocsCommands::Export { .. }
     ) {
         ensure_gateway_configured()?;
     }
@@ -323,6 +349,28 @@ async fn run(cmd: DocsCommands) -> Result<()> {
             output,
             openapi,
         } => cmd_bootstrap(app, title, output, openapi),
+        DocsCommands::Export {
+            id,
+            app,
+            output_dir,
+            manifest_file,
+            overwrite,
+            current_version,
+            project,
+            agent_id,
+        } => {
+            cmd_export(
+                id,
+                app,
+                output_dir,
+                manifest_file,
+                overwrite,
+                current_version,
+                project,
+                agent_id,
+            )
+            .await
+        }
     }
 }
 
@@ -499,6 +547,110 @@ fn cmd_bootstrap(
         "created starter agent API context file {}",
         output.display()
     );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_export(
+    id: Option<String>,
+    app: Option<String>,
+    output_dir: PathBuf,
+    manifest_file: Option<PathBuf>,
+    overwrite: bool,
+    current_version: bool,
+    project: Option<String>,
+    agent_id: Option<String>,
+) -> Result<()> {
+    let ctx = resolve_context(project, agent_id)?;
+    ensure_registered(&ctx).await?;
+    let doc = match id {
+        Some(id) => {
+            require_nonempty("id", &id)?;
+            ctx.gateway
+                .get_api_doc(&ctx.ident, &id, Some(&ctx.agent_id))
+                .await
+                .context("fetch API context doc for export")?
+        }
+        None => {
+            let app = app.context("provide an id or --app")?;
+            require_nonempty("--app", &app)?;
+            let filters = filters(None, Some(&app), None, None);
+            let docs = ctx
+                .gateway
+                .list_api_docs(&ctx.ident, &filters, Some(&ctx.agent_id))
+                .await
+                .context("find API context doc for export")?;
+            if docs.len() != 1 {
+                anyhow::bail!(
+                    "--app {app} matched {} docs; pass the exact id from `agent-tools docs list --app {app}`",
+                    docs.len()
+                );
+            }
+            ctx.gateway
+                .get_api_doc(&ctx.ident, &docs[0].id, Some(&ctx.agent_id))
+                .await
+                .context("fetch API context doc for export")?
+        }
+    };
+    let summary = &doc.summary;
+    if summary.artifact_version_id.is_none() && !current_version {
+        anyhow::bail!(
+            "docs export requires an accepted artifact version; rerun with --current-version to export the current compatibility row"
+        );
+    }
+
+    fs::create_dir_all(&output_dir).with_context(|| format!("create {}", output_dir.display()))?;
+    let target = export_target_path(&output_dir, summary);
+    let export_file = DocsFile {
+        app: summary.app.clone(),
+        title: summary.title.clone(),
+        summary: summary.summary.clone(),
+        kind: summary.kind.clone(),
+        source_format: summary.source_format.clone(),
+        source_ref: summary.source_ref.clone().or_else(|| {
+            summary
+                .artifact_id
+                .as_ref()
+                .map(|id| format!("gateway-artifact:{id}"))
+        }),
+        version: summary.version.clone(),
+        labels: summary.labels.clone(),
+        author: summary.author.clone(),
+        content: doc.content.clone(),
+    };
+    let body = serde_yaml::to_string(&export_file).context("serialize exported docs file")?;
+    let body_hash = sha256_hex(&body);
+    let (written_path, overwrite_policy) = write_export_file(&target, &body, overwrite)?;
+    let manifest_path = manifest_file.unwrap_or_else(|| output_dir.join("export-manifest.json"));
+    let manifest = serde_json::json!({
+        "artifact_id": summary.artifact_id,
+        "artifact_version_id": summary.artifact_version_id,
+        "accepted_version_id": summary.accepted_version_id,
+        "doc_id": summary.id,
+        "app": summary.app,
+        "source_ref": summary.source_ref,
+        "source_path": written_path.display().to_string(),
+        "content_hash": body_hash,
+        "generated_at": OffsetDateTime::now_utc().unix_timestamp(),
+        "overwrite_policy": overwrite_policy,
+    });
+    if let Some(parent) = manifest_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)
+        .with_context(|| format!("write {}", manifest_path.display()))?;
+    println!("exported API context [{}] {}", summary.id, summary.title);
+    println!(
+        "artifact_id: {}",
+        summary.artifact_id.as_deref().unwrap_or("-")
+    );
+    println!(
+        "artifact_version_id: {}",
+        summary.artifact_version_id.as_deref().unwrap_or("-")
+    );
+    println!("source_path: {}", written_path.display());
+    println!("manifest: {}", manifest_path.display());
+    println!("overwrite_policy: {overwrite_policy}");
     Ok(())
 }
 
@@ -711,6 +863,13 @@ fn print_doc_list(project_ident: &str, docs: &[ApiDocSummary]) {
             doc.kind.as_deref().unwrap_or(DEFAULT_KIND),
             labels
         );
+        print_doc_artifact_metadata(
+            &doc.artifact_id,
+            doc.artifact_version_id.as_deref(),
+            doc.accepted_version_id.as_deref(),
+            doc.chunking_status.as_deref(),
+            7,
+        );
         if let Some(summary) = doc.summary.as_deref().filter(|s| !s.trim().is_empty()) {
             println!("       {summary}");
         }
@@ -735,6 +894,19 @@ fn print_doc_detail(doc: &ApiDoc) {
     }
     if !summary.labels.is_empty() {
         println!("labels: {}", summary.labels.join(", "));
+    }
+    print_doc_artifact_metadata(
+        &summary.artifact_id,
+        summary.artifact_version_id.as_deref(),
+        summary.accepted_version_id.as_deref(),
+        summary.chunking_status.as_deref(),
+        0,
+    );
+    if let Some(scope) = summary.retrieval_scope.as_deref() {
+        println!("retrieval_scope: {scope}");
+    }
+    if !summary.linked_ids.is_empty() {
+        println!("linked_ids: {}", summary.linked_ids.join(", "));
     }
     if let Some(summary_text) = summary.summary.as_deref() {
         println!("summary: {summary_text}");
@@ -772,6 +944,22 @@ fn print_chunks(project_ident: &str, chunks: &[ApiDocChunk]) {
         println!("  [{id}] {app} / {title}");
         if let Some(score) = chunk.score {
             println!("       score={score:.3}");
+        }
+        print_doc_artifact_metadata(
+            &chunk.artifact_id,
+            chunk.artifact_version_id.as_deref(),
+            chunk.accepted_version_id.as_deref(),
+            chunk.chunking_status.as_deref(),
+            7,
+        );
+        if let Some(freshness) = chunk.freshness.as_deref() {
+            println!("       freshness={freshness}");
+        }
+        if let Some(scope) = chunk.retrieval_scope.as_deref() {
+            println!("       retrieval_scope={scope}");
+        }
+        if let Some(address) = chunk.child_address.as_deref() {
+            println!("       child_address={address}");
         }
         let text = chunk
             .text
@@ -811,6 +999,35 @@ fn print_content_guidance(content: &Value) {
     }
 }
 
+fn print_doc_artifact_metadata(
+    artifact_id: &Option<String>,
+    artifact_version_id: Option<&str>,
+    accepted_version_id: Option<&str>,
+    chunking_status: Option<&str>,
+    indent: usize,
+) {
+    if artifact_id.is_none()
+        && artifact_version_id.is_none()
+        && accepted_version_id.is_none()
+        && chunking_status.is_none()
+    {
+        return;
+    }
+    let pad = " ".repeat(indent);
+    if let Some(id) = artifact_id.as_deref() {
+        println!("{pad}artifact_id: {id}");
+    }
+    if let Some(id) = artifact_version_id {
+        println!("{pad}artifact_version_id: {id}");
+    }
+    if let Some(id) = accepted_version_id {
+        println!("{pad}accepted_version_id: {id}");
+    }
+    if let Some(status) = chunking_status {
+        println!("{pad}chunking_status: {status}");
+    }
+}
+
 fn print_indented_lines(text: &str, indent: usize) {
     let pad = " ".repeat(indent);
     for line in text.lines().take(40) {
@@ -828,6 +1045,74 @@ fn render_value(value: &Value) -> String {
             serde_json::to_string(value).unwrap_or_else(|_| "<unprintable>".to_string())
         }
     }
+}
+
+fn export_target_path(output_dir: &Path, summary: &ApiDocSummary) -> PathBuf {
+    if let Some(source_ref) = summary
+        .source_ref
+        .as_deref()
+        .filter(|v| v.starts_with(".agent/api/") && !v.contains(".."))
+    {
+        return PathBuf::from(source_ref);
+    }
+    output_dir.join(format!("{}.yaml", safe_filename(&summary.app)))
+}
+
+fn write_export_file(
+    target: &Path,
+    body: &str,
+    overwrite: bool,
+) -> Result<(PathBuf, &'static str)> {
+    if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    if target.exists() {
+        let existing = fs::read_to_string(target).unwrap_or_default();
+        if existing == body {
+            return Ok((target.to_path_buf(), "unchanged"));
+        }
+        if !overwrite {
+            let proposed = proposed_export_path(target);
+            fs::write(&proposed, body).with_context(|| format!("write {}", proposed.display()))?;
+            return Ok((proposed, "proposed"));
+        }
+    }
+    fs::write(target, body).with_context(|| format!("write {}", target.display()))?;
+    Ok((
+        target.to_path_buf(),
+        if overwrite { "overwrite" } else { "write" },
+    ))
+}
+
+fn proposed_export_path(target: &Path) -> PathBuf {
+    let stem = target.file_stem().and_then(|s| s.to_str()).unwrap_or("doc");
+    let ext = target
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("yaml");
+    target.with_file_name(format!("{stem}.proposed.{ext}"))
+}
+
+fn safe_filename(raw: &str) -> String {
+    let mut out = String::new();
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            out.push(ch);
+        } else {
+            out.push('-');
+        }
+    }
+    if out.is_empty() {
+        "api-context".to_string()
+    } else {
+        out
+    }
+}
+
+fn sha256_hex(body: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(body.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 fn starter_docs_file(app: &str, title: Option<String>) -> DocsFile {
@@ -1027,5 +1312,42 @@ content:
         assert_eq!(content["purpose"], "Billing service");
         assert_eq!(content["endpoints"][0]["method"], "GET");
         assert_eq!(content["schemas"]["Invoice"]["type"], "object");
+    }
+
+    #[test]
+    fn export_target_prefers_safe_agent_api_source_ref() {
+        let summary = ApiDocSummary {
+            id: "doc-1".to_string(),
+            app: "gateway".to_string(),
+            title: "Gateway".to_string(),
+            summary: None,
+            kind: Some("agent_context".to_string()),
+            source_format: Some("agent_context".to_string()),
+            source_ref: Some(".agent/api/gateway.yaml".to_string()),
+            version: None,
+            labels: Vec::new(),
+            author: None,
+            updated_at: None,
+            artifact_id: Some("art-1".to_string()),
+            artifact_version_id: Some("ver-1".to_string()),
+            accepted_version_id: Some("ver-1".to_string()),
+            subkind: Some("api_context".to_string()),
+            manifest_chunk_count: Some(1),
+            chunking_status: Some("current".to_string()),
+            retrieval_scope: None,
+            linked_ids: Vec::new(),
+        };
+        assert_eq!(
+            export_target_path(Path::new("out"), &summary),
+            PathBuf::from(".agent/api/gateway.yaml")
+        );
+    }
+
+    #[test]
+    fn proposed_export_path_uses_sibling_file() {
+        assert_eq!(
+            proposed_export_path(Path::new(".agent/api/gateway.yaml")),
+            PathBuf::from(".agent/api/gateway.proposed.yaml")
+        );
     }
 }

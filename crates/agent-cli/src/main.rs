@@ -1,5 +1,6 @@
 mod cmd_comms;
 mod cmd_docs;
+mod cmd_docs_artifacts;
 mod cmd_patterns;
 mod cmd_setup_menu;
 mod cmd_setup_perms;
@@ -296,6 +297,24 @@ enum Commands {
         command: cmd_docs::DocsCommands,
     },
 
+    /// Agent-facing artifact substrate for docs, reviews, specs, and handoffs
+    Artifacts {
+        #[command(subcommand)]
+        command: cmd_docs_artifacts::ArtifactsCommands,
+    },
+
+    /// Design-review artifact workflows (gateway-backed)
+    Reviews {
+        #[command(subcommand)]
+        command: cmd_docs_artifacts::ReviewsCommands,
+    },
+
+    /// Spec artifact workflows and task generation (gateway-backed)
+    Specs {
+        #[command(subcommand)]
+        command: cmd_docs_artifacts::SpecsCommands,
+    },
+
     /// Global pattern library and repository `.patterns` tracking (gateway-backed)
     Patterns {
         #[command(subcommand)]
@@ -416,6 +435,9 @@ fn main_inner() -> Result<()> {
             | Commands::Comms { .. }
             | Commands::Tasks { .. }
             | Commands::Docs { .. }
+            | Commands::Artifacts { .. }
+            | Commands::Reviews { .. }
+            | Commands::Specs { .. }
             | Commands::Patterns { .. }
     ) {
         agent_updater::auto_update_blocking();
@@ -625,6 +647,12 @@ fn main_inner() -> Result<()> {
         Commands::Tasks { command } => cmd_tasks::dispatch(command),
 
         Commands::Docs { command } => cmd_docs::dispatch(command),
+
+        Commands::Artifacts { command } => cmd_docs_artifacts::dispatch(command),
+
+        Commands::Reviews { command } => cmd_docs_artifacts::dispatch_reviews(command),
+
+        Commands::Specs { command } => cmd_docs_artifacts::dispatch_specs(command),
 
         Commands::Patterns { command } => cmd_patterns::dispatch(command),
 

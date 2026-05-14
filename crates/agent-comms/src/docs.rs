@@ -28,6 +28,22 @@ pub struct ApiDocSummary {
     pub author: Option<String>,
     #[serde(default)]
     pub updated_at: Option<i64>,
+    #[serde(default)]
+    pub artifact_id: Option<String>,
+    #[serde(default)]
+    pub artifact_version_id: Option<String>,
+    #[serde(default)]
+    pub accepted_version_id: Option<String>,
+    #[serde(default)]
+    pub subkind: Option<String>,
+    #[serde(default)]
+    pub manifest_chunk_count: Option<usize>,
+    #[serde(default)]
+    pub chunking_status: Option<String>,
+    #[serde(default)]
+    pub retrieval_scope: Option<String>,
+    #[serde(default)]
+    pub linked_ids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -57,6 +73,24 @@ pub struct ApiDocChunk {
     pub content: Option<Value>,
     #[serde(default)]
     pub score: Option<f64>,
+    #[serde(default)]
+    pub artifact_id: Option<String>,
+    #[serde(default)]
+    pub artifact_version_id: Option<String>,
+    #[serde(default)]
+    pub accepted_version_id: Option<String>,
+    #[serde(default)]
+    pub child_address: Option<String>,
+    #[serde(default)]
+    pub subkind: Option<String>,
+    #[serde(default)]
+    pub freshness: Option<String>,
+    #[serde(default)]
+    pub retrieval_scope: Option<String>,
+    #[serde(default)]
+    pub chunking_status: Option<String>,
+    #[serde(default)]
+    pub linked_ids: Vec<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -273,6 +307,27 @@ mod tests {
         assert_eq!(json["kind"], "agent_context");
         assert_eq!(json["source_format"], "agent_context");
         assert!(json.get("labels").is_none());
+    }
+
+    #[test]
+    fn api_doc_summary_accepts_artifact_metadata_additively() {
+        let json = serde_json::json!({
+            "id": "doc-1",
+            "project_ident": "agent-tools",
+            "app": "gateway",
+            "title": "Gateway",
+            "kind": "agent_context",
+            "source_format": "agent_context",
+            "labels": [],
+            "author": "tester",
+            "artifact_id": "art-1",
+            "artifact_version_id": "ver-1",
+            "chunking_status": "current"
+        });
+        let summary: ApiDocSummary = serde_json::from_value(json).unwrap();
+        assert_eq!(summary.artifact_id.as_deref(), Some("art-1"));
+        assert_eq!(summary.artifact_version_id.as_deref(), Some("ver-1"));
+        assert_eq!(summary.chunking_status.as_deref(), Some("current"));
     }
 
     #[test]
