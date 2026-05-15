@@ -4,15 +4,9 @@
 //! directory, the agent id from the persistent machine file, and surfaces the
 //! gateway-not-configured case with a friendly message rather than an opaque
 //! "missing config" error.
-//
-// TODO(cleanup): `resolve_context` and the registration-marker helpers are
-// duplicated from `cmd_comms.rs`. Factor them into a shared `context` module
-// once a third command needs them.
 
-use agent_comms::config::{home_dir, load_config};
-use agent_comms::gateway::GatewayClient;
-use agent_comms::identity::load_or_generate_agent_id;
-use agent_comms::sanitize::short_project_ident;
+use crate::cmd_gateway_context::{ensure_registered, resolve_context};
+use agent_comms::config::load_config;
 use agent_comms::tasks::{
     AddCommentRequest, CreateTaskRequest, DelegateTaskRequest, Task, TaskComment,
     TaskCreateResponse, TaskDelegationResponse, TaskDetail, TaskSummary, UpdateTaskRequest,
@@ -20,7 +14,6 @@ use agent_comms::tasks::{
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use serde_json::Value;
-use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -249,109 +242,6 @@ async fn run(cmd: TasksCommands) -> Result<()> {
     }
 }
 
-// -- Context resolution (duplicated from cmd_comms; see TODO above) ----------
-
-struct TasksContext {
-    ident: String,
-    canonical_ident: String,
-    agent_id: String,
-    gateway: GatewayClient,
-    gateway_url: String,
-}
-
-fn resolve_context(agent_id_override: Option<String>) -> Result<TasksContext> {
-    let canonical_ident =
-        agent_core::project_ident_from_cwd().context("derive project ident from cwd")?;
-    let ident = short_project_ident(&canonical_ident);
-    if ident.is_empty() {
-        anyhow::bail!(
-            "could not derive a short project ident from {canonical_ident:?}; \
-             pass --project-ident or set DEFAULT_PROJECT_IDENT in gateway.conf"
-        );
-    }
-
-    let agent_id = match agent_id_override {
-        Some(id) => id,
-        None => load_or_generate_agent_id()?,
-    };
-
-    let config = load_config();
-    let gateway_url = config
-        .gateway
-        .url
-        .clone()
-        .context("gateway URL not configured -- run `agent-tools setup gateway`")?;
-    let api_key = config
-        .gateway
-        .api_key
-        .clone()
-        .context("gateway API key not configured -- run `agent-tools setup gateway`")?;
-    let timeout_ms = config.gateway.timeout_ms.unwrap_or(5000);
-
-    let gateway = GatewayClient::new(gateway_url.clone(), api_key, timeout_ms)?;
-
-    Ok(TasksContext {
-        ident,
-        canonical_ident,
-        agent_id,
-        gateway,
-        gateway_url,
-    })
-}
-
-fn registration_marker_path(ident: &str) -> PathBuf {
-    let hash = agent_core::hash_project_ident(ident);
-    home_dir()
-        .join(".agentic")
-        .join("agent-tools")
-        .join("registered")
-        .join(hash)
-}
-
-fn read_registration_marker(ident: &str, gateway_url: &str) -> Option<String> {
-    let path = registration_marker_path(ident);
-    let content = std::fs::read_to_string(&path).ok()?;
-    let mut url = None;
-    let mut channel = None;
-    for line in content.lines() {
-        if let Some(v) = line.strip_prefix("GATEWAY_URL=") {
-            url = Some(v.to_string());
-        } else if let Some(v) = line.strip_prefix("CHANNEL_NAME=") {
-            channel = Some(v.to_string());
-        }
-    }
-    if url.as_deref() == Some(gateway_url) {
-        channel
-    } else {
-        None
-    }
-}
-
-fn write_registration_marker(ident: &str, gateway_url: &str, channel_name: &str) -> Result<()> {
-    let path = registration_marker_path(ident);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create directory {}", parent.display()))?;
-    }
-    let body = format!("GATEWAY_URL={gateway_url}\nCHANNEL_NAME={channel_name}\n");
-    std::fs::write(&path, body)
-        .with_context(|| format!("write registration marker {}", path.display()))?;
-    Ok(())
-}
-
-async fn ensure_registered(ctx: &TasksContext) -> Result<()> {
-    if read_registration_marker(&ctx.canonical_ident, &ctx.gateway_url).is_some() {
-        return Ok(());
-    }
-    let resp = ctx
-        .gateway
-        .register_project(&ctx.ident, None)
-        .await
-        .context("register project with gateway")?;
-    write_registration_marker(&ctx.canonical_ident, &ctx.gateway_url, &resp.channel_name)?;
-    Ok(())
-}
-
 // -- Helpers -----------------------------------------------------------------
 
 fn local_hostname_or_none(flag: Option<String>) -> Option<String> {
@@ -430,7 +320,7 @@ fn require_full_task_id(task_id: &str) -> Result<()> {
 
 async fn cmd_list(status: String, include_stale: bool, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx).await?;
+    ensure_registered(&ctx, None).await?;
 
     let statuses = parse_status_csv(&status);
     let tasks: Vec<TaskSummary> = ctx
@@ -507,7 +397,7 @@ async fn cmd_get(task_id: String, agent_id: Option<String>) -> Result<()> {
     require_full_task_id(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx).await?;
+    ensure_registered(&ctx, None).await?;
 
     let detail: TaskDetail = ctx
         .gateway
@@ -602,7 +492,7 @@ async fn cmd_add(
     agent_id: Option<String>,
 ) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx).await?;
+    ensure_registered(&ctx, None).await?;
 
     let host = local_hostname_or_none(hostname);
     let labels_slice: Option<&[String]> = if labels.is_empty() {
@@ -665,7 +555,7 @@ async fn cmd_add_delegated(
     require_nonempty_flag("--specification", &specification)?;
 
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx).await?;
+    ensure_registered(&ctx, None).await?;
 
     let host = local_hostname_or_none(hostname);
     let labels_slice: Option<&[String]> = if labels.is_empty() {
@@ -711,7 +601,7 @@ async fn cmd_status_transition(
     require_full_task_id(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx).await?;
+    ensure_registered(&ctx, None).await?;
 
     let patch = UpdateTaskRequest {
         status: Some(new_status),
@@ -745,7 +635,7 @@ async fn cmd_comment(
     require_full_task_id(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx).await?;
+    ensure_registered(&ctx, None).await?;
 
     // Default author_type: agent — we always send X-Agent-Id below, so the
     // server-side default would also be `agent`. We pass it explicitly so the
@@ -776,7 +666,7 @@ async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>) -> Resul
     require_full_task_id(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx).await?;
+    ensure_registered(&ctx, None).await?;
 
     let patch = UpdateTaskRequest {
         rank: Some(rank),
@@ -800,7 +690,7 @@ async fn cmd_builds(repo: Option<String>, agent_id: Option<String>) -> Result<()
     }
 
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx).await?;
+    ensure_registered(&ctx, None).await?;
 
     let status = ctx
         .gateway

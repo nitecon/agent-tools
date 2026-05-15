@@ -4,7 +4,8 @@
 //! human communication primitives; artifact operations are shared document
 //! substrate operations used by agents.
 
-use agent_comms::config::{home_dir, load_config};
+use crate::cmd_gateway_context::{read_registration_marker, write_registration_marker};
+use agent_comms::config::load_config;
 use agent_comms::identity::load_or_generate_agent_id;
 use agent_comms::sanitize::{short_project_ident, validate_api_key};
 use anyhow::{Context, Result};
@@ -2297,46 +2298,6 @@ fn resolve_context(
         host: gethostname::gethostname().to_str().map(str::to_string),
         agent_system: detect_agent_system(),
     })
-}
-
-fn registration_marker_path(ident: &str) -> PathBuf {
-    let hash = agent_core::hash_project_ident(ident);
-    home_dir()
-        .join(".agentic")
-        .join("agent-tools")
-        .join("registered")
-        .join(hash)
-}
-
-fn read_registration_marker(ident: &str, gateway_url: &str) -> Option<String> {
-    let path = registration_marker_path(ident);
-    let content = fs::read_to_string(&path).ok()?;
-    let mut url = None;
-    let mut channel = None;
-    for line in content.lines() {
-        if let Some(v) = line.strip_prefix("GATEWAY_URL=") {
-            url = Some(v.to_string());
-        } else if let Some(v) = line.strip_prefix("CHANNEL_NAME=") {
-            channel = Some(v.to_string());
-        }
-    }
-    if url.as_deref() == Some(gateway_url) {
-        channel
-    } else {
-        None
-    }
-}
-
-fn write_registration_marker(ident: &str, gateway_url: &str, channel_name: &str) -> Result<()> {
-    let path = registration_marker_path(ident);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create directory {}", parent.display()))?;
-    }
-    let body = format!("GATEWAY_URL={gateway_url}\nCHANNEL_NAME={channel_name}\n");
-    fs::write(&path, body)
-        .with_context(|| format!("write registration marker {}", path.display()))?;
-    Ok(())
 }
 
 async fn ensure_registered(ctx: &ArtifactContext) -> Result<()> {

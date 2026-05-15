@@ -6,13 +6,13 @@
 //! pass either explicitly. Registration with the gateway is cached per project
 //! so repeat sends don't pay a register round-trip.
 
-use agent_comms::config::{home_dir, load_config};
-use agent_comms::gateway::{GatewayClient, MessageMeta};
+use crate::cmd_gateway_context::{ensure_registered, resolve_context};
+use agent_comms::config::load_config;
+use agent_comms::gateway::MessageMeta;
 use agent_comms::identity::load_or_generate_agent_id;
 use agent_comms::sanitize::short_project_ident;
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use std::path::PathBuf;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -231,131 +231,6 @@ fn parse_event_at(raw: &str) -> Result<i64> {
     i64::try_from(ms).context("event_at out of range for i64 epoch-ms")
 }
 
-// -- Context resolution ------------------------------------------------------
-
-/// Resolved per-invocation context shared by every comms subcommand.
-///
-/// `ident` is the short, gateway-friendly slug (e.g. `eventic`) sent to the
-/// server. `canonical_ident` is the full normalized identifier (git remote URL
-/// or canonical path) used to key local state like the registration marker,
-/// so two different repositories that share a basename cannot clobber each
-/// other's cached registration.
-struct CommsContext {
-    ident: String,
-    canonical_ident: String,
-    agent_id: String,
-    gateway: GatewayClient,
-    gateway_url: String,
-}
-
-/// Resolve cwd -> ident, load-or-generate agent-id, build `GatewayClient`.
-fn resolve_context(agent_id_override: Option<String>) -> Result<CommsContext> {
-    let canonical_ident =
-        agent_core::project_ident_from_cwd().context("derive project ident from cwd")?;
-    let ident = short_project_ident(&canonical_ident);
-    if ident.is_empty() {
-        anyhow::bail!(
-            "could not derive a short project ident from {canonical_ident:?}; \
-             pass --project-ident or set DEFAULT_PROJECT_IDENT in gateway.conf"
-        );
-    }
-
-    let agent_id = match agent_id_override {
-        Some(id) => id,
-        None => load_or_generate_agent_id()?,
-    };
-
-    let config = load_config();
-    let gateway_url = config
-        .gateway
-        .url
-        .clone()
-        .context("gateway URL not configured -- run `agent-tools setup gateway`")?;
-    let api_key = config
-        .gateway
-        .api_key
-        .clone()
-        .context("gateway API key not configured -- run `agent-tools setup gateway`")?;
-    let timeout_ms = config.gateway.timeout_ms.unwrap_or(5000);
-
-    let gateway = GatewayClient::new(gateway_url.clone(), api_key, timeout_ms)?;
-
-    Ok(CommsContext {
-        ident,
-        canonical_ident,
-        agent_id,
-        gateway,
-        gateway_url,
-    })
-}
-
-// -- Registration cache ------------------------------------------------------
-
-/// Marker file that records which (project, gateway) pair has been registered.
-/// Stored centrally so every cwd within a project shares the same state.
-fn registration_marker_path(ident: &str) -> PathBuf {
-    // Hash-of-ident keyed, same concept the symbol indexer uses for its data
-    // dir. We stash the marker under the user's agentic dir rather than the
-    // project data dir so it survives an `agent-tools index --rebuild`.
-    let hash = agent_core::hash_project_ident(ident);
-    home_dir()
-        .join(".agentic")
-        .join("agent-tools")
-        .join("registered")
-        .join(hash)
-}
-
-/// Return Some(channel_name) if this (ident, gateway_url) has been registered.
-fn read_registration_marker(ident: &str, gateway_url: &str) -> Option<String> {
-    let path = registration_marker_path(ident);
-    let content = std::fs::read_to_string(&path).ok()?;
-    let mut url = None;
-    let mut channel = None;
-    for line in content.lines() {
-        if let Some(v) = line.strip_prefix("GATEWAY_URL=") {
-            url = Some(v.to_string());
-        } else if let Some(v) = line.strip_prefix("CHANNEL_NAME=") {
-            channel = Some(v.to_string());
-        }
-    }
-    if url.as_deref() == Some(gateway_url) {
-        channel
-    } else {
-        None
-    }
-}
-
-fn write_registration_marker(ident: &str, gateway_url: &str, channel_name: &str) -> Result<()> {
-    let path = registration_marker_path(ident);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create directory {}", parent.display()))?;
-    }
-    let body = format!("GATEWAY_URL={gateway_url}\nCHANNEL_NAME={channel_name}\n");
-    std::fs::write(&path, body)
-        .with_context(|| format!("write registration marker {}", path.display()))?;
-    Ok(())
-}
-
-/// Register the project with the gateway if we haven't already for this URL.
-/// Returns the channel name (cached or freshly registered).
-///
-/// The marker is keyed on the canonical ident (git URL / full path) so two
-/// different repositories that collapse to the same short slug still get
-/// distinct registration state.
-async fn ensure_registered(ctx: &CommsContext, channel_override: Option<&str>) -> Result<String> {
-    if let Some(channel_name) = read_registration_marker(&ctx.canonical_ident, &ctx.gateway_url) {
-        return Ok(channel_name);
-    }
-    let resp = ctx
-        .gateway
-        .register_project(&ctx.ident, channel_override)
-        .await
-        .context("register project with gateway")?;
-    write_registration_marker(&ctx.canonical_ident, &ctx.gateway_url, &resp.channel_name)?;
-    Ok(resp.channel_name)
-}
-
 // -- whoami ------------------------------------------------------------------
 
 fn cmd_whoami() -> Result<()> {
@@ -538,7 +413,6 @@ async fn cmd_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn parse_event_at_accepts_epoch_ms() {
@@ -584,39 +458,5 @@ mod tests {
         // omitting the flag gives us *some* non-empty hostname back.
         let resolved = resolve_hostname(None);
         assert!(resolved.is_some_and(|h| !h.is_empty()));
-    }
-
-    #[test]
-    fn marker_path_has_stable_shape() {
-        let p = registration_marker_path("github.com/foo/bar.git");
-        let file = p.file_name().unwrap().to_str().unwrap().to_string();
-        assert_eq!(file.len(), 64); // blake3 hex
-        let parent = p.parent().unwrap();
-        assert!(parent.ends_with(PathBuf::from(".agentic/agent-tools/registered")));
-    }
-
-    #[test]
-    fn marker_round_trips() {
-        // Use a unique ident so tests can run in parallel without stepping on
-        // each other's marker files.
-        let ident = format!("test-ident-{}", std::process::id());
-        let url = "http://localhost:0";
-        let path = registration_marker_path(&ident);
-        // Ensure clean slate.
-        let _ = std::fs::remove_file(&path);
-
-        assert_eq!(read_registration_marker(&ident, url), None);
-
-        write_registration_marker(&ident, url, "agent-test-channel").unwrap();
-        assert_eq!(
-            read_registration_marker(&ident, url),
-            Some("agent-test-channel".to_string())
-        );
-
-        // Different URL -> miss.
-        assert_eq!(read_registration_marker(&ident, "http://other"), None);
-
-        // Cleanup.
-        let _ = std::fs::remove_file(&path);
     }
 }

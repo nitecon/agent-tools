@@ -1,7 +1,9 @@
 mod cmd_comms;
 mod cmd_docs;
 mod cmd_docs_artifacts;
+mod cmd_gateway_context;
 mod cmd_patterns;
+mod cmd_read;
 mod cmd_setup_menu;
 mod cmd_setup_perms;
 mod cmd_setup_rules;
@@ -10,7 +12,7 @@ mod cmd_tasks;
 mod cmd_text;
 mod nudge;
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
@@ -469,7 +471,7 @@ fn main_inner() -> Result<()> {
 
         Commands::List { path, sizes, all } => cmd_list(path, sizes, all),
 
-        Commands::Read { file, lines } => cmd_read(&file, lines.as_deref()),
+        Commands::Read { file, lines } => cmd_read::run(&file, lines.as_deref()),
 
         Commands::Symbol { name, file, kind } => cmd_symbol(&name, file, kind),
 
@@ -711,81 +713,6 @@ fn cmd_list(path: Option<PathBuf>, sizes: bool, all: bool) -> Result<()> {
     Ok(())
 }
 
-/// Read a UTF-8 file, optionally selecting a 1-based inclusive line range.
-fn cmd_read(file: &Path, lines: Option<&str>) -> Result<()> {
-    let text = std::fs::read_to_string(file)
-        .with_context(|| format!("failed to read UTF-8 file {}", file.display()))?;
-    match lines {
-        Some(raw) => print!("{}", select_read_lines(&text, parse_read_lines(raw)?)),
-        None => print!("{text}"),
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ReadLineRange {
-    start: usize,
-    end: Option<usize>,
-}
-
-fn parse_read_lines(raw: &str) -> Result<ReadLineRange> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        bail!("--lines must be N, START:END, START:, :END, or START,END");
-    }
-
-    let (start_raw, end_raw) = if let Some((start, end)) = raw.split_once(':') {
-        (start, Some(end))
-    } else if let Some((start, end)) = raw.split_once(',') {
-        (start, Some(end))
-    } else {
-        (raw, Some(raw))
-    };
-
-    let start = if start_raw.is_empty() {
-        1
-    } else {
-        parse_one_based_line(start_raw, "--lines start")?
-    };
-    let end = match end_raw {
-        Some("$") | Some("") => None,
-        Some(value) => Some(parse_one_based_line(value, "--lines end")?),
-        None => None,
-    };
-
-    if let Some(end) = end {
-        if end < start {
-            bail!("--lines end is before start");
-        }
-    }
-
-    Ok(ReadLineRange { start, end })
-}
-
-fn parse_one_based_line(raw: &str, label: &str) -> Result<usize> {
-    match raw.parse::<usize>() {
-        Ok(0) => bail!("{label} must be one-based"),
-        Ok(value) => Ok(value),
-        Err(_) => bail!("{label} must be a non-negative integer"),
-    }
-}
-
-fn select_read_lines(text: &str, range: ReadLineRange) -> String {
-    text.split_inclusive('\n')
-        .enumerate()
-        .filter_map(|(idx, line)| {
-            let line_no = idx + 1;
-            if line_no < range.start {
-                return None;
-            }
-            if range.end.is_some_and(|end| line_no > end) {
-                return None;
-            }
-            Some(line)
-        })
-        .collect()
-}
-
 /// Extract a named symbol's source code, either from a specific file or the project index.
 fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result<()> {
     if let Some(file_path) = file {
@@ -1025,71 +952,5 @@ mod tests {
         assert!(!looks_api_related("capitalization"));
         assert!(!looks_api_related("happier path"));
         assert!(!looks_api_related("config loader"));
-    }
-
-    #[test]
-    fn read_lines_parser_accepts_single_ranges_and_open_ends() {
-        assert_eq!(
-            parse_read_lines("3").unwrap(),
-            ReadLineRange {
-                start: 3,
-                end: Some(3),
-            }
-        );
-        assert_eq!(
-            parse_read_lines("2:4").unwrap(),
-            ReadLineRange {
-                start: 2,
-                end: Some(4),
-            }
-        );
-        assert_eq!(
-            parse_read_lines("2,4").unwrap(),
-            ReadLineRange {
-                start: 2,
-                end: Some(4),
-            }
-        );
-        assert_eq!(
-            parse_read_lines(":2").unwrap(),
-            ReadLineRange {
-                start: 1,
-                end: Some(2),
-            }
-        );
-        assert_eq!(
-            parse_read_lines("2:").unwrap(),
-            ReadLineRange {
-                start: 2,
-                end: None,
-            }
-        );
-        assert!(parse_read_lines("0").is_err());
-        assert!(parse_read_lines("4:2").is_err());
-    }
-
-    #[test]
-    fn read_lines_selection_preserves_existing_line_endings() {
-        let text = "one\r\ntwo\nthree";
-        assert_eq!(
-            select_read_lines(
-                text,
-                ReadLineRange {
-                    start: 1,
-                    end: Some(2),
-                }
-            ),
-            "one\r\ntwo\n"
-        );
-        assert_eq!(
-            select_read_lines(
-                text,
-                ReadLineRange {
-                    start: 3,
-                    end: Some(3),
-                }
-            ),
-            "three"
-        );
     }
 }
