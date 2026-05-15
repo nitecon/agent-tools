@@ -30,6 +30,10 @@ agent-tools grep 'needle|thread' src
 
 # Search for literal text containing regex metacharacters.
 agent-tools grep --fixed 'a+b.$' src
+
+# GNU grep compatibility: -R and -n are accepted no-ops because directory
+# operands recurse and match records already include line numbers.
+agent-tools grep -R 'needle|thread' src -n
 ```
 
 Sed-like substitution expressions are accepted for familiar one-liners:
@@ -40,6 +44,17 @@ agent-tools sed 's/needle/thread/g' basic/alpha.txt --preview
 
 Use argv-native forms first in scripts and examples. Sed-like expressions use
 the grammar documented in [Sed Dialect](#sed-dialect).
+
+Common line-read forms are supported for agent compatibility:
+
+```bash
+agent-tools sed -n '20,60p' src/lib.rs
+agent-tools sed --line 20:60 src/lib.rs
+```
+
+These print raw file lines, matching `agent-tools read src/lib.rs --lines 20:60`.
+Unsupported sed read scripts return a hint naming `agent-tools read` for line
+ranges and `agent-tools grep` for matching lines.
 
 ## Search Workflows
 

@@ -16,11 +16,14 @@ profile.
 | `grep <pattern>` with no path | Files under `.` | stdout records plus stderr diagnostics | recursive `agent-text-walk-v1` | none | match/no-match/error |
 | `grep <pattern> <file...>` | Explicit files | stdout records plus stderr diagnostics | no recursive walk for file operands | none | match/no-match/error |
 | `grep <pattern> <dir...>` | Files under each directory | stdout records plus stderr diagnostics | recursive `agent-text-walk-v1` per directory | none | match/no-match/error |
+| `grep -R <pattern> <dir...> -n` | Files under each directory | stdout records with line numbers | recursive `agent-text-walk-v1` per directory | none | match/no-match/error |
 | `grep <pattern> -` | stdin text stream | stdout records plus stderr diagnostics | no filesystem traversal | none | match/no-match/error |
 | `grep <pattern> - <path...>` | invalid | stderr `error: invalid-input: stdin marker cannot be combined with paths` | none | none | invalid input |
 | `sed <expr>` with no path | Files under `.` | preview records plus summary | recursive `agent-text-walk-v1` | none | changed/no-op/error |
 | `sed <expr> <file...>` | Explicit files | preview records plus summary | no recursive walk for file operands | none unless `--write` | changed/no-op/error |
 | `sed <expr> <dir...>` | Files under each directory | preview records plus summary | recursive `agent-text-walk-v1` per directory | none unless `--write` | changed/no-op/error |
+| `sed -n START,ENDp <file...>` | Explicit files | raw selected lines | no recursive walk | none | success/invalid path |
+| `sed --line START:END <file...>` | Explicit files | raw selected lines | no recursive walk | none | success/invalid path |
 | `sed <expr> -` | stdin text stream | transformed stream records to stdout | no filesystem traversal | none | changed/no-op/error |
 | `sed <expr> --preview [path...]` | path/default/stdin inputs | preview records plus summary | as above | none | changed/no-op/error |
 | `sed <expr> --write [path...]` | path/default inputs only | write records plus summary | as above | explicit file writes | changed/no-op/error |
@@ -117,6 +120,9 @@ agent-tools sed --pattern-file /tmp/pattern-with-newline.txt --replacement-file 
 
 - Regex is the default grep mode and uses the Rust `regex` crate dialect.
 - `--fixed` treats the pattern as a literal decoded-text string.
+- `-R`/`-r`/`--recursive` are accepted as compatibility no-ops because
+  directory operands already recurse. `-n`/`--line-number` are accepted as
+  compatibility no-ops because match records always include line numbers.
 - Unsupported regex constructs are invalid expressions with exit code 2 and a
   stable diagnostic prefixed by `error: invalid-expression:`.
 - Backreferences, lookaround, conditional expressions, and backtracking-only
@@ -166,6 +172,11 @@ Rules:
 - Line ranges are per file. `--line 20:60` includes both endpoints. Open ranges
   `--line 20:` and `--line :60` are accepted. Line ranges are invalid for stdin
   until a future streaming range contract exists.
+- For agent compatibility, `sed -n '20,60p' file` and
+  `sed --line 20:60 file` are read forms: they print raw selected file lines and
+  are equivalent to `agent-tools read file --lines 20:60`. Unsupported read
+  scripts emit `error: unsupported:` with hints naming `agent-tools read` for
+  line ranges and `agent-tools grep` for matching lines.
 - Unsupported sed constructs include addresses in the expression, commands
   other than substitution, hold space, branching, labels, shell execution, and
   GNU/BSD-specific extensions. They emit `error: unsupported: <construct>`.

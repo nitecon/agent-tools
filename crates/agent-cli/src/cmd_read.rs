@@ -2,13 +2,17 @@ use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 pub(crate) fn run(file: &Path, lines: Option<&str>) -> Result<()> {
+    print!("{}", read_lines_to_string(file, lines)?);
+    Ok(())
+}
+
+pub(crate) fn read_lines_to_string(file: &Path, lines: Option<&str>) -> Result<String> {
     let text = std::fs::read_to_string(file)
         .with_context(|| format!("failed to read UTF-8 file {}", file.display()))?;
-    match lines {
-        Some(raw) => print!("{}", select_lines(&text, parse_lines(raw)?)),
-        None => print!("{text}"),
-    }
-    Ok(())
+    Ok(match lines {
+        Some(raw) => select_lines(&text, parse_lines(raw)?),
+        None => text,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

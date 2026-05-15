@@ -133,6 +133,18 @@ enum Commands {
         /// Case-insensitive matching
         #[arg(short = 'i', long)]
         ignore_case: bool,
+        /// GNU grep compatibility no-op: agent-tools grep is recursive for directory operands
+        #[arg(
+            short = 'R',
+            short_alias = 'r',
+            long = "recursive",
+            alias = "dereference-recursive",
+            hide = true
+        )]
+        recursive: bool,
+        /// GNU grep compatibility no-op: match records always include line numbers
+        #[arg(short = 'n', long = "line-number", hide = true)]
+        line_number: bool,
         /// Include only paths matching this glob-like pattern; repeatable
         #[arg(long = "include", value_name = "GLOB")]
         include_globs: Vec<String>,
@@ -475,6 +487,8 @@ fn main_inner() -> Result<()> {
             regex,
             pattern_file,
             ignore_case,
+            recursive,
+            line_number,
             include_globs,
             exclude_globs,
             glob_globs,
@@ -497,6 +511,8 @@ fn main_inner() -> Result<()> {
             regex,
             pattern_file,
             ignore_case,
+            recursive,
+            line_number,
             include_globs,
             exclude_globs,
             glob_globs,

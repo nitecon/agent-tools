@@ -1107,6 +1107,18 @@ fn grep_cli_supports_modes_filters_and_machine_safe_paths() {
     );
     assert_eq!(nul.status.code(), Some(0));
     assert_eq!(nul.stdout, b"basic/alpha.txt\0basic/beta.txt\0".to_vec());
+
+    let recursive_line_number = run_agent_tools(&["grep", "-R", "needle", "basic", "-n"], &root);
+    assert_eq!(recursive_line_number.status.code(), Some(0));
+    assert_eq!(
+        stdout_text(&recursive_line_number),
+        concat!(
+            "match: basic/alpha.txt:1:7: first needle line\n",
+            "match: basic/alpha.txt:2:18: second line with needle and needle\n",
+            "match: basic/alpha.txt:2:29: second line with needle and needle\n",
+            "match: basic/beta.txt:2:1: needle in beta\n",
+        )
+    );
 }
 
 #[test]
@@ -1331,6 +1343,38 @@ fn sed_preview_supports_ranges_case_insensitive_and_filters() {
     );
     assert!(out.contains("skip: warning: path-skipped basic/beta.txt"));
     assert!(out.contains("summary:"));
+}
+
+#[test]
+fn sed_compatibility_read_forms_support_line_ranges_and_hints() {
+    let root = isolated_grep_fixture("sed_read_compat");
+
+    let quiet_print = run_agent_tools(&["sed", "-n", "1,2p", "basic/alpha.txt"], &root);
+    assert_eq!(quiet_print.status.code(), Some(0));
+    assert_eq!(stderr_text(&quiet_print), "");
+    assert_eq!(
+        stdout_text(&quiet_print),
+        concat!(
+            "first needle line\n",
+            "second line with needle and needle\n",
+        )
+    );
+
+    let line_read = run_agent_tools(&["sed", "--line", "2:3", "basic/alpha.txt"], &root);
+    assert_eq!(line_read.status.code(), Some(0));
+    assert_eq!(stderr_text(&line_read), "");
+    assert_eq!(
+        stdout_text(&line_read),
+        concat!("second line with needle and needle\n", "final old value\n")
+    );
+
+    let unsupported = run_agent_tools(&["sed", "-n", "/needle/p", "basic/alpha.txt"], &root);
+    assert_eq!(unsupported.status.code(), Some(2));
+    assert_eq!(stdout_text(&unsupported), "");
+    assert_eq!(
+        stderr_text(&unsupported),
+        "error: unsupported: we do not have this implemented; you may use similar functionality with `agent-tools read basic/alpha.txt --lines START:END` for line ranges or `agent-tools grep <pattern> <path>` for matching lines\n"
+    );
 }
 
 #[test]

@@ -20,6 +20,8 @@ pub(crate) struct GrepArgs {
     pub(crate) regex: bool,
     pub(crate) pattern_file: Option<PathBuf>,
     pub(crate) ignore_case: bool,
+    pub(crate) recursive: bool,
+    pub(crate) line_number: bool,
     pub(crate) include_globs: Vec<String>,
     pub(crate) exclude_globs: Vec<String>,
     pub(crate) glob_globs: Vec<String>,
@@ -290,6 +292,8 @@ pub(crate) fn cmd_grep(args: GrepArgs) -> Result<()> {
 }
 
 fn run_grep(args: GrepArgs) -> Result<TextCommandResult> {
+    let _compat_flags = (args.recursive, args.line_number);
+
     if args.files0_from.is_some() {
         return Ok(render_text_error_result(
             TextErrorLabel::Unsupported,
@@ -860,6 +864,11 @@ struct SedSubstitution {
     global: bool,
 }
 
+struct SedReadRequest {
+    lines: String,
+    paths: Vec<PathBuf>,
+}
+
 /// Inclusive 1-based line range, both endpoints optional.
 #[derive(Default, Clone, Copy)]
 struct LineRange {
@@ -897,12 +906,10 @@ fn resolve_sed_operation(args: &SedArgs) -> TextOperationKind {
 }
 
 fn run_sed(args: SedArgs, operation: TextOperationKind) -> Result<TextCommandResult> {
-    if let Some(reason) = sed_read_hint(&args) {
-        return Ok(render_text_error_result(
-            TextErrorLabel::Unsupported,
-            &reason,
-            TextExitClassificationInput::invalid_input(operation),
-        ));
+    match resolve_sed_read_request(&args, operation) {
+        Ok(Some(read_request)) => return run_sed_read(read_request, operation),
+        Ok(None) => {}
+        Err(result) => return Ok(result),
     }
 
     // The contract reserves a specific diagnostic for `--write -`, distinct
@@ -1027,37 +1034,150 @@ fn run_sed(args: SedArgs, operation: TextOperationKind) -> Result<TextCommandRes
     ))
 }
 
-fn sed_read_hint(args: &SedArgs) -> Option<String> {
+fn resolve_sed_read_request(
+    args: &SedArgs,
+    operation: TextOperationKind,
+) -> std::result::Result<Option<SedReadRequest>, TextCommandResult> {
+    if args.quiet || args.expression.as_deref() == Some("-n") {
+        return resolve_sed_quiet_read_request(args, operation).map(Some);
+    }
+
+    if args.line.is_none()
+        || args.write
+        || args.regex.is_some()
+        || !args.fixed.is_empty()
+        || args.pattern_file.is_some()
+        || args.pattern_stdin
+    {
+        return Ok(None);
+    }
+
+    let Some(lines) = args.line.clone() else {
+        return Ok(None);
+    };
+    let mut paths = args.paths.clone();
+    match args.expression.as_ref() {
+        Some(expression) if should_treat_sed_expression_as_read_path(expression) => {
+            paths.insert(0, PathBuf::from(expression));
+        }
+        Some(_) => return Ok(None),
+        None => {}
+    }
+
+    if paths.is_empty() {
+        return Err(render_text_error_result(
+            TextErrorLabel::Unsupported,
+            &sed_read_fallback_hint(None, Some(&lines)),
+            TextExitClassificationInput::invalid_input(operation),
+        ));
+    }
+
+    Ok(Some(SedReadRequest { lines, paths }))
+}
+
+fn resolve_sed_quiet_read_request(
+    args: &SedArgs,
+    operation: TextOperationKind,
+) -> std::result::Result<SedReadRequest, TextCommandResult> {
     let (script, paths) = if args.quiet {
         (args.expression.as_deref(), args.paths.as_slice())
-    } else if args.expression.as_deref() == Some("-n") {
+    } else {
         (
             args.paths.first().and_then(|path| path.to_str()),
             args.paths.get(1..).unwrap_or(&[]),
         )
-    } else {
-        return None;
     };
-
-    let default =
-        "`agent-tools sed` is only for previewing or applying replacements; it is not a sed replacement. For line reads, use `agent-tools read <path> --lines START:END`.";
 
     let Some(script) = script else {
-        return Some(default.to_string());
-    };
-    let Some(lines) = sed_print_script_to_read_lines(script) else {
-        return Some(default.to_string());
-    };
-    let Some(path) = paths.first() else {
-        return Some(format!(
-            "`agent-tools sed` is only for previewing or applying replacements; for line reads, use `agent-tools read <path> --lines {lines}`."
+        return Err(render_text_error_result(
+            TextErrorLabel::Unsupported,
+            &sed_read_fallback_hint(None, None),
+            TextExitClassificationInput::invalid_input(operation),
         ));
     };
+    let Some(lines) = sed_print_script_to_read_lines(script) else {
+        return Err(render_text_error_result(
+            TextErrorLabel::Unsupported,
+            &sed_read_fallback_hint(paths.first(), None),
+            TextExitClassificationInput::invalid_input(operation),
+        ));
+    };
+    if paths.is_empty() {
+        return Err(render_text_error_result(
+            TextErrorLabel::Unsupported,
+            &sed_read_fallback_hint(None, Some(&lines)),
+            TextExitClassificationInput::invalid_input(operation),
+        ));
+    }
 
-    Some(format!(
-        "`agent-tools sed` is only for previewing or applying replacements; for line reads, use `agent-tools read {} --lines {lines}`.",
-        path.display()
-    ))
+    Ok(SedReadRequest {
+        lines,
+        paths: paths.to_vec(),
+    })
+}
+
+fn run_sed_read(
+    request: SedReadRequest,
+    operation: TextOperationKind,
+) -> Result<TextCommandResult> {
+    let mut stdout = String::new();
+    for path in &request.paths {
+        match crate::cmd_read::read_lines_to_string(path, Some(&request.lines)) {
+            Ok(text) => stdout.push_str(&text),
+            Err(err) => {
+                return Ok(render_text_error_result(
+                    TextErrorLabel::InvalidPath,
+                    &err.to_string(),
+                    TextExitClassificationInput::invalid_path(operation),
+                ));
+            }
+        }
+    }
+
+    Ok(TextCommandResult {
+        stdout,
+        stdout_bytes: None,
+        stderr: String::new(),
+        exit_code: 0,
+    })
+}
+
+fn sed_read_fallback_hint(path: Option<&PathBuf>, lines: Option<&str>) -> String {
+    let read_hint = match (path, lines) {
+        (Some(path), Some(lines)) => {
+            format!("`agent-tools read {} --lines {lines}`", path.display())
+        }
+        (Some(path), None) => format!("`agent-tools read {} --lines START:END`", path.display()),
+        (None, Some(lines)) => format!("`agent-tools read <path> --lines {lines}`"),
+        (None, None) => "`agent-tools read <path> --lines START:END`".to_string(),
+    };
+
+    format!(
+        "we do not have this implemented; you may use similar functionality with {read_hint} for line ranges or `agent-tools grep <pattern> <path>` for matching lines"
+    )
+}
+
+fn should_treat_sed_expression_as_read_path(expression: &str) -> bool {
+    if std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join(expression).exists())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    !looks_like_sed_substitution_expression(expression)
+}
+
+fn looks_like_sed_substitution_expression(expression: &str) -> bool {
+    let mut chars = expression.chars();
+    if chars.next() != Some('s') {
+        return false;
+    }
+    let Some(delim) = chars.next() else {
+        return false;
+    };
+    !(delim.is_alphanumeric() || delim == '\\' || delim.is_whitespace())
 }
 
 fn sed_print_script_to_read_lines(script: &str) -> Option<String> {
@@ -1069,14 +1189,22 @@ fn sed_print_script_to_read_lines(script: &str) -> Option<String> {
     if let Some((start, end)) = body.split_once(',') {
         let start = start.trim();
         let end = end.trim();
-        if start.is_empty() || end.is_empty() {
+        if !is_one_based_line_address(start) || !is_supported_end_line_address(end) {
             return None;
         }
         let end = if end == "$" { "" } else { end };
         return Some(format!("{start}:{end}"));
     }
 
-    Some(body.to_string())
+    is_one_based_line_address(body).then(|| body.to_string())
+}
+
+fn is_one_based_line_address(value: &str) -> bool {
+    value.parse::<usize>().is_ok_and(|line| line > 0)
+}
+
+fn is_supported_end_line_address(value: &str) -> bool {
+    value == "$" || is_one_based_line_address(value)
 }
 
 /// Apply the validated sed substitution to one file's decoded text and produce
