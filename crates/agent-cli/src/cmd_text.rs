@@ -847,6 +847,7 @@ pub(crate) struct SedArgs {
     pub(crate) skip: usize,
     pub(crate) pattern_stdin: bool,
     pub(crate) replacement_stdin: bool,
+    pub(crate) quiet: bool,
 }
 
 /// Parsed substitution payload after combining argv, pattern/replacement files,
@@ -896,6 +897,14 @@ fn resolve_sed_operation(args: &SedArgs) -> TextOperationKind {
 }
 
 fn run_sed(args: SedArgs, operation: TextOperationKind) -> Result<TextCommandResult> {
+    if let Some(reason) = sed_read_hint(&args) {
+        return Ok(render_text_error_result(
+            TextErrorLabel::Unsupported,
+            &reason,
+            TextExitClassificationInput::invalid_input(operation),
+        ));
+    }
+
     // The contract reserves a specific diagnostic for `--write -`, distinct
     // from the generic invalid-path stdin marker. Resolve it before path
     // collection so the message is byte-identical to SS-A008.
@@ -1016,6 +1025,58 @@ fn run_sed(args: SedArgs, operation: TextOperationKind) -> Result<TextCommandRes
             limit: args.limit,
         },
     ))
+}
+
+fn sed_read_hint(args: &SedArgs) -> Option<String> {
+    let (script, paths) = if args.quiet {
+        (args.expression.as_deref(), args.paths.as_slice())
+    } else if args.expression.as_deref() == Some("-n") {
+        (
+            args.paths.first().and_then(|path| path.to_str()),
+            args.paths.get(1..).unwrap_or(&[]),
+        )
+    } else {
+        return None;
+    };
+
+    let default =
+        "`agent-tools sed` is only for previewing or applying replacements; it is not a sed replacement. For line reads, use `agent-tools read <path> --lines START:END`.";
+
+    let Some(script) = script else {
+        return Some(default.to_string());
+    };
+    let Some(lines) = sed_print_script_to_read_lines(script) else {
+        return Some(default.to_string());
+    };
+    let Some(path) = paths.first() else {
+        return Some(format!(
+            "`agent-tools sed` is only for previewing or applying replacements; for line reads, use `agent-tools read <path> --lines {lines}`."
+        ));
+    };
+
+    Some(format!(
+        "`agent-tools sed` is only for previewing or applying replacements; for line reads, use `agent-tools read {} --lines {lines}`.",
+        path.display()
+    ))
+}
+
+fn sed_print_script_to_read_lines(script: &str) -> Option<String> {
+    let body = script.trim().strip_suffix('p')?.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    if let Some((start, end)) = body.split_once(',') {
+        let start = start.trim();
+        let end = end.trim();
+        if start.is_empty() || end.is_empty() {
+            return None;
+        }
+        let end = if end == "$" { "" } else { end };
+        return Some(format!("{start}:{end}"));
+    }
+
+    Some(body.to_string())
 }
 
 /// Apply the validated sed substitution to one file's decoded text and produce

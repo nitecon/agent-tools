@@ -41,10 +41,13 @@ const CODE_EXPLORATION_SECTION: &str = r#"
 ### Code Exploration (token-efficient)
 
 - Prefer symbol-aware tools before raw file reads or shell text search.
-- Use `agent-tools grep` and `agent-tools sed` when you need Linux-compatible grep/sed behavior without depending on the host environment.
+- Use `agent-tools read <path> [--lines START:END]` for raw file reads or line ranges.
+- Use `agent-tools grep` for portable text search.
+- Use `agent-tools sed` only for previewing or applying replacements; it is not a sed replacement. Check command help directly if needed.
 
 ```bash
 agent-tools tree [path] --depth <n>            # directory tree
+agent-tools read <path> [--lines START:END]    # full file or line range
 agent-tools symbols <file>                     # list a file's symbols
 agent-tools symbol <name> --file <path>        # extract a symbol's source
 agent-tools search <query> --type symbol|file  # project-wide index search

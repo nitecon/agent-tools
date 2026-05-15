@@ -76,6 +76,7 @@ agent-tools <COMMAND>
 Commands:
   tree      Token-efficient directory tree view
   list      Smart directory listing
+  read      Read a UTF-8 file, optionally limited to a line range
   symbol    Extract a symbol's source code by name
   symbols   List all symbols in a file
   search    Search the project-wide symbol index
@@ -107,6 +108,10 @@ agent-tools tree src/ --depth 5 --max-files 30
 # List directory contents
 agent-tools list
 agent-tools list src/ --sizes
+
+# Read a full file or a line range
+agent-tools read src/main.rs
+agent-tools read src/main.rs --lines 120:220
 
 # Extract a single function from a file
 agent-tools symbol ProcessDamage --file src/DamageSystem.cpp
@@ -379,7 +384,8 @@ Prefer symbol-level tools over raw file reads whenever possible.
 - **Discovery**: Use `tree` to understand structure; `summary` for the "big picture."
 - **Analysis**: Use `symbols` to list a file's API; `symbol` to read specific implementation.
 - **Search**: Use `search` (symbol-index) instead of `grep` (raw text) whenever possible.
-- **Portable text tools**: Use `agent-tools grep` and `agent-tools sed` when you need Linux-compatible grep/sed behavior without depending on the host environment.
+- **File reads**: Use `agent-tools read <path> [--lines START:END]` for raw file reads or line ranges.
+- **Portable text tools**: Use `agent-tools grep` for text search. Use `agent-tools sed` only for previewing or applying replacements; it is not a sed replacement. Check command help directly if needed.
 - **Docs**: Use `doc outline` to scan a markdown file's headings, then `doc section "<heading>"` to read just the relevant part — never `cat` a long doc.
 
 ### CLI Commands (run via Bash):
@@ -390,6 +396,9 @@ Prefer symbol-level tools over raw file reads whenever possible.
 
 # List — smart directory listing (dirs first, minimal output)
 /opt/agentic/bin/agent-tools list [path] --sizes
+
+# Read — full UTF-8 file or selected 1-based line range
+/opt/agentic/bin/agent-tools read <path> [--lines START:END]
 
 # Symbol — extract a symbol's complete source code by name
 /opt/agentic/bin/agent-tools symbol <name> --file <path> --type <kind>
@@ -521,7 +530,8 @@ Prefer symbol-level tools over raw file reads whenever possible.
 - **Discovery**: Use `tree` to understand structure; `summary` for the "big picture."
 - **Analysis**: Use `symbols` to list a file's API; `symbol` to read specific implementation.
 - **Search**: Use `search` (symbol-index) instead of `grep` (raw text) whenever possible.
-- **Portable text tools**: Use `agent-tools grep` and `agent-tools sed` when you need Linux-compatible grep/sed behavior without depending on the host environment.
+- **File reads**: Use `agent-tools read <path> [--lines START:END]` for raw file reads or line ranges.
+- **Portable text tools**: Use `agent-tools grep` for text search. Use `agent-tools sed` only for previewing or applying replacements; it is not a sed replacement. Check command help directly if needed.
 - **Docs**: Use `doc outline` to scan a markdown file's headings, then `doc section "<heading>"` to read just the relevant part — never `cat` a long doc.
 
 ### CLI Commands (run via shell):
@@ -532,6 +542,9 @@ Prefer symbol-level tools over raw file reads whenever possible.
 
 # List — smart directory listing (dirs first, minimal output)
 /opt/agentic/bin/agent-tools list [path] --sizes
+
+# Read — full UTF-8 file or selected 1-based line range
+/opt/agentic/bin/agent-tools read <path> [--lines START:END]
 
 # Symbol — extract a symbol's complete source code by name
 /opt/agentic/bin/agent-tools symbol <name> --file <path> --type <kind>
