@@ -10,7 +10,10 @@
 //! 5. Extract matching binaries and atomically replace them (write `.new`, chmod, rename).
 //! 6. Clean up temp files.
 //!
-//! Set `AGENT_TOOLS_NO_UPDATE=1` to disable all automatic update checks.
+//! Updates are opt-in through the `update` subcommand. Automatic checks are
+//! intentionally disabled for agent-facing command paths because sandboxed
+//! environments often block network access and stderr noise corrupts tool
+//! transcripts.
 
 use anyhow::{bail, Context, Result};
 use semver::Version;
@@ -63,8 +66,8 @@ struct GitHubAsset {
 
 /// Spawn a background update check (async, rate-limited).
 ///
-/// Intended for long-running processes such as the MCP server. The check runs
-/// on a separate tokio task and logs errors to stderr without propagating them.
+/// Kept for embedders that explicitly opt into background updates. Normal
+/// `agent-tools` binaries do not call this from command execution paths.
 /// Respects `AGENT_TOOLS_NO_UPDATE=1`.
 pub fn spawn_update_check() {
     if std::env::var("AGENT_TOOLS_NO_UPDATE").is_ok() {
@@ -92,8 +95,9 @@ pub async fn manual_update() -> Result<()> {
 
 /// Rate-limited auto-update check (blocking).
 ///
-/// Intended for short-lived CLI invocations. Creates a minimal single-threaded
-/// tokio runtime to drive the async update logic. Respects `AGENT_TOOLS_NO_UPDATE=1`.
+/// Kept for embedders that explicitly opt into command-time update checks.
+/// Normal `agent-tools` CLI commands do not call this. Respects
+/// `AGENT_TOOLS_NO_UPDATE=1`.
 pub fn auto_update_blocking() {
     if std::env::var("AGENT_TOOLS_NO_UPDATE").is_ok() {
         return;

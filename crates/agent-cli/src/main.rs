@@ -437,26 +437,6 @@ fn main() -> Result<()> {
 fn main_inner() -> Result<()> {
     let cli = Cli::parse();
 
-    // Auto-update check on every invocation (rate-limited, non-blocking for most calls)
-    // Skip for update/version/init/comms commands to avoid double-checking,
-    // blocking interactive prompts, or slowing down tight comms polling loops.
-    if !matches!(
-        cli.command,
-        Commands::Update
-            | Commands::Version
-            | Commands::Init
-            | Commands::Setup { .. }
-            | Commands::Comms { .. }
-            | Commands::Tasks { .. }
-            | Commands::Docs { .. }
-            | Commands::Artifacts { .. }
-            | Commands::Reviews { .. }
-            | Commands::Specs { .. }
-            | Commands::Patterns { .. }
-    ) {
-        agent_updater::auto_update_blocking();
-    }
-
     // Capture nudge eligibility before the match consumes `cli.command`.
     // The actual emit happens after dispatch so we only nudge on success and
     // never compete with the command's own output.

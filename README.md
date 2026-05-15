@@ -49,9 +49,9 @@ build.bat C:\Tools
 
 This builds in release mode and copies `agent-tools` (CLI), `agent-tools-mcp` (MCP server), and `agent-sync` (sync CLI) to the specified path.
 
-## Auto-Update
+## Updates
 
-Both binaries check for new releases automatically (at most once per hour). When an update is available, it downloads and replaces the binaries in-place — symlinks are preserved since the update writes to the real binary location (e.g., `/opt/agentic/bin/`).
+`agent-tools update` checks for a new release and replaces the installed binaries in-place. Symlinks are preserved since the update writes to the real binary location (e.g., `/opt/agentic/bin/`). Normal CLI commands do not perform network update checks.
 
 ```bash
 # Manual update check
@@ -60,11 +60,10 @@ agent-tools update
 # Check current version
 agent-tools version
 
-# Disable auto-updates
-export AGENT_TOOLS_NO_UPDATE=1
+# Manual updates are opt-in; no auto-update disable flag is required for CLI use.
 ```
 
-The rate-limit marker is stored at `~/.agentic/.agent-tools-update-check` and persists across reboots. Both the CLI and MCP server share the same marker, so an update from either resets the cooldown for both.
+The update rate-limit marker is stored at `~/.agentic/.agent-tools-update-check` and persists across reboots.
 
 ## Usage — CLI (Primary)
 

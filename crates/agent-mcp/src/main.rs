@@ -123,9 +123,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Background update check
-    agent_updater::spawn_update_check();
-
     let transport = (stdin(), stdout());
     let running = server.serve(transport).await.context("serve MCP")?;
     running.waiting().await.context("MCP server closed")?;
