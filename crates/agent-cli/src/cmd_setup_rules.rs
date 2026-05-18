@@ -60,10 +60,10 @@ const COMMS_SECTION: &str = r#"
 ### Comms (gateway-backed messaging)
 
 - Project ident auto-derives from cwd; agent id is machine-persistent.
+- Use comms for explicit gateway or cronjob messages; tasks are the normal work queue.
 - Do NOT use deprecated MCP comms tools.
 
 ```bash
-agent-tools comms recv                   # fetch unread (start of session)
 agent-tools comms confirm <id>           # ack each handled message
 agent-tools comms send "<body>"          # post to project channel
 agent-tools comms reply <id> "<body>"    # threaded reply
@@ -406,7 +406,9 @@ mod tests {
         assert!(b.contains("agent-tools symbol"));
         assert!(b.contains("agent-tools grep"));
         assert!(b.contains("agent-tools sed"));
-        assert!(b.contains("agent-tools comms recv"));
+        assert!(b.contains("Use comms for explicit gateway or cronjob messages"));
+        assert!(b.contains("agent-tools comms send"));
+        assert!(!b.contains("agent-tools comms recv"));
         assert!(b.contains("agent-tools tasks list"));
         assert!(b.contains("agent-tools docs search"));
         assert!(b.contains("publish context and track the publish step"));
@@ -482,7 +484,8 @@ mod tests {
         let full = build_block(true);
         let after_first = compute_new_content("# Header\n", &bare, false);
         let after_second = compute_new_content(&after_first, &full, true);
-        assert!(after_second.contains("agent-tools comms recv"));
+        assert!(after_second.contains("agent-tools comms send"));
+        assert!(!after_second.contains("agent-tools comms recv"));
         assert!(after_second.contains("agent-tools tasks list"));
         assert!(after_second.contains("agent-tools docs search"));
         assert!(after_second.contains("agent-tools patterns check"));

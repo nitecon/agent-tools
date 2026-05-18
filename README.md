@@ -461,10 +461,10 @@ subtask or checklist item.
 
 **Zero-config identity:** The project ident is auto-derived from the git remote of the current working directory (normalized), or the canonical path for non-git dirs. The agent id is persisted at `~/.agentic/agent-tools/agent-id` and reused across invocations. You never pass either value unless explicitly overriding.
 
-### The "Recv First / Confirm Always" Rule
-1. Run `comms recv` at the start of a work session to pick up pending messages.
-2. For every message returned, run `comms confirm <id>` once it has been handled — otherwise it will reappear on the next `recv`.
-3. Use `comms action <id>` when claiming a task, `comms reply <id>` when reporting a result.
+### Usage Guidance
+- Do not poll comms at session start or before every interaction.
+- Use `comms confirm`, `comms reply`, or `comms action` only when a gateway or cronjob message id is already in scope.
+- Use `comms send` for explicit project-channel updates.
 
 ### CLI Commands (run via Bash):
 
@@ -472,10 +472,7 @@ subtask or checklist item.
 # Send a message to the project's channel (auto-derives ident + agent-id)
 /opt/agentic/bin/agent-tools comms send "<body>"
 
-# Fetch unread messages for this project + agent
-/opt/agentic/bin/agent-tools comms recv
-
-# Confirm a message is handled (stops it reappearing on recv)
+# Confirm a message is handled
 /opt/agentic/bin/agent-tools comms confirm <message_id>
 
 # Threaded reply to a specific message
@@ -607,16 +604,15 @@ subtask or checklist item.
 
 **Zero-config identity:** Project ident is auto-derived from the current working directory (git remote when available, canonical path otherwise); agent id is persisted per machine at `~/.agentic/agent-tools/agent-id`. No explicit identity arguments are needed.
 
-### The "Recv First / Confirm Always" Rule
-1. Run `comms recv` at the start of a work session to pick up pending messages.
-2. For every message returned, run `comms confirm <id>` once it has been handled — otherwise it will reappear on the next `recv`.
-3. Use `comms action <id>` when claiming a task, `comms reply <id>` when reporting a result.
+### Usage Guidance
+- Do not poll comms at session start or before every interaction.
+- Use `comms confirm`, `comms reply`, or `comms action` only when a gateway or cronjob message id is already in scope.
+- Use `comms send` for explicit project-channel updates.
 
 ### CLI Commands (run via shell):
 
 ```bash
 /opt/agentic/bin/agent-tools comms send "<body>"
-/opt/agentic/bin/agent-tools comms recv
 /opt/agentic/bin/agent-tools comms confirm <message_id>
 /opt/agentic/bin/agent-tools comms reply <message_id> "<body>"
 /opt/agentic/bin/agent-tools comms action <message_id> "<what you're doing>"
