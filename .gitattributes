@@ -1,1 +1,3 @@
+crates/agent-cli/tests/fixtures/grep_sed/** text eol=lf
+crates/agent-cli/tests/fixtures/grep_sed/platform/*.bin -text -diff
 crates/agent-cli/tests/fixtures/grep_sed/platform/crlf.txt -text -diff
