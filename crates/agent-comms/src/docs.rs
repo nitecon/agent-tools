@@ -542,6 +542,40 @@ mod tests {
     }
 
     #[test]
+    fn publish_request_serializes_hierarchy_and_global_fields() {
+        let content = serde_json::json!({"purpose": "Expose billing actions"});
+        let req = PublishApiDocRequest {
+            app: "billing",
+            title: "Billing API context",
+            content: &content,
+            space: Some("apis"),
+            category: None,
+            parent_page: None,
+            parent_id: Some("page-1"),
+            slug: Some("billing-api"),
+            order: Some(10),
+            sort_order: Some(20),
+            global_rank: Some(2),
+            global_descendants: Some(true),
+            summary: None,
+            kind: "agent_context",
+            source_format: "agent_context",
+            source_ref: None,
+            version: None,
+            labels: None,
+            author: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["space"], "apis");
+        assert_eq!(json["parent_id"], "page-1");
+        assert_eq!(json["slug"], "billing-api");
+        assert_eq!(json["order"], 10);
+        assert_eq!(json["sort_order"], 20);
+        assert_eq!(json["global_rank"], 2);
+        assert_eq!(json["global_descendants"], true);
+    }
+
+    #[test]
     fn api_doc_summary_accepts_artifact_metadata_additively() {
         let json = serde_json::json!({
             "id": "doc-1",
