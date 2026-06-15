@@ -1,6 +1,7 @@
 pub mod config;
 pub mod docs;
 pub mod gateway;
+pub mod hooks;
 pub mod identity;
 pub mod patterns;
 pub mod sanitize;

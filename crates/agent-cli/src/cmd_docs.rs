@@ -1,8 +1,11 @@
-//! `agent-tools docs` subcommands for gateway-backed agent API context.
+//! `agent-tools docs` subcommands for gateway-backed Documentation context.
 
 use crate::cmd_gateway_context::{read_registration_marker, write_registration_marker};
 use agent_comms::config::load_config;
-use agent_comms::docs::{ApiDoc, ApiDocChunk, ApiDocFilters, ApiDocSummary, PublishApiDocRequest};
+use agent_comms::docs::{
+    ApiDoc, ApiDocChunk, ApiDocFilters, ApiDocHierarchyFilters, ApiDocSummary,
+    DocumentationHierarchy, DocumentationNode, DocumentationSpace, PublishApiDocRequest,
+};
 use agent_comms::gateway::GatewayClient;
 use agent_comms::identity::load_or_generate_agent_id;
 use agent_comms::sanitize::short_project_ident;
@@ -11,6 +14,7 @@ use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
@@ -20,7 +24,7 @@ const DEFAULT_SOURCE_FORMAT: &str = "agent_context";
 
 #[derive(Subcommand)]
 pub enum DocsCommands {
-    /// List published agent-first API context documents.
+    /// List published agent-facing Documentation entries.
     List {
         #[arg(long)]
         app: Option<String>,
@@ -37,7 +41,7 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Search published agent-first API context documents.
+    /// Search published agent-facing Documentation entries.
     Search {
         query: String,
         #[arg(long)]
@@ -53,7 +57,7 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Fetch one full API context document.
+    /// Fetch one full Documentation entry.
     Get {
         id: String,
         #[arg(long)]
@@ -62,7 +66,7 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Delete one API context document.
+    /// Delete one Documentation entry.
     #[command(alias = "remove")]
     Delete {
         id: String,
@@ -72,7 +76,7 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Fetch RAG-ready chunks from the API context registry.
+    /// Fetch RAG-ready chunks from Documentation.
     Chunks {
         #[arg(long)]
         app: Option<String>,
@@ -88,12 +92,22 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Publish a docs-first JSON/YAML file as agent API context.
+    /// Publish a docs-first JSON/YAML file as agent-facing Documentation.
     Publish {
         #[arg(long)]
         file: PathBuf,
         #[arg(long)]
         app: Option<String>,
+        #[arg(long)]
+        space: Option<String>,
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(long = "parent-page")]
+        parent_page: Option<String>,
+        #[arg(long)]
+        slug: Option<String>,
+        #[arg(long)]
+        order: Option<i64>,
         #[arg(long)]
         title: Option<String>,
         #[arg(long)]
@@ -129,6 +143,16 @@ pub enum DocsCommands {
         #[arg(long)]
         app: Option<String>,
         #[arg(long)]
+        space: Option<String>,
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(long = "parent-page")]
+        parent_page: Option<String>,
+        #[arg(long)]
+        slug: Option<String>,
+        #[arg(long)]
+        order: Option<i64>,
+        #[arg(long)]
         title: Option<String>,
         #[arg(long)]
         summary: Option<String>,
@@ -158,7 +182,7 @@ pub enum DocsCommands {
         openapi: Option<PathBuf>,
     },
 
-    /// Export one artifact-backed API context to a source-adjacent docs file.
+    /// Export one gateway-backed Documentation entry to a source-adjacent docs file.
     Export {
         /// API context id/artifact id. If omitted, --app must match exactly one doc.
         id: Option<String>,
@@ -179,6 +203,21 @@ pub enum DocsCommands {
         #[arg(long)]
         agent_id: Option<String>,
     },
+
+    /// Show the Documentation hierarchy and placement hints.
+    #[command(alias = "tree", alias = "list-tree", alias = "get-tree")]
+    Hierarchy {
+        #[arg(long)]
+        app: Option<String>,
+        #[arg(long)]
+        space: Option<String>,
+        #[arg(long = "query", alias = "q")]
+        query: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        agent_id: Option<String>,
+    },
 }
 
 struct DocsContext {
@@ -193,6 +232,16 @@ struct DocsContext {
 struct DocsFile {
     app: String,
     title: String,
+    #[serde(default)]
+    space: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    parent_page: Option<String>,
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    order: Option<i64>,
     #[serde(default)]
     summary: Option<String>,
     #[serde(default)]
@@ -213,6 +262,11 @@ struct DocsFile {
 #[derive(Debug, Clone, Default)]
 struct PublishOverrides {
     app: Option<String>,
+    space: Option<String>,
+    category: Option<String>,
+    parent_page: Option<String>,
+    slug: Option<String>,
+    order: Option<i64>,
     title: Option<String>,
     summary: Option<String>,
     kind: Option<String>,
@@ -231,6 +285,7 @@ pub fn dispatch(cmd: DocsCommands) -> Result<()> {
             | DocsCommands::Get { .. }
             | DocsCommands::Delete { .. }
             | DocsCommands::Chunks { .. }
+            | DocsCommands::Hierarchy { .. }
             | DocsCommands::Publish { .. }
             | DocsCommands::Export { .. }
     ) {
@@ -247,9 +302,9 @@ fn ensure_gateway_configured() -> Result<()> {
     let cfg = load_config();
     if cfg.gateway.url.is_none() || cfg.gateway.api_key.is_none() {
         anyhow::bail!(
-            "API context docs are not available - agent-gateway is not configured.\n\
+            "Documentation is not available - agent-gateway is not configured.\n\
              Docs require a running agent-gateway connection. Ask the user to run\n\
-             `agent-tools setup gateway` to enable the agent-first API context registry."
+             `agent-tools setup gateway` to enable the agent-facing Documentation registry."
         );
     }
     Ok(())
@@ -291,9 +346,21 @@ async fn run(cmd: DocsCommands) -> Result<()> {
             project,
             agent_id,
         } => cmd_chunks(app, label, kind, query, project, agent_id).await,
+        DocsCommands::Hierarchy {
+            app,
+            space,
+            query,
+            project,
+            agent_id,
+        } => cmd_hierarchy(app, space, query, project, agent_id).await,
         DocsCommands::Publish {
             file,
             app,
+            space,
+            category,
+            parent_page,
+            slug,
+            order,
             title,
             summary,
             kind,
@@ -307,6 +374,11 @@ async fn run(cmd: DocsCommands) -> Result<()> {
         } => {
             let overrides = PublishOverrides {
                 app,
+                space,
+                category,
+                parent_page,
+                slug,
+                order,
                 title,
                 summary,
                 kind,
@@ -322,6 +394,11 @@ async fn run(cmd: DocsCommands) -> Result<()> {
         DocsCommands::Preview {
             file,
             app,
+            space,
+            category,
+            parent_page,
+            slug,
+            order,
             title,
             summary,
             kind,
@@ -333,6 +410,11 @@ async fn run(cmd: DocsCommands) -> Result<()> {
         } => {
             let overrides = PublishOverrides {
                 app,
+                space,
+                category,
+                parent_page,
+                slug,
+                order,
                 title,
                 summary,
                 kind,
@@ -395,7 +477,7 @@ async fn cmd_list(
         .gateway
         .list_api_docs(&ctx.ident, &filters, Some(&ctx.agent_id))
         .await
-        .context("list API context docs")?;
+        .context("list Documentation entries")?;
     print_doc_list(&ctx.ident, &docs);
     Ok(())
 }
@@ -422,7 +504,7 @@ async fn cmd_delete(id: String, project: Option<String>, agent_id: Option<String
         .await
         .with_context(|| {
             format!(
-                "delete API context doc {id}; if this was a short or stale id, run `agent-tools docs list` and retry with the full id"
+                "delete Documentation entry {id}; if this was a short or stale id, run `agent-tools docs list` and retry with the full id"
             )
         })?;
     print_delete_success(&id, &ctx.ident);
@@ -454,6 +536,38 @@ async fn cmd_chunks(
     Ok(())
 }
 
+async fn cmd_hierarchy(
+    app: Option<String>,
+    space: Option<String>,
+    query: Option<String>,
+    project: Option<String>,
+    agent_id: Option<String>,
+) -> Result<()> {
+    let ctx = resolve_context(project, agent_id)?;
+    ensure_registered(&ctx).await?;
+    let hierarchy_filters = ApiDocHierarchyFilters {
+        query: query.as_deref(),
+        app: app.as_deref(),
+        space: space.as_deref(),
+    };
+    let mut hierarchy = ctx
+        .gateway
+        .api_doc_hierarchy(&ctx.ident, &hierarchy_filters, Some(&ctx.agent_id))
+        .await
+        .context("fetch Documentation hierarchy")?;
+    if hierarchy.spaces.is_empty() && hierarchy.pages.is_empty() {
+        let list_filters = filters(query.as_deref(), app.as_deref(), None, None);
+        let docs = ctx
+            .gateway
+            .list_api_docs(&ctx.ident, &list_filters, Some(&ctx.agent_id))
+            .await
+            .context("fallback list Documentation entries for hierarchy")?;
+        hierarchy = synthesize_hierarchy_from_docs(&ctx.ident, &docs, space.as_deref());
+    }
+    print_hierarchy(&ctx.ident, &hierarchy);
+    Ok(())
+}
+
 async fn cmd_publish(
     file: PathBuf,
     overrides: PublishOverrides,
@@ -470,6 +584,11 @@ async fn cmd_publish(
         app: &prepared.app,
         title: &prepared.title,
         content: &prepared.content,
+        space: prepared.space.as_deref(),
+        category: prepared.category.as_deref(),
+        parent_page: prepared.parent_page.as_deref(),
+        slug: prepared.slug.as_deref(),
+        order: prepared.order,
         summary: prepared.summary.as_deref(),
         kind: prepared.kind.as_deref().unwrap_or(DEFAULT_KIND),
         source_format: prepared
@@ -488,7 +607,7 @@ async fn cmd_publish(
         .context("publish API context doc")?;
 
     println!(
-        "published agent API context [{}] {} ({})",
+        "published Documentation [{}] {} ({})",
         doc.summary.id, doc.summary.title, doc.summary.app
     );
     println!(
@@ -509,7 +628,7 @@ fn cmd_validate(file: PathBuf) -> Result<()> {
     let prepared = load_and_prepare_file(&file, PublishOverrides::default())?;
     validate_docs_file(&prepared)?;
     println!(
-        "valid agent API context file: {} ({})",
+        "valid Documentation context file: {} ({})",
         prepared.title, prepared.app
     );
     print_content_guidance(&prepared.content);
@@ -545,7 +664,7 @@ fn cmd_bootstrap(
     let body = serde_yaml::to_string(&docs).context("serialize starter docs file")?;
     fs::write(&output, body).with_context(|| format!("write {}", output.display()))?;
     println!(
-        "created starter agent API context file {}",
+        "created starter Documentation context file {}",
         output.display()
     );
     Ok(())
@@ -580,7 +699,7 @@ async fn cmd_export(
                 .gateway
                 .list_api_docs(&ctx.ident, &filters, Some(&ctx.agent_id))
                 .await
-                .context("find API context doc for export")?;
+                .context("find Documentation entry for export")?;
             if docs.len() != 1 {
                 anyhow::bail!(
                     "--app {app} matched {} docs; pass the exact id from `agent-tools docs list --app {app}`",
@@ -590,7 +709,7 @@ async fn cmd_export(
             ctx.gateway
                 .get_api_doc(&ctx.ident, &docs[0].id, Some(&ctx.agent_id))
                 .await
-                .context("fetch API context doc for export")?
+                .context("fetch Documentation entry for export")?
         }
     };
     let summary = &doc.summary;
@@ -605,6 +724,11 @@ async fn cmd_export(
     let export_file = DocsFile {
         app: summary.app.clone(),
         title: summary.title.clone(),
+        space: summary.space.clone(),
+        category: summary.category.clone(),
+        parent_page: summary.parent_page.clone(),
+        slug: summary.slug.clone(),
+        order: summary.order,
         summary: summary.summary.clone(),
         kind: summary.kind.clone(),
         source_format: summary.source_format.clone(),
@@ -750,6 +874,21 @@ fn apply_overrides(file: &mut DocsFile, overrides: PublishOverrides) {
     if let Some(v) = overrides.app {
         file.app = v;
     }
+    if overrides.space.is_some() {
+        file.space = overrides.space;
+    }
+    if overrides.category.is_some() {
+        file.category = overrides.category;
+    }
+    if overrides.parent_page.is_some() {
+        file.parent_page = overrides.parent_page;
+    }
+    if overrides.slug.is_some() {
+        file.slug = overrides.slug;
+    }
+    if overrides.order.is_some() {
+        file.order = overrides.order;
+    }
     if let Some(v) = overrides.title {
         file.title = v;
     }
@@ -804,7 +943,7 @@ fn labels_slice(labels: &[String]) -> Option<&[String]> {
 }
 
 fn print_doc_list(project_ident: &str, docs: &[ApiDocSummary]) {
-    println!("Agent API context docs for project {project_ident}");
+    println!("Documentation for project {project_ident}");
     if docs.is_empty() {
         println!("(none)");
         println!("hint: create .agent/api/<app>.yaml or agent-api.yaml, then run `agent-tools docs validate --file PATH` and `agent-tools docs publish --file PATH`.");
@@ -824,7 +963,18 @@ fn print_doc_list(project_ident: &str, docs: &[ApiDocSummary]) {
             doc.kind.as_deref().unwrap_or(DEFAULT_KIND),
             labels
         );
-        print_doc_artifact_metadata(
+        print_doc_location(
+            doc.space.as_deref(),
+            doc.category.as_deref(),
+            doc.slug.as_deref(),
+            doc.parent_page.as_deref(),
+            doc.order,
+            &doc.breadcrumbs,
+            doc.page_id.as_deref(),
+            doc.section_id.as_deref(),
+            7,
+        );
+        print_doc_provenance_metadata(
             &doc.artifact_id,
             doc.artifact_version_id.as_deref(),
             doc.accepted_version_id.as_deref(),
@@ -839,7 +989,7 @@ fn print_doc_list(project_ident: &str, docs: &[ApiDocSummary]) {
 
 fn print_doc_detail(doc: &ApiDoc) {
     let summary = &doc.summary;
-    println!("[{}] agent API context", summary.id);
+    println!("[{}] Documentation", summary.id);
     println!("app: {}", summary.app);
     println!("title: {}", summary.title);
     println!("kind: {}", summary.kind.as_deref().unwrap_or(DEFAULT_KIND));
@@ -856,7 +1006,18 @@ fn print_doc_detail(doc: &ApiDoc) {
     if !summary.labels.is_empty() {
         println!("labels: {}", summary.labels.join(", "));
     }
-    print_doc_artifact_metadata(
+    print_doc_location(
+        summary.space.as_deref(),
+        summary.category.as_deref(),
+        summary.slug.as_deref(),
+        summary.parent_page.as_deref(),
+        summary.order,
+        &summary.breadcrumbs,
+        summary.page_id.as_deref(),
+        summary.section_id.as_deref(),
+        0,
+    );
+    print_doc_provenance_metadata(
         &summary.artifact_id,
         summary.artifact_version_id.as_deref(),
         summary.accepted_version_id.as_deref(),
@@ -884,14 +1045,14 @@ fn print_delete_success(id: &str, project_ident: &str) {
 }
 
 fn render_delete_success(id: &str, project_ident: &str) -> String {
-    format!("deleted agent API context [{id}] from project {project_ident}")
+    format!("deleted Documentation entry [{id}] from project {project_ident}")
 }
 
 fn print_chunks(project_ident: &str, chunks: &[ApiDocChunk]) {
-    println!("Agent API context chunks for project {project_ident}");
+    println!("Documentation chunks for project {project_ident}");
     if chunks.is_empty() {
         println!("(none)");
-        println!("hint: publish agent API context docs first, then retry with --query, --app, --label, or --kind filters.");
+        println!("hint: publish Documentation first, then retry with --query, --app, --label, or --kind filters.");
         return;
     }
     for chunk in chunks {
@@ -906,7 +1067,18 @@ fn print_chunks(project_ident: &str, chunks: &[ApiDocChunk]) {
         if let Some(score) = chunk.score {
             println!("       score={score:.3}");
         }
-        print_doc_artifact_metadata(
+        print_doc_location(
+            chunk.space.as_deref(),
+            chunk.category.as_deref(),
+            chunk.slug.as_deref(),
+            None,
+            None,
+            &chunk.breadcrumbs,
+            chunk.page_id.as_deref(),
+            chunk.section_id.as_deref(),
+            7,
+        );
+        print_doc_provenance_metadata(
             &chunk.artifact_id,
             chunk.artifact_version_id.as_deref(),
             chunk.accepted_version_id.as_deref(),
@@ -929,6 +1101,177 @@ fn print_chunks(project_ident: &str, chunks: &[ApiDocChunk]) {
             .or_else(|| chunk.content.as_ref().map(render_value))
             .unwrap_or_else(|| "(empty chunk)".to_string());
         print_indented_lines(&text, 7);
+    }
+}
+
+fn synthesize_hierarchy_from_docs(
+    project_ident: &str,
+    docs: &[ApiDocSummary],
+    space_filter: Option<&str>,
+) -> DocumentationHierarchy {
+    let mut grouped: BTreeMap<String, DocumentationSpace> = BTreeMap::new();
+    for doc in docs {
+        let space_key = doc.space.clone().unwrap_or_else(|| "default".to_string());
+        if let Some(filter) = space_filter {
+            if space_key != filter {
+                continue;
+            }
+        }
+        let entry = grouped
+            .entry(space_key.clone())
+            .or_insert_with(|| DocumentationSpace {
+                key: Some(space_key.clone()),
+                title: Some(space_key.clone()),
+                app: Some(doc.app.clone()),
+                category: doc.category.clone(),
+                placement_hint: Some(
+                    "Gateway hierarchy endpoint is unavailable; this tree is synthesized from Documentation metadata."
+                        .to_string(),
+                ),
+                ..Default::default()
+            });
+        entry.pages.push(DocumentationNode {
+            id: Some(doc.id.clone()),
+            kind: Some("page".to_string()),
+            title: Some(doc.title.clone()),
+            slug: doc.slug.clone(),
+            path: doc.source_ref.clone(),
+            app: Some(doc.app.clone()),
+            space: doc.space.clone(),
+            category: doc.category.clone(),
+            parent_page: doc.parent_page.clone(),
+            order: doc.order,
+            labels: doc.labels.clone(),
+            current_version_id: doc.artifact_version_id.clone(),
+            accepted_version_id: doc.accepted_version_id.clone(),
+            source_ref: doc.source_ref.clone(),
+            source_artifact_id: doc.artifact_id.clone(),
+            source_artifact_version_id: doc.artifact_version_id.clone(),
+            breadcrumbs: if doc.breadcrumbs.is_empty() {
+                vec![space_key.clone(), doc.title.clone()]
+            } else {
+                doc.breadcrumbs.clone()
+            },
+            ..Default::default()
+        });
+    }
+    DocumentationHierarchy {
+        project_ident: Some(project_ident.to_string()),
+        app: docs.first().map(|doc| doc.app.clone()),
+        spaces: grouped.into_values().collect(),
+        pages: Vec::new(),
+        placement_hints: vec![
+            "Hierarchy endpoint not available; using docs list metadata fallback.".to_string(),
+        ],
+        provenance: None,
+    }
+}
+
+fn print_hierarchy(project_ident: &str, hierarchy: &DocumentationHierarchy) {
+    println!("Documentation hierarchy for project {project_ident}");
+    if let Some(app) = hierarchy.app.as_deref() {
+        println!("app: {app}");
+    }
+    if hierarchy.spaces.is_empty() && hierarchy.pages.is_empty() {
+        println!("(none)");
+        println!("hint: publish Documentation with space/slug metadata, then retry `agent-tools docs hierarchy`.");
+        return;
+    }
+    for hint in &hierarchy.placement_hints {
+        if !hint.trim().is_empty() {
+            println!("hint: {hint}");
+        }
+    }
+    for space in &hierarchy.spaces {
+        print_hierarchy_space(space);
+    }
+    for page in &hierarchy.pages {
+        print_hierarchy_node(page, 2);
+    }
+}
+
+fn print_hierarchy_space(space: &DocumentationSpace) {
+    let key = space
+        .key
+        .as_deref()
+        .or(space.id.as_deref())
+        .unwrap_or("default");
+    let title = space.title.as_deref().unwrap_or(key);
+    println!("  space {key}: {title}");
+    if let Some(app) = space.app.as_deref() {
+        println!("    app: {app}");
+    }
+    if let Some(category) = space.category.as_deref() {
+        println!("    category: {category}");
+    }
+    if let Some(order) = space.order {
+        println!("    order: {order}");
+    }
+    if let Some(hint) = space
+        .placement_hint
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        println!("    placement_hint: {hint}");
+    }
+    for page in &space.pages {
+        print_hierarchy_node(page, 4);
+    }
+}
+
+fn print_hierarchy_node(node: &DocumentationNode, indent: usize) {
+    let pad = " ".repeat(indent);
+    let title = node
+        .title
+        .as_deref()
+        .or(node.slug.as_deref())
+        .or(node.id.as_deref())
+        .unwrap_or("untitled");
+    let kind = node.kind.as_deref().unwrap_or("page");
+    let id = node.id.as_deref().unwrap_or("-");
+    println!("{pad}- {kind} [{id}] {title}");
+    print_doc_location(
+        node.space.as_deref(),
+        node.category.as_deref(),
+        node.slug.as_deref(),
+        node.parent_page.as_deref(),
+        node.order,
+        &node.breadcrumbs,
+        None,
+        None,
+        indent + 2,
+    );
+    if let Some(path) = node.path.as_deref() {
+        println!("{pad}  path: {path}");
+    }
+    if let Some(current) = node.current_version_id.as_deref() {
+        println!("{pad}  current_version_id: {current}");
+    }
+    if let Some(accepted) = node.accepted_version_id.as_deref() {
+        println!("{pad}  accepted_version_id: {accepted}");
+    }
+    if let Some(source) = node.source_ref.as_deref() {
+        println!("{pad}  source_ref: {source}");
+    }
+    print_doc_provenance_metadata(
+        &node.source_artifact_id,
+        node.source_artifact_version_id.as_deref(),
+        node.accepted_version_id.as_deref(),
+        None,
+        indent + 2,
+    );
+    if let Some(hint) = node
+        .placement_hint
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        println!("{pad}  placement_hint: {hint}");
+    }
+    for section in &node.sections {
+        print_hierarchy_node(section, indent + 2);
+    }
+    for child in &node.children {
+        print_hierarchy_node(child, indent + 2);
     }
 }
 
@@ -960,7 +1303,45 @@ fn print_content_guidance(content: &Value) {
     }
 }
 
-fn print_doc_artifact_metadata(
+fn print_doc_location(
+    space: Option<&str>,
+    category: Option<&str>,
+    slug: Option<&str>,
+    parent_page: Option<&str>,
+    order: Option<i64>,
+    breadcrumbs: &[String],
+    page_id: Option<&str>,
+    section_id: Option<&str>,
+    indent: usize,
+) {
+    let pad = " ".repeat(indent);
+    if !breadcrumbs.is_empty() {
+        println!("{pad}breadcrumbs: {}", breadcrumbs.join(" > "));
+    }
+    if let Some(space) = space {
+        println!("{pad}space: {space}");
+    }
+    if let Some(category) = category {
+        println!("{pad}category: {category}");
+    }
+    if let Some(parent) = parent_page {
+        println!("{pad}parent_page: {parent}");
+    }
+    if let Some(slug) = slug {
+        println!("{pad}slug: {slug}");
+    }
+    if let Some(order) = order {
+        println!("{pad}order: {order}");
+    }
+    if let Some(id) = page_id {
+        println!("{pad}page_id: {id}");
+    }
+    if let Some(id) = section_id {
+        println!("{pad}section_id: {id}");
+    }
+}
+
+fn print_doc_provenance_metadata(
     artifact_id: &Option<String>,
     artifact_version_id: Option<&str>,
     accepted_version_id: Option<&str>,
@@ -976,10 +1357,10 @@ fn print_doc_artifact_metadata(
     }
     let pad = " ".repeat(indent);
     if let Some(id) = artifact_id.as_deref() {
-        println!("{pad}artifact_id: {id}");
+        println!("{pad}provenance_artifact_id: {id}");
     }
     if let Some(id) = artifact_version_id {
-        println!("{pad}artifact_version_id: {id}");
+        println!("{pad}provenance_artifact_version_id: {id}");
     }
     if let Some(id) = accepted_version_id {
         println!("{pad}accepted_version_id: {id}");
@@ -1080,6 +1461,11 @@ fn starter_docs_file(app: &str, title: Option<String>) -> DocsFile {
     DocsFile {
         app: app.to_string(),
         title: title.unwrap_or_else(|| format!("{app} API context")),
+        space: None,
+        category: None,
+        parent_page: None,
+        slug: None,
+        order: None,
         summary: Some(
             "Agent-first API context for service workflows, auth, safety, and examples."
                 .to_string(),
@@ -1242,18 +1628,26 @@ content:
             &mut file,
             PublishOverrides {
                 app: Some("payments".to_string()),
+                space: Some("apis".to_string()),
+                parent_page: Some("Billing".to_string()),
+                slug: Some("payments-api".to_string()),
+                order: Some(20),
                 labels: vec!["internal".to_string()],
                 ..Default::default()
             },
         );
         assert_eq!(file.app, "payments");
+        assert_eq!(file.space.as_deref(), Some("apis"));
+        assert_eq!(file.parent_page.as_deref(), Some("Billing"));
+        assert_eq!(file.slug.as_deref(), Some("payments-api"));
+        assert_eq!(file.order, Some(20));
         assert_eq!(file.labels, vec!["internal"]);
     }
 
     #[test]
     fn delete_success_message_names_doc_and_project() {
         let rendered = render_delete_success("doc-1", "agent-tools");
-        assert!(rendered.contains("deleted agent API context [doc-1]"));
+        assert!(rendered.contains("deleted Documentation entry [doc-1]"));
         assert!(rendered.contains("project agent-tools"));
     }
 
@@ -1281,6 +1675,14 @@ content:
             id: "doc-1".to_string(),
             app: "gateway".to_string(),
             title: "Gateway".to_string(),
+            space: None,
+            category: None,
+            parent_page: None,
+            slug: None,
+            order: None,
+            breadcrumbs: Vec::new(),
+            page_id: None,
+            section_id: None,
             summary: None,
             kind: Some("agent_context".to_string()),
             source_format: Some("agent_context".to_string()),

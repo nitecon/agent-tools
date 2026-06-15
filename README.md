@@ -90,6 +90,7 @@ Commands:
   rm        Remove a file or directory
   comms     Send / receive messages via the gateway
   tasks     Per-project task board via the gateway
+  docs      Documentation registry via the gateway
   patterns  Global pattern library and .patterns tracking via the gateway
   setup     Setup and configuration commands
   init      Configure gateway connection (alias for `setup gateway`)
@@ -248,21 +249,22 @@ agent-tools tasks builds
 agent-tools tasks builds --repo nitecon/agent-tools
 ```
 
-### API Context Docs (CLI)
+### Documentation (CLI)
 
-Gateway-backed API docs are agent-first context for services and apps: intent,
+Gateway-backed Documentation gives agents context for services and apps: intent,
 workflows, auth expectations, safety constraints, cross-app relationships,
 copyable examples, operations, and schemas. OpenAPI/Swagger can feed this
 registry, but it is not required.
 
 ```bash
-# Look up API context before searching code for API behavior
+# Look up Documentation before searching code for API behavior
 agent-tools docs search "billing refunds"
+agent-tools docs hierarchy --app billing
 agent-tools docs chunks --query "billing refunds"
 
-# Validate and publish a docs-first file
+# Validate and publish a docs-first file, optionally with wiki placement
 agent-tools docs validate --file .agent/api/billing.yaml
-agent-tools docs publish --file .agent/api/billing.yaml
+agent-tools docs publish --file .agent/api/billing.yaml --space apis --slug billing
 
 # Create a starter file, optionally from OpenAPI/Swagger
 agent-tools docs bootstrap --app billing --output .agent/api/billing.yaml
@@ -340,7 +342,19 @@ Detection is by **agent home directory** rather than rule-file existence, so a f
 
 The injected block is wrapped in `<agent-tools-rules>...</agent-tools-rules>` markers; re-runs replace the block in place rather than duplicating it. A `<file>.bak` sibling is written before each destructive modification so changes are recoverable (brand-new files skip the backup to avoid zero-byte `.bak` clutter).
 
-When the gateway is configured, the injected block includes code-exploration + comms + tasks + patterns. When the gateway is not configured, only the code-exploration section is injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
+When the gateway is configured, the injected block includes code-exploration + comms + tasks + Documentation + patterns. When the gateway is not configured, only the code-exploration section is injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
+
+### Automated install: `agent-tools setup hooks`
+
+Syncs app-scoped hook files from the gateway for detected clients. Hooks are pulled per app namespace and written only under that client's local hook directory.
+
+```bash
+agent-tools setup hooks                 # sync every detected app
+agent-tools setup hooks --app codex     # sync one app
+agent-tools setup hooks --dry-run       # show target paths without writing
+```
+
+If the gateway has no hooks for an app, setup skips that app without error. Hook names must be safe relative paths; absolute paths, `..`, and backslash-separated paths are rejected before writing.
 
 ### Automated install: `agent-tools setup skill`
 
@@ -429,18 +443,19 @@ Prefer symbol-level tools over raw file reads whenever possible.
 </code_exploration_protocol>
 
 <api_context_protocol>
-## API Context Docs (MANDATORY when API-related)
+## Documentation (MANDATORY when API-related)
 
 Before searching code for API behavior or implementing API-related work, look
-up the gateway-backed agent API context:
+up gateway-backed Documentation and its hierarchy:
 
 ```bash
 /opt/agentic/bin/agent-tools docs search "<api-or-workflow>"
+/opt/agentic/bin/agent-tools docs hierarchy [--app APP] [--space SPACE]
 /opt/agentic/bin/agent-tools docs chunks --query "<api-or-workflow>"
 /opt/agentic/bin/agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
 ```
 
-If no API context exists, tell the user that future agents will work faster if
+If no Documentation context exists, tell the user that future agents will work faster if
 one is created, and ask whether to add `.agent/api/<app>.yaml` or
 `agent-api.yaml`. When creating or materially changing API-related files,
 publish the corresponding context with:
@@ -572,18 +587,19 @@ Prefer symbol-level tools over raw file reads whenever possible.
 </code_exploration_protocol>
 
 <api_context_protocol>
-## API Context Docs (MANDATORY when API-related)
+## Documentation (MANDATORY when API-related)
 
 Before searching code for API behavior or implementing API-related work, look
-up the gateway-backed agent API context:
+up gateway-backed Documentation and its hierarchy:
 
 ```bash
 /opt/agentic/bin/agent-tools docs search "<api-or-workflow>"
+/opt/agentic/bin/agent-tools docs hierarchy [--app APP] [--space SPACE]
 /opt/agentic/bin/agent-tools docs chunks --query "<api-or-workflow>"
 /opt/agentic/bin/agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
 ```
 
-If no API context exists, tell the user that future agents will work faster if
+If no Documentation context exists, tell the user that future agents will work faster if
 one is created, and ask whether to add `.agent/api/<app>.yaml` or
 `agent-api.yaml`. When creating or materially changing API-related files,
 publish the corresponding context with:

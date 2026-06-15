@@ -13,6 +13,22 @@ pub struct ApiDocSummary {
     pub app: String,
     pub title: String,
     #[serde(default)]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub parent_page: Option<String>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub order: Option<i64>,
+    #[serde(default)]
+    pub breadcrumbs: Vec<String>,
+    #[serde(default)]
+    pub page_id: Option<String>,
+    #[serde(default)]
+    pub section_id: Option<String>,
+    #[serde(default)]
     pub summary: Option<String>,
     #[serde(default)]
     pub kind: Option<String>,
@@ -64,6 +80,18 @@ pub struct ApiDocChunk {
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub breadcrumbs: Vec<String>,
+    #[serde(default)]
+    pub page_id: Option<String>,
+    #[serde(default)]
+    pub section_id: Option<String>,
+    #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
@@ -99,6 +127,16 @@ pub struct PublishApiDocRequest<'a> {
     pub title: &'a str,
     pub content: &'a Value,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub space: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_page: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<&'a str>,
     pub kind: &'a str,
     pub source_format: &'a str,
@@ -118,6 +156,93 @@ pub struct ApiDocFilters<'a> {
     pub app: Option<&'a str>,
     pub label: Option<&'a str>,
     pub kind: Option<&'a str>,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct ApiDocHierarchyFilters<'a> {
+    pub query: Option<&'a str>,
+    pub app: Option<&'a str>,
+    pub space: Option<&'a str>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct DocumentationHierarchy {
+    #[serde(default)]
+    pub project_ident: Option<String>,
+    #[serde(default)]
+    pub app: Option<String>,
+    #[serde(default)]
+    pub spaces: Vec<DocumentationSpace>,
+    #[serde(default)]
+    pub pages: Vec<DocumentationNode>,
+    #[serde(default)]
+    pub placement_hints: Vec<String>,
+    #[serde(default)]
+    pub provenance: Option<Value>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct DocumentationSpace {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub app: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub order: Option<i64>,
+    #[serde(default)]
+    pub pages: Vec<DocumentationNode>,
+    #[serde(default)]
+    pub placement_hint: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct DocumentationNode {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub app: Option<String>,
+    #[serde(default)]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub parent_page: Option<String>,
+    #[serde(default)]
+    pub order: Option<i64>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub current_version_id: Option<String>,
+    #[serde(default)]
+    pub accepted_version_id: Option<String>,
+    #[serde(default)]
+    pub source_ref: Option<String>,
+    #[serde(default)]
+    pub source_artifact_id: Option<String>,
+    #[serde(default)]
+    pub source_artifact_version_id: Option<String>,
+    #[serde(default)]
+    pub breadcrumbs: Vec<String>,
+    #[serde(default)]
+    pub sections: Vec<DocumentationNode>,
+    #[serde(default)]
+    pub children: Vec<DocumentationNode>,
+    #[serde(default)]
+    pub placement_hint: Option<String>,
 }
 
 impl GatewayClient {
@@ -211,6 +336,29 @@ impl GatewayClient {
             .context("GET /v1/projects/:ident/api-docs/chunks")?;
         decode_or_bail(resp).await
     }
+
+    pub async fn api_doc_hierarchy(
+        &self,
+        ident: &str,
+        filters: &ApiDocHierarchyFilters<'_>,
+        agent_id: Option<&str>,
+    ) -> Result<DocumentationHierarchy> {
+        let url = build_api_doc_hierarchy_url(self.base_url(), ident, filters);
+        let builder = self
+            .http_client()
+            .get(&url)
+            .header("Authorization", self.auth());
+        let resp = Self::add_agent_id(builder, agent_id)
+            .send()
+            .await
+            .context("GET /v1/projects/:ident/api-docs/hierarchy")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(DocumentationHierarchy::default());
+        }
+        let value: Value = decode_or_bail(resp).await?;
+        let payload = value.get("data").cloned().unwrap_or(value);
+        serde_json::from_value(payload).context("decode api-docs hierarchy response")
+    }
 }
 
 async fn decode_or_bail<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
@@ -261,6 +409,23 @@ fn build_api_doc_url(base_url: &str, ident: &str, doc_id: &str) -> String {
     )
 }
 
+fn build_api_doc_hierarchy_url(
+    base_url: &str,
+    ident: &str,
+    filters: &ApiDocHierarchyFilters<'_>,
+) -> String {
+    let mut url = format!("{base_url}/v1/projects/{ident}/api-docs/hierarchy");
+    let mut parts = Vec::new();
+    push_query(&mut parts, "q", filters.query);
+    push_query(&mut parts, "app", filters.app);
+    push_query(&mut parts, "space", filters.space);
+    if !parts.is_empty() {
+        url.push('?');
+        url.push_str(&parts.join("&"));
+    }
+    url
+}
+
 fn push_query(parts: &mut Vec<String>, key: &str, value: Option<&str>) {
     if let Some(value) = value {
         if !value.trim().is_empty() {
@@ -293,6 +458,11 @@ mod tests {
             app: "billing",
             title: "Billing API context",
             content: &content,
+            space: None,
+            category: None,
+            parent_page: None,
+            slug: None,
+            order: None,
             summary: None,
             kind: "agent_context",
             source_format: "agent_context",
@@ -320,11 +490,20 @@ mod tests {
             "source_format": "agent_context",
             "labels": [],
             "author": "tester",
+            "space": "apis",
+            "slug": "gateway",
+            "breadcrumbs": ["Documentation", "APIs", "Gateway"],
             "artifact_id": "art-1",
             "artifact_version_id": "ver-1",
             "chunking_status": "current"
         });
         let summary: ApiDocSummary = serde_json::from_value(json).unwrap();
+        assert_eq!(summary.space.as_deref(), Some("apis"));
+        assert_eq!(summary.slug.as_deref(), Some("gateway"));
+        assert_eq!(
+            summary.breadcrumbs,
+            vec!["Documentation", "APIs", "Gateway"]
+        );
         assert_eq!(summary.artifact_id.as_deref(), Some("art-1"));
         assert_eq!(summary.artifact_version_id.as_deref(), Some("ver-1"));
         assert_eq!(summary.chunking_status.as_deref(), Some("current"));
@@ -366,6 +545,19 @@ mod tests {
         assert_eq!(
             build_api_doc_url("https://gateway.example", "agent-tools", "doc/id#1"),
             "https://gateway.example/v1/projects/agent-tools/api-docs/doc%2Fid%231"
+        );
+    }
+
+    #[test]
+    fn hierarchy_url_encodes_filters() {
+        let filters = ApiDocHierarchyFilters {
+            query: Some("setup hooks"),
+            app: Some("agent/tools"),
+            space: Some("API Context"),
+        };
+        assert_eq!(
+            build_api_doc_hierarchy_url("https://gateway.example", "agent-tools", &filters),
+            "https://gateway.example/v1/projects/agent-tools/api-docs/hierarchy?q=setup%20hooks&app=agent%2Ftools&space=API%20Context"
         );
     }
 }

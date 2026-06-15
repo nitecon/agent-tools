@@ -1,19 +1,40 @@
 app: agent-tools
 title: Agent Tools gateway API context
-summary: Agent-first context for gateway-backed agent-tools workflows, including API docs and global patterns.
+summary: Agent-first context for gateway-backed agent-tools workflows, including Documentation, app-scoped hooks, and global patterns.
 kind: agent_context
 source_format: agent_context
 source_ref: .agent/api/agent-tools.yaml
 labels:
   - agent-tools
   - gateway
+  - documentation
+  - hooks
   - patterns
 content:
   purpose: >
-    Agent Tools exposes gateway-backed command surfaces for project API context,
-    global implementation patterns, task tracking, and comms. Agents should use
-    this context before changing the matching CLI or gateway client contracts.
+    Agent Tools exposes gateway-backed command surfaces for project
+    Documentation context, app-scoped hook setup, global implementation
+    patterns, task tracking, and comms. Agents should use this context before
+    changing the matching CLI or gateway client contracts.
   workflows:
+    - name: Discover Documentation placement
+      steps:
+        - Run agent-tools docs hierarchy before publishing or reorganizing docs.
+        - Use --app APP or --space SPACE when the destination app or wiki space is known.
+        - Use breadcrumbs, page/section ids, and placement hints from the hierarchy response to choose where new docs belong.
+        - Keep source/provenance ids for debugging, but use Documentation terminology in agent-facing output.
+    - name: Publish Documentation context
+      steps:
+        - Author a docs-first file such as .agent/api/<app>.yaml with app, title, content, and optional space/category/parent_page/slug/order placement metadata.
+        - Validate locally with agent-tools docs validate --file PATH.
+        - Publish with agent-tools docs publish --file PATH.
+        - Search with agent-tools docs search and retrieve RAG chunks with agent-tools docs chunks; results may include breadcrumbs and page/section targets.
+    - name: Sync app-scoped hooks
+      steps:
+        - Run agent-tools setup hooks after gateway setup to pull hooks for detected clients.
+        - Use agent-tools setup hooks --app codex, --app claude, or --app gemini for one namespace.
+        - Treat hooks as app-scoped; never install hook records returned for a different app namespace.
+        - Hook names must be safe relative paths under the client hook directory; setup verifies size/checksum metadata when present.
     - name: Publish global patterns
       steps:
         - Validate a pattern file or markdown catalog with agent-tools patterns validate --file PATH.
@@ -26,6 +47,51 @@ content:
         - Add --category or --label when the desired guidance family is known.
         - Fetch full bodies with agent-tools patterns get ID_OR_SLUG before editing or applying a pattern.
   endpoints:
+    - method: GET
+      path: /v1/projects/:ident/api-docs/hierarchy
+      purpose: Return a wiki-style Documentation tree with spaces, pages, sections, breadcrumbs, placement hints, version ids, labels, and provenance pointers.
+      query:
+        - q
+        - app
+        - space
+    - method: GET
+      path: /v1/projects/:ident/api-docs/chunks
+      purpose: Return ranked Documentation chunks with breadcrumbs and page/section targets when available.
+      query:
+        - q
+        - app
+        - label
+        - kind
+    - method: POST
+      path: /v1/projects/:ident/api-docs
+      purpose: Publish a docs-first Documentation entry with optional wiki placement metadata.
+      request:
+        required:
+          - app
+          - title
+          - content
+        optional:
+          - space
+          - category
+          - parent_page
+          - slug
+          - order
+          - summary
+          - labels
+          - source_ref
+          - version
+    - method: GET
+      path: /v1/hooks
+      purpose: List app-scoped hook records for setup sync.
+      query:
+        - app
+      response_fields:
+        - app
+        - name
+        - content
+        - size
+        - checksum
+        - updated_at
     - method: GET
       path: /v1/patterns
       purpose: List or search global patterns.
@@ -60,6 +126,9 @@ content:
     agent_id_header: X-Agent-ID
   safety:
     - Keep CLI output concise and agent-facing; do not add JSON output flags for agent workflows.
+    - Use Documentation as the primary agent-facing term. Reserve artifact ids for provenance/debug output and low-level artifact commands.
+    - Always request hooks with an explicit app namespace such as codex, claude, or gemini; hooks are not portable across clients.
+    - Reject unsafe hook names before writing; names must be relative paths without parent-directory traversal.
     - Fetch pattern body and comments before editing an existing gateway pattern.
     - Treat categories as routing metadata and labels as looser search tags.
     - Preserve slug stability for published pattern catalogs so repeat publishes update existing records.
@@ -77,6 +146,35 @@ content:
         - state
         - author
         - created_at
+        - updated_at
+    documentation_hierarchy_node:
+      fields:
+        - id
+        - kind
+        - title
+        - slug
+        - path
+        - app
+        - space
+        - category
+        - parent_page
+        - order
+        - labels
+        - current_version_id
+        - accepted_version_id
+        - breadcrumbs
+        - sections
+        - children
+        - source_ref
+        - source_artifact_id
+        - source_artifact_version_id
+    hook_record:
+      fields:
+        - app
+        - name
+        - content
+        - size
+        - checksum
         - updated_at
     create_pattern_request:
       required:

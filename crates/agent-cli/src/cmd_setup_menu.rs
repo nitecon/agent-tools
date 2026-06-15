@@ -3,16 +3,17 @@
 //!
 //! The components are intentionally executed in a fixed order:
 //!   1. gateway  — supplies the URL/key that rules+comms+tasks all depend on
-//!   2. rules    — injects the mandatory-protocols block into rule files
-//!   3. skill    — installs the Claude Code skill (independent of gateway)
-//!   4. perms    — denies native Task* so agents are forced onto the board
+//!   2. hooks    — syncs app-scoped hook files from the gateway when present
+//!   3. rules    — injects the mandatory-protocols block into rule files
+//!   4. skill    — installs the Claude Code skill (independent of gateway)
+//!   5. perms    — denies native Task* so agents are forced onto the board
 //!
 //! Putting rules before skill keeps humans reading a freshly-updated
 //! CLAUDE.md able to see the new rules ahead of the model discovering the
 //! skill. Perms is intentionally last so a partial failure still leaves the
 //! positive instructions (rules+skill) in place without the blocking denies.
 
-use crate::{cmd_setup_perms, cmd_setup_rules, cmd_setup_skill};
+use crate::{cmd_setup_hooks, cmd_setup_perms, cmd_setup_rules, cmd_setup_skill};
 use agent_comms::config::{load_config, user_gateway_conf_path};
 use anyhow::{Context, Result};
 use std::io::{self, BufRead, Write};
@@ -21,14 +22,16 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Component {
     Gateway,
+    Hooks,
     Rules,
     Skill,
     Perms,
 }
 
 impl Component {
-    pub const ALL: [Component; 4] = [
+    pub const ALL: [Component; 5] = [
         Component::Gateway,
+        Component::Hooks,
         Component::Rules,
         Component::Skill,
         Component::Perms,
@@ -37,6 +40,7 @@ impl Component {
     fn label(self) -> &'static str {
         match self {
             Component::Gateway => "Gateway",
+            Component::Hooks => "Hooks",
             Component::Rules => "Rules",
             Component::Skill => "Skill",
             Component::Perms => "Perms",
@@ -84,7 +88,7 @@ pub fn run_interactive() -> Result<()> {
 /// confirmation prompt; useful for scripted installs.
 pub fn run_all(assume_yes: bool) -> Result<()> {
     if !assume_yes {
-        println!("Will install: gateway, rules, skill, perms.");
+        println!("Will install: gateway, hooks, rules, skill, perms.");
         print!("Proceed? [y/N]: ");
         io::stdout().flush().context("flush stdout")?;
         let mut input = String::new();
@@ -110,6 +114,7 @@ struct ComponentState {
 fn probe(c: Component) -> ComponentState {
     match c {
         Component::Gateway => probe_gateway(),
+        Component::Hooks => probe_hooks(),
         Component::Rules => probe_rules(),
         Component::Skill => probe_skill(),
         Component::Perms => probe_perms(),
@@ -130,6 +135,21 @@ fn probe_gateway() -> ComponentState {
                 user_gateway_conf_path().display()
             ),
         },
+    }
+}
+
+fn probe_hooks() -> ComponentState {
+    let detected = cmd_setup_hooks::detected_target_labels();
+    if detected.is_empty() {
+        return ComponentState {
+            installed: false,
+            detail: "no supported agent homes detected".to_string(),
+        };
+    }
+    let installed_roots = cmd_setup_hooks::installed_hook_roots();
+    ComponentState {
+        installed: !installed_roots.is_empty(),
+        detail: format!("detected apps: {}", detected.join(", ")),
     }
 }
 
@@ -244,6 +264,7 @@ fn run_components(components: &[Component]) -> Result<()> {
         println!("=== {} ===", c.label());
         let result = match c {
             Component::Gateway => agent_comms::config::run_setup_gateway(),
+            Component::Hooks => cmd_setup_hooks::run(Vec::new(), false),
             Component::Rules => cmd_setup_rules::run(None, true, false, false),
             Component::Skill => cmd_setup_skill::run(false, false),
             Component::Perms => cmd_setup_perms::run(false, false, false),
@@ -316,24 +337,24 @@ mod tests {
     #[test]
     fn parse_selection_specific_indices() {
         let r = parse_selection("1,3", &Component::ALL).unwrap();
-        assert_eq!(r, vec![Component::Gateway, Component::Skill]);
+        assert_eq!(r, vec![Component::Gateway, Component::Rules]);
     }
 
     #[test]
     fn parse_selection_dedupes() {
         let r = parse_selection("2,2,4,2", &Component::ALL).unwrap();
-        assert_eq!(r, vec![Component::Rules, Component::Perms]);
+        assert_eq!(r, vec![Component::Hooks, Component::Skill]);
     }
 
     #[test]
     fn parse_selection_handles_whitespace() {
         let r = parse_selection("  1 , 4  ", &Component::ALL).unwrap();
-        assert_eq!(r, vec![Component::Gateway, Component::Perms]);
+        assert_eq!(r, vec![Component::Gateway, Component::Skill]);
     }
 
     #[test]
     fn parse_selection_rejects_out_of_range() {
-        assert!(parse_selection("5", &Component::ALL).is_err());
+        assert!(parse_selection("6", &Component::ALL).is_err());
         assert!(parse_selection("0", &Component::ALL).is_err());
     }
 
@@ -351,6 +372,7 @@ mod tests {
             Component::ALL,
             [
                 Component::Gateway,
+                Component::Hooks,
                 Component::Rules,
                 Component::Skill,
                 Component::Perms

@@ -4,6 +4,7 @@ mod cmd_docs_artifacts;
 mod cmd_gateway_context;
 mod cmd_patterns;
 mod cmd_read;
+mod cmd_setup_hooks;
 mod cmd_setup_menu;
 mod cmd_setup_perms;
 mod cmd_setup_rules;
@@ -404,7 +405,17 @@ enum SetupCommands {
         print: bool,
     },
 
-    /// Run gateway → rules → skill → perms non-interactively.
+    /// Sync app-scoped hooks from the gateway for detected agent clients.
+    Hooks {
+        /// Client app to sync. Repeatable. Defaults to every detected app.
+        #[arg(long = "app")]
+        app: Vec<String>,
+        /// Show target paths without writing hook files.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Run gateway -> hooks -> rules -> skill -> perms non-interactively.
     All {
         /// Skip the confirmation prompt.
         #[arg(short = 'y', long)]
@@ -651,6 +662,7 @@ fn main_inner() -> Result<()> {
                 dry_run,
                 print,
             }) => cmd_setup_perms::run(remove, dry_run, print),
+            Some(SetupCommands::Hooks { app, dry_run }) => cmd_setup_hooks::run(app, dry_run),
             Some(SetupCommands::All { yes }) => cmd_setup_menu::run_all(yes),
         },
 
@@ -849,8 +861,9 @@ fn maybe_print_api_context_hint(query: &str) {
         return;
     }
     eprintln!(
-        "hint: API-related search detected. Also check agent API context with \
-         `agent-tools docs search \"{query}\"` or \
+        "hint: API-related search detected. Also check Documentation with \
+         `agent-tools docs search \"{query}\"`, \
+         `agent-tools docs hierarchy`, or \
          `agent-tools docs chunks --query \"{query}\"`. If no docs exist, ask \
          whether to create .agent/api/<app>.yaml or agent-api.yaml and publish \
          it with `agent-tools docs publish --file PATH` for future agents."

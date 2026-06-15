@@ -92,15 +92,17 @@ agent-tools tasks rank <id> <n>          # set ordering within a column
 "#;
 
 const DOCS_SECTION: &str = r#"
-### API Context Docs (gateway-backed)
+### Documentation (gateway-backed)
 
-- Before code search or API work, look up existing API context.
+- Before code search or API work, look up existing Documentation context.
+- Use `docs hierarchy` to find where docs live and where new docs belong.
 - If docs are missing, propose `.agent/api/<app>.yaml`.
 - After material API file changes, publish context and track the publish step.
 
 ```bash
 agent-tools docs search "<api-or-workflow>"
 agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
+agent-tools docs hierarchy [--app APP] [--space SPACE]
 agent-tools docs get <id>
 agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL]
 agent-tools docs validate --file .agent/api/<app>.yaml
@@ -411,6 +413,7 @@ mod tests {
         assert!(!b.contains("agent-tools comms recv"));
         assert!(b.contains("agent-tools tasks list"));
         assert!(b.contains("agent-tools docs search"));
+        assert!(b.contains("agent-tools docs hierarchy"));
         assert!(b.contains("publish context and track the publish step"));
         assert!(b.contains("agent-tools patterns check"));
         // Markers appear exactly once each — the body text never repeats them.
@@ -488,6 +491,7 @@ mod tests {
         assert!(!after_second.contains("agent-tools comms recv"));
         assert!(after_second.contains("agent-tools tasks list"));
         assert!(after_second.contains("agent-tools docs search"));
+        assert!(after_second.contains("agent-tools docs hierarchy"));
         assert!(after_second.contains("agent-tools patterns check"));
         assert_eq!(after_second.matches(OPEN_MARKER).count(), 1);
         assert_eq!(after_second.matches(CLOSE_MARKER).count(), 1);
