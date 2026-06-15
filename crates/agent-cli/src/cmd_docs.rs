@@ -1303,6 +1303,7 @@ fn print_content_guidance(content: &Value) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_doc_location(
     space: Option<&str>,
     category: Option<&str>,
