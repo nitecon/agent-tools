@@ -19,16 +19,29 @@ content:
   workflows:
     - name: Discover Documentation placement
       steps:
-        - Run agent-tools docs hierarchy before publishing or reorganizing docs.
+        - Run agent-tools docs hierarchy --scope all before publishing or reorganizing docs.
         - Use --app APP or --space SPACE when the destination app or wiki space is known.
         - Use breadcrumbs, page/section ids, and placement hints from the hierarchy response to choose where new docs belong.
+        - Render scope, global_rank, owner_project, wiki_path, artifact_id, and artifact_version_id when the gateway returns them.
         - Keep source/provenance ids for debugging, but use Documentation terminology in agent-facing output.
+    - name: Search shared Documentation
+      steps:
+        - Run agent-tools docs search "<query>" --scope global to find globally visible shared docs.
+        - Treat global_rank as gateway-provided priority metadata configured in the gateway UI as Global 1, Global 2, and so on.
+        - Do not infer priority from SRE, security, platform, or owner_project naming conventions.
+        - Expect results to render scope, global_rank, owner_project, wiki_path, artifact_id, and artifact_version_id when present.
+    - name: Fetch local plus global chunks
+      steps:
+        - Run agent-tools docs chunks --query "<query>" --scope all for RAG context that combines project-local and global docs.
+        - Preserve gateway result ordering; the CLI should not hardcode owner/project precedence for global docs.
+        - Inspect scope, global_rank, owner_project, wiki_path, and provenance ids on each chunk before deciding what context applies.
     - name: Publish Documentation context
       steps:
-        - Author a docs-first file such as .agent/api/<app>.yaml with app, title, content, and optional space/category/parent_page/slug/order placement metadata.
+        - Author a docs-first file such as .agent/api/<app>.yaml with app, title, content, and optional space/category/parent_page/parent_id/slug/order/sort_order placement metadata.
+        - Use global_rank and global_descendants only when the user intends the page or subtree to be globally visible.
         - Validate locally with agent-tools docs validate --file PATH.
         - Publish with agent-tools docs publish --file PATH.
-        - Search with agent-tools docs search and retrieve RAG chunks with agent-tools docs chunks; results may include breadcrumbs and page/section targets.
+        - Search with agent-tools docs search and retrieve RAG chunks with agent-tools docs chunks; results may include breadcrumbs, page/section targets, scope, global_rank, owner_project, and wiki_path.
     - name: Sync app-scoped hooks
       steps:
         - Run agent-tools setup hooks after gateway setup to pull hooks for detected clients.
@@ -54,6 +67,14 @@ content:
         - q
         - app
         - space
+        - scope
+      response_fields:
+        - scope
+        - global_rank
+        - owner_project
+        - wiki_path
+        - artifact_id
+        - artifact_version_id
     - method: GET
       path: /v1/projects/:ident/api-docs/chunks
       purpose: Return ranked Documentation chunks with breadcrumbs and page/section targets when available.
@@ -62,6 +83,30 @@ content:
         - app
         - label
         - kind
+        - scope
+      response_fields:
+        - scope
+        - global_rank
+        - owner_project
+        - wiki_path
+        - artifact_id
+        - artifact_version_id
+    - method: GET
+      path: /v1/projects/:ident/api-docs
+      purpose: List or search Documentation entries with optional local/global/all visibility scope.
+      query:
+        - q
+        - app
+        - label
+        - kind
+        - scope
+      response_fields:
+        - scope
+        - global_rank
+        - owner_project
+        - wiki_path
+        - artifact_id
+        - artifact_version_id
     - method: POST
       path: /v1/projects/:ident/api-docs
       purpose: Publish a docs-first Documentation entry with optional wiki placement metadata.
@@ -74,8 +119,12 @@ content:
           - space
           - category
           - parent_page
+          - parent_id
           - slug
           - order
+          - sort_order
+          - global_rank
+          - global_descendants
           - summary
           - labels
           - source_ref
@@ -127,6 +176,7 @@ content:
   safety:
     - Keep CLI output concise and agent-facing; do not add JSON output flags for agent workflows.
     - Use Documentation as the primary agent-facing term. Reserve artifact ids for provenance/debug output and low-level artifact commands.
+    - Treat scope, global_rank, owner_project, wiki_path, artifact_id, and artifact_version_id as gateway-provided metadata; preserve gateway ordering for global docs.
     - Always request hooks with an explicit app namespace such as codex, claude, or gemini; hooks are not portable across clients.
     - Reject unsafe hook names before writing; names must be relative paths without parent-directory traversal.
     - Fetch pattern body and comments before editing an existing gateway pattern.
@@ -158,7 +208,14 @@ content:
         - space
         - category
         - parent_page
+        - parent_id
         - order
+        - sort_order
+        - scope
+        - global_rank
+        - global_descendants
+        - owner_project
+        - wiki_path
         - labels
         - current_version_id
         - accepted_version_id
@@ -168,6 +225,8 @@ content:
         - source_ref
         - source_artifact_id
         - source_artifact_version_id
+        - artifact_id
+        - artifact_version_id
     hook_record:
       fields:
         - app
@@ -193,3 +252,9 @@ content:
       command: agent-tools patterns publish --file DevelopWithGo.md
     - name: Search Go patterns by category
       command: agent-tools patterns search router --category programming-language/golang --version latest --state active
+    - name: Browse local plus global Documentation hierarchy
+      command: agent-tools docs hierarchy --scope all
+    - name: Search globally visible Documentation
+      command: agent-tools docs search "publishing api context" --scope global
+    - name: Fetch local plus global Documentation chunks
+      command: agent-tools docs chunks --query "artifact provenance" --scope all

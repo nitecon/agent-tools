@@ -95,16 +95,17 @@ const DOCS_SECTION: &str = r#"
 ### Documentation (gateway-backed)
 
 - Before code search or API work, look up existing Documentation context.
-- Use `docs hierarchy` to find where docs live and where new docs belong.
+- Use `docs hierarchy --scope all` to find where local and global docs live and where new docs belong.
+- Treat `scope`, `global_rank`, `owner_project`, `wiki_path`, and artifact ids as gateway-provided metadata; do not infer priority from owner project names.
 - If docs are missing, propose `.agent/api/<app>.yaml`.
 - After material API file changes, publish context and track the publish step.
 
 ```bash
-agent-tools docs search "<api-or-workflow>"
-agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
-agent-tools docs hierarchy [--app APP] [--space SPACE]
+agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
+agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
+agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
 agent-tools docs get <id>
-agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL]
+agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
 agent-tools docs validate --file .agent/api/<app>.yaml
 agent-tools docs publish --file .agent/api/<app>.yaml
 ```

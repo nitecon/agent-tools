@@ -259,16 +259,42 @@ registry, but it is not required.
 ```bash
 # Look up Documentation before searching code for API behavior
 agent-tools docs search "billing refunds"
-agent-tools docs hierarchy --app billing
-agent-tools docs chunks --query "billing refunds"
+agent-tools docs hierarchy --scope all
+agent-tools docs search QUERY --scope global
+agent-tools docs chunks --query QUERY --scope all
 
 # Validate and publish a docs-first file, optionally with wiki placement
 agent-tools docs validate --file .agent/api/billing.yaml
-agent-tools docs publish --file .agent/api/billing.yaml --space apis --slug billing
+agent-tools docs publish --file .agent/api/billing.yaml --space apis --parent-id PAGE_ID --slug billing
 
 # Create a starter file, optionally from OpenAPI/Swagger
 agent-tools docs bootstrap --app billing --output .agent/api/billing.yaml
 agent-tools docs bootstrap --app billing --openapi openapi.yaml --output .agent/api/billing.yaml
+```
+
+Use `--scope local|global|all` where supported. `local` searches the current
+project, `global` searches globally visible Documentation from owner projects,
+and `all` combines both. Global precedence is provided by the gateway rank
+configured in the gateway UI as Global 1, Global 2, and so on; it is not tied to
+SRE, security, platform, or any `owner_project` naming convention. Results may
+show `scope`, `global_rank`, `owner_project`, `wiki_path`, `artifact_id`, and
+`artifact_version_id` metadata.
+
+Example output:
+
+```text
+$ agent-tools docs hierarchy --scope all
+Documentation hierarchy for project agent-gateway (scope=all)
+  space agent-tools: Agent Tools
+    scope=global global_rank=1 owner_project=agent-tools wiki_path=/Agent Tools
+    - page [doc-1] Documentation CLI
+      scope=global global_rank=1 owner_project=agent-tools wiki_path=/Agent Tools/Documentation CLI
+
+$ agent-tools docs search QUERY --scope global
+  [doc-1] agent-tools / Documentation CLI kind=agent_context
+       artifact_id: art-1
+       artifact_version_id: ver-1
+       scope=global global_rank=1 owner_project=agent-tools wiki_path=/Agent Tools/Documentation CLI
 ```
 
 ### Patterns (CLI)
@@ -449,11 +475,16 @@ Before searching code for API behavior or implementing API-related work, look
 up gateway-backed Documentation and its hierarchy:
 
 ```bash
-/opt/agentic/bin/agent-tools docs search "<api-or-workflow>"
-/opt/agentic/bin/agent-tools docs hierarchy [--app APP] [--space SPACE]
-/opt/agentic/bin/agent-tools docs chunks --query "<api-or-workflow>"
-/opt/agentic/bin/agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
+/opt/agentic/bin/agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
+/opt/agentic/bin/agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
+/opt/agentic/bin/agent-tools docs chunks --query "<api-or-workflow>" [--scope local|global|all]
+/opt/agentic/bin/agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
 ```
+
+Use `--scope global` for globally visible shared docs and `--scope all` when
+local plus global context is useful. Treat `scope`, `global_rank`,
+`owner_project`, `wiki_path`, and artifact ids as gateway-provided metadata;
+do not infer priority from owner project names.
 
 If no Documentation context exists, tell the user that future agents will work faster if
 one is created, and ask whether to add `.agent/api/<app>.yaml` or
@@ -593,11 +624,16 @@ Before searching code for API behavior or implementing API-related work, look
 up gateway-backed Documentation and its hierarchy:
 
 ```bash
-/opt/agentic/bin/agent-tools docs search "<api-or-workflow>"
-/opt/agentic/bin/agent-tools docs hierarchy [--app APP] [--space SPACE]
-/opt/agentic/bin/agent-tools docs chunks --query "<api-or-workflow>"
-/opt/agentic/bin/agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
+/opt/agentic/bin/agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
+/opt/agentic/bin/agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
+/opt/agentic/bin/agent-tools docs chunks --query "<api-or-workflow>" [--scope local|global|all]
+/opt/agentic/bin/agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
 ```
+
+Use `--scope global` for globally visible shared docs and `--scope all` when
+local plus global context is useful. Treat `scope`, `global_rank`,
+`owner_project`, `wiki_path`, and artifact ids as gateway-provided metadata;
+do not infer priority from owner project names.
 
 If no Documentation context exists, tell the user that future agents will work faster if
 one is created, and ask whether to add `.agent/api/<app>.yaml` or

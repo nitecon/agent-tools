@@ -19,9 +19,13 @@ pub struct ApiDocSummary {
     #[serde(default)]
     pub parent_page: Option<String>,
     #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
     pub slug: Option<String>,
     #[serde(default)]
     pub order: Option<i64>,
+    #[serde(default)]
+    pub sort_order: Option<i64>,
     #[serde(default)]
     pub breadcrumbs: Vec<String>,
     #[serde(default)]
@@ -57,7 +61,17 @@ pub struct ApiDocSummary {
     #[serde(default)]
     pub chunking_status: Option<String>,
     #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
     pub retrieval_scope: Option<String>,
+    #[serde(default)]
+    pub global_rank: Option<i64>,
+    #[serde(default)]
+    pub global_descendants: Option<bool>,
+    #[serde(default)]
+    pub owner_project: Option<String>,
+    #[serde(default)]
+    pub wiki_path: Option<String>,
     #[serde(default)]
     pub linked_ids: Vec<String>,
 }
@@ -114,7 +128,15 @@ pub struct ApiDocChunk {
     #[serde(default)]
     pub freshness: Option<String>,
     #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
     pub retrieval_scope: Option<String>,
+    #[serde(default)]
+    pub global_rank: Option<i64>,
+    #[serde(default)]
+    pub owner_project: Option<String>,
+    #[serde(default)]
+    pub wiki_path: Option<String>,
     #[serde(default)]
     pub chunking_status: Option<String>,
     #[serde(default)]
@@ -133,9 +155,17 @@ pub struct PublishApiDocRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_page: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub slug: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_rank: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_descendants: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<&'a str>,
     pub kind: &'a str,
@@ -156,6 +186,7 @@ pub struct ApiDocFilters<'a> {
     pub app: Option<&'a str>,
     pub label: Option<&'a str>,
     pub kind: Option<&'a str>,
+    pub scope: Option<&'a str>,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -163,6 +194,7 @@ pub struct ApiDocHierarchyFilters<'a> {
     pub query: Option<&'a str>,
     pub app: Option<&'a str>,
     pub space: Option<&'a str>,
+    pub scope: Option<&'a str>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -171,6 +203,8 @@ pub struct DocumentationHierarchy {
     pub project_ident: Option<String>,
     #[serde(default)]
     pub app: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
     #[serde(default)]
     pub spaces: Vec<DocumentationSpace>,
     #[serde(default)]
@@ -195,6 +229,14 @@ pub struct DocumentationSpace {
     pub category: Option<String>,
     #[serde(default)]
     pub order: Option<i64>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub global_rank: Option<i64>,
+    #[serde(default)]
+    pub owner_project: Option<String>,
+    #[serde(default)]
+    pub wiki_path: Option<String>,
     #[serde(default)]
     pub pages: Vec<DocumentationNode>,
     #[serde(default)]
@@ -222,7 +264,21 @@ pub struct DocumentationNode {
     #[serde(default)]
     pub parent_page: Option<String>,
     #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
     pub order: Option<i64>,
+    #[serde(default)]
+    pub sort_order: Option<i64>,
+    #[serde(default)]
+    pub global_rank: Option<i64>,
+    #[serde(default)]
+    pub global_descendants: Option<bool>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub owner_project: Option<String>,
+    #[serde(default)]
+    pub wiki_path: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
@@ -395,6 +451,7 @@ fn build_api_docs_url(
     push_query(&mut parts, "app", filters.app);
     push_query(&mut parts, "label", filters.label);
     push_query(&mut parts, "kind", filters.kind);
+    push_query(&mut parts, "scope", filters.scope);
     if !parts.is_empty() {
         url.push('?');
         url.push_str(&parts.join("&"));
@@ -419,6 +476,7 @@ fn build_api_doc_hierarchy_url(
     push_query(&mut parts, "q", filters.query);
     push_query(&mut parts, "app", filters.app);
     push_query(&mut parts, "space", filters.space);
+    push_query(&mut parts, "scope", filters.scope);
     if !parts.is_empty() {
         url.push('?');
         url.push_str(&parts.join("&"));
@@ -461,8 +519,12 @@ mod tests {
             space: None,
             category: None,
             parent_page: None,
+            parent_id: None,
             slug: None,
             order: None,
+            sort_order: None,
+            global_rank: None,
+            global_descendants: None,
             summary: None,
             kind: "agent_context",
             source_format: "agent_context",
@@ -495,6 +557,10 @@ mod tests {
             "breadcrumbs": ["Documentation", "APIs", "Gateway"],
             "artifact_id": "art-1",
             "artifact_version_id": "ver-1",
+            "scope": "global",
+            "global_rank": 1,
+            "owner_project": "agent-tools",
+            "wiki_path": "/Documentation/APIs/Gateway",
             "chunking_status": "current"
         });
         let summary: ApiDocSummary = serde_json::from_value(json).unwrap();
@@ -506,6 +572,13 @@ mod tests {
         );
         assert_eq!(summary.artifact_id.as_deref(), Some("art-1"));
         assert_eq!(summary.artifact_version_id.as_deref(), Some("ver-1"));
+        assert_eq!(summary.scope.as_deref(), Some("global"));
+        assert_eq!(summary.global_rank, Some(1));
+        assert_eq!(summary.owner_project.as_deref(), Some("agent-tools"));
+        assert_eq!(
+            summary.wiki_path.as_deref(),
+            Some("/Documentation/APIs/Gateway")
+        );
         assert_eq!(summary.chunking_status.as_deref(), Some("current"));
     }
 
@@ -516,10 +589,11 @@ mod tests {
             app: Some("billing/api"),
             label: Some("internal"),
             kind: Some("agent_context"),
+            scope: Some("global"),
         };
         assert_eq!(
             build_api_docs_url("https://gateway.example", "agent-tools", None, &filters),
-            "https://gateway.example/v1/projects/agent-tools/api-docs?q=billing%20auth&app=billing%2Fapi&label=internal&kind=agent_context"
+            "https://gateway.example/v1/projects/agent-tools/api-docs?q=billing%20auth&app=billing%2Fapi&label=internal&kind=agent_context&scope=global"
         );
     }
 
@@ -554,10 +628,11 @@ mod tests {
             query: Some("setup hooks"),
             app: Some("agent/tools"),
             space: Some("API Context"),
+            scope: Some("all"),
         };
         assert_eq!(
             build_api_doc_hierarchy_url("https://gateway.example", "agent-tools", &filters),
-            "https://gateway.example/v1/projects/agent-tools/api-docs/hierarchy?q=setup%20hooks&app=agent%2Ftools&space=API%20Context"
+            "https://gateway.example/v1/projects/agent-tools/api-docs/hierarchy?q=setup%20hooks&app=agent%2Ftools&space=API%20Context&scope=all"
         );
     }
 }

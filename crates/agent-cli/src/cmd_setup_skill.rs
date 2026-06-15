@@ -129,17 +129,19 @@ agent-tools tasks comment <id> "<note>"  # append a note
 ## Documentation (gateway-backed)
 
 Before searching code for API behavior or implementing API-related work, check
-the agent-facing Documentation registry. Use `docs hierarchy` to find where
-existing docs live and where new docs belong. If no context exists, tell the
-user that future agents will work faster if a docs-first file is created, and
-ask whether to add one.
+the agent-facing Documentation registry. Use `docs hierarchy --scope all` to
+find where local and global docs live and where new docs belong. Treat `scope`,
+`global_rank`, `owner_project`, `wiki_path`, and artifact ids as
+gateway-provided metadata; do not infer priority from owner project names. If no
+context exists, tell the user that future agents will work faster if a
+docs-first file is created, and ask whether to add one.
 
 ```bash
-agent-tools docs search "<api-or-workflow>"
-agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
-agent-tools docs hierarchy [--app APP] [--space SPACE]
+agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
+agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
+agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
 agent-tools docs get <id>
-agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL]
+agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
 agent-tools docs validate --file .agent/api/<app>.yaml
 agent-tools docs publish --file .agent/api/<app>.yaml
 ```
@@ -233,17 +235,19 @@ agent-tools tasks comment <id> "<note>"  # append a note
 ## Documentation (gateway-backed)
 
 Before searching code for API behavior or implementing API-related work, check
-the agent-facing Documentation registry. Use `docs hierarchy` to find where
-existing docs live and where new docs belong. If no context exists, tell the
-user that future agents will work faster if a docs-first file is created, and
-ask whether to add one.
+the agent-facing Documentation registry. Use `docs hierarchy --scope all` to
+find where local and global docs live and where new docs belong. Treat `scope`,
+`global_rank`, `owner_project`, `wiki_path`, and artifact ids as
+gateway-provided metadata; do not infer priority from owner project names. If no
+context exists, tell the user that future agents will work faster if a
+docs-first file is created, and ask whether to add one.
 
 ```bash
-agent-tools docs search "<api-or-workflow>"
-agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q]
-agent-tools docs hierarchy [--app APP] [--space SPACE]
+agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
+agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
+agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
 agent-tools docs get <id>
-agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL]
+agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
 agent-tools docs validate --file .agent/api/<app>.yaml
 agent-tools docs publish --file .agent/api/<app>.yaml
 ```

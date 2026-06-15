@@ -32,6 +32,9 @@ pub enum DocsCommands {
         label: Option<String>,
         #[arg(long)]
         kind: Option<String>,
+        /// Documentation visibility scope: local, global, or all.
+        #[arg(long, value_parser = ["local", "global", "all"])]
+        scope: Option<String>,
         #[arg(long = "query", alias = "q")]
         query: Option<String>,
         /// Override the project ident derived from cwd.
@@ -50,6 +53,9 @@ pub enum DocsCommands {
         label: Option<String>,
         #[arg(long)]
         kind: Option<String>,
+        /// Documentation visibility scope: local, global, or all.
+        #[arg(long, value_parser = ["local", "global", "all"])]
+        scope: Option<String>,
         /// Override the project ident derived from cwd.
         #[arg(long)]
         project: Option<String>,
@@ -84,6 +90,9 @@ pub enum DocsCommands {
         label: Option<String>,
         #[arg(long)]
         kind: Option<String>,
+        /// Documentation visibility scope: local, global, or all.
+        #[arg(long, value_parser = ["local", "global", "all"])]
+        scope: Option<String>,
         #[arg(long = "query", alias = "q")]
         query: Option<String>,
         #[arg(long)]
@@ -104,10 +113,18 @@ pub enum DocsCommands {
         category: Option<String>,
         #[arg(long = "parent-page")]
         parent_page: Option<String>,
+        #[arg(long = "parent-id")]
+        parent_id: Option<String>,
         #[arg(long)]
         slug: Option<String>,
         #[arg(long)]
         order: Option<i64>,
+        #[arg(long = "sort-order")]
+        sort_order: Option<i64>,
+        #[arg(long = "global-rank")]
+        global_rank: Option<i64>,
+        #[arg(long = "global-descendants", default_missing_value = "true", num_args = 0..=1)]
+        global_descendants: Option<bool>,
         #[arg(long)]
         title: Option<String>,
         #[arg(long)]
@@ -148,10 +165,18 @@ pub enum DocsCommands {
         category: Option<String>,
         #[arg(long = "parent-page")]
         parent_page: Option<String>,
+        #[arg(long = "parent-id")]
+        parent_id: Option<String>,
         #[arg(long)]
         slug: Option<String>,
         #[arg(long)]
         order: Option<i64>,
+        #[arg(long = "sort-order")]
+        sort_order: Option<i64>,
+        #[arg(long = "global-rank")]
+        global_rank: Option<i64>,
+        #[arg(long = "global-descendants", default_missing_value = "true", num_args = 0..=1)]
+        global_descendants: Option<bool>,
         #[arg(long)]
         title: Option<String>,
         #[arg(long)]
@@ -211,6 +236,9 @@ pub enum DocsCommands {
         app: Option<String>,
         #[arg(long)]
         space: Option<String>,
+        /// Documentation visibility scope: local, global, or all.
+        #[arg(long, value_parser = ["local", "global", "all"])]
+        scope: Option<String>,
         #[arg(long = "query", alias = "q")]
         query: Option<String>,
         #[arg(long)]
@@ -239,9 +267,17 @@ struct DocsFile {
     #[serde(default)]
     parent_page: Option<String>,
     #[serde(default)]
+    parent_id: Option<String>,
+    #[serde(default)]
     slug: Option<String>,
     #[serde(default)]
     order: Option<i64>,
+    #[serde(default)]
+    sort_order: Option<i64>,
+    #[serde(default)]
+    global_rank: Option<i64>,
+    #[serde(default)]
+    global_descendants: Option<bool>,
     #[serde(default)]
     summary: Option<String>,
     #[serde(default)]
@@ -265,8 +301,12 @@ struct PublishOverrides {
     space: Option<String>,
     category: Option<String>,
     parent_page: Option<String>,
+    parent_id: Option<String>,
     slug: Option<String>,
     order: Option<i64>,
+    sort_order: Option<i64>,
+    global_rank: Option<i64>,
+    global_descendants: Option<bool>,
     title: Option<String>,
     summary: Option<String>,
     kind: Option<String>,
@@ -316,18 +356,23 @@ async fn run(cmd: DocsCommands) -> Result<()> {
             app,
             label,
             kind,
+            scope,
             query,
             project,
             agent_id,
-        } => cmd_list(app, label, kind, query, project, agent_id).await,
+        } => cmd_list(app, label, kind, scope, query, project, agent_id).await,
         DocsCommands::Search {
             query,
             app,
             label,
             kind,
+            scope,
             project,
             agent_id,
-        } => cmd_list(app, label, kind, Some(query), project, agent_id).await,
+        } => {
+            let scope = Some(scope.unwrap_or_else(|| "all".to_string()));
+            cmd_list(app, label, kind, scope, Some(query), project, agent_id).await
+        }
         DocsCommands::Get {
             id,
             project,
@@ -342,25 +387,34 @@ async fn run(cmd: DocsCommands) -> Result<()> {
             app,
             label,
             kind,
+            scope,
             query,
             project,
             agent_id,
-        } => cmd_chunks(app, label, kind, query, project, agent_id).await,
+        } => {
+            let scope = Some(scope.unwrap_or_else(|| "all".to_string()));
+            cmd_chunks(app, label, kind, scope, query, project, agent_id).await
+        }
         DocsCommands::Hierarchy {
             app,
             space,
+            scope,
             query,
             project,
             agent_id,
-        } => cmd_hierarchy(app, space, query, project, agent_id).await,
+        } => cmd_hierarchy(app, space, scope, query, project, agent_id).await,
         DocsCommands::Publish {
             file,
             app,
             space,
             category,
             parent_page,
+            parent_id,
             slug,
             order,
+            sort_order,
+            global_rank,
+            global_descendants,
             title,
             summary,
             kind,
@@ -377,8 +431,12 @@ async fn run(cmd: DocsCommands) -> Result<()> {
                 space,
                 category,
                 parent_page,
+                parent_id,
                 slug,
                 order,
+                sort_order,
+                global_rank,
+                global_descendants,
                 title,
                 summary,
                 kind,
@@ -397,8 +455,12 @@ async fn run(cmd: DocsCommands) -> Result<()> {
             space,
             category,
             parent_page,
+            parent_id,
             slug,
             order,
+            sort_order,
+            global_rank,
+            global_descendants,
             title,
             summary,
             kind,
@@ -413,8 +475,12 @@ async fn run(cmd: DocsCommands) -> Result<()> {
                 space,
                 category,
                 parent_page,
+                parent_id,
                 slug,
                 order,
+                sort_order,
+                global_rank,
+                global_descendants,
                 title,
                 summary,
                 kind,
@@ -461,6 +527,7 @@ async fn cmd_list(
     app: Option<String>,
     label: Option<String>,
     kind: Option<String>,
+    scope: Option<String>,
     query: Option<String>,
     project: Option<String>,
     agent_id: Option<String>,
@@ -472,6 +539,7 @@ async fn cmd_list(
         app.as_deref(),
         label.as_deref(),
         kind.as_deref(),
+        scope.as_deref(),
     );
     let docs = ctx
         .gateway
@@ -515,6 +583,7 @@ async fn cmd_chunks(
     app: Option<String>,
     label: Option<String>,
     kind: Option<String>,
+    scope: Option<String>,
     query: Option<String>,
     project: Option<String>,
     agent_id: Option<String>,
@@ -526,6 +595,7 @@ async fn cmd_chunks(
         app.as_deref(),
         label.as_deref(),
         kind.as_deref(),
+        scope.as_deref(),
     );
     let chunks = ctx
         .gateway
@@ -539,6 +609,7 @@ async fn cmd_chunks(
 async fn cmd_hierarchy(
     app: Option<String>,
     space: Option<String>,
+    scope: Option<String>,
     query: Option<String>,
     project: Option<String>,
     agent_id: Option<String>,
@@ -549,6 +620,7 @@ async fn cmd_hierarchy(
         query: query.as_deref(),
         app: app.as_deref(),
         space: space.as_deref(),
+        scope: scope.as_deref(),
     };
     let mut hierarchy = ctx
         .gateway
@@ -556,13 +628,22 @@ async fn cmd_hierarchy(
         .await
         .context("fetch Documentation hierarchy")?;
     if hierarchy.spaces.is_empty() && hierarchy.pages.is_empty() {
-        let list_filters = filters(query.as_deref(), app.as_deref(), None, None);
+        let list_filters = filters(
+            query.as_deref(),
+            app.as_deref(),
+            None,
+            None,
+            scope.as_deref(),
+        );
         let docs = ctx
             .gateway
             .list_api_docs(&ctx.ident, &list_filters, Some(&ctx.agent_id))
             .await
             .context("fallback list Documentation entries for hierarchy")?;
-        hierarchy = synthesize_hierarchy_from_docs(&ctx.ident, &docs, space.as_deref());
+        hierarchy =
+            synthesize_hierarchy_from_docs(&ctx.ident, &docs, space.as_deref(), scope.as_deref());
+    } else if hierarchy.scope.is_none() {
+        hierarchy.scope = scope;
     }
     print_hierarchy(&ctx.ident, &hierarchy);
     Ok(())
@@ -587,8 +668,12 @@ async fn cmd_publish(
         space: prepared.space.as_deref(),
         category: prepared.category.as_deref(),
         parent_page: prepared.parent_page.as_deref(),
+        parent_id: prepared.parent_id.as_deref(),
         slug: prepared.slug.as_deref(),
         order: prepared.order,
+        sort_order: prepared.sort_order,
+        global_rank: prepared.global_rank,
+        global_descendants: prepared.global_descendants,
         summary: prepared.summary.as_deref(),
         kind: prepared.kind.as_deref().unwrap_or(DEFAULT_KIND),
         source_format: prepared
@@ -694,7 +779,7 @@ async fn cmd_export(
         None => {
             let app = app.context("provide an id or --app")?;
             require_nonempty("--app", &app)?;
-            let filters = filters(None, Some(&app), None, None);
+            let filters = filters(None, Some(&app), None, None, None);
             let docs = ctx
                 .gateway
                 .list_api_docs(&ctx.ident, &filters, Some(&ctx.agent_id))
@@ -727,8 +812,12 @@ async fn cmd_export(
         space: summary.space.clone(),
         category: summary.category.clone(),
         parent_page: summary.parent_page.clone(),
+        parent_id: summary.parent_id.clone(),
         slug: summary.slug.clone(),
         order: summary.order,
+        sort_order: summary.sort_order,
+        global_rank: summary.global_rank,
+        global_descendants: summary.global_descendants,
         summary: summary.summary.clone(),
         kind: summary.kind.clone(),
         source_format: summary.source_format.clone(),
@@ -837,12 +926,14 @@ fn filters<'a>(
     app: Option<&'a str>,
     label: Option<&'a str>,
     kind: Option<&'a str>,
+    scope: Option<&'a str>,
 ) -> ApiDocFilters<'a> {
     ApiDocFilters {
         query,
         app,
         label,
         kind,
+        scope,
     }
 }
 
@@ -883,11 +974,23 @@ fn apply_overrides(file: &mut DocsFile, overrides: PublishOverrides) {
     if overrides.parent_page.is_some() {
         file.parent_page = overrides.parent_page;
     }
+    if overrides.parent_id.is_some() {
+        file.parent_id = overrides.parent_id;
+    }
     if overrides.slug.is_some() {
         file.slug = overrides.slug;
     }
     if overrides.order.is_some() {
         file.order = overrides.order;
+    }
+    if overrides.sort_order.is_some() {
+        file.sort_order = overrides.sort_order;
+    }
+    if overrides.global_rank.is_some() {
+        file.global_rank = overrides.global_rank;
+    }
+    if overrides.global_descendants.is_some() {
+        file.global_descendants = overrides.global_descendants;
     }
     if let Some(v) = overrides.title {
         file.title = v;
@@ -981,6 +1084,14 @@ fn print_doc_list(project_ident: &str, docs: &[ApiDocSummary]) {
             doc.chunking_status.as_deref(),
             7,
         );
+        print_doc_visibility_metadata(
+            doc.scope.as_deref(),
+            doc.retrieval_scope.as_deref(),
+            doc.global_rank,
+            doc.owner_project.as_deref(),
+            doc.wiki_path.as_deref(),
+            7,
+        );
         if let Some(summary) = doc.summary.as_deref().filter(|s| !s.trim().is_empty()) {
             println!("       {summary}");
         }
@@ -1024,9 +1135,14 @@ fn print_doc_detail(doc: &ApiDoc) {
         summary.chunking_status.as_deref(),
         0,
     );
-    if let Some(scope) = summary.retrieval_scope.as_deref() {
-        println!("retrieval_scope: {scope}");
-    }
+    print_doc_visibility_metadata(
+        summary.scope.as_deref(),
+        summary.retrieval_scope.as_deref(),
+        summary.global_rank,
+        summary.owner_project.as_deref(),
+        summary.wiki_path.as_deref(),
+        0,
+    );
     if !summary.linked_ids.is_empty() {
         println!("linked_ids: {}", summary.linked_ids.join(", "));
     }
@@ -1085,11 +1201,16 @@ fn print_chunks(project_ident: &str, chunks: &[ApiDocChunk]) {
             chunk.chunking_status.as_deref(),
             7,
         );
+        print_doc_visibility_metadata(
+            chunk.scope.as_deref(),
+            chunk.retrieval_scope.as_deref(),
+            chunk.global_rank,
+            chunk.owner_project.as_deref(),
+            chunk.wiki_path.as_deref(),
+            7,
+        );
         if let Some(freshness) = chunk.freshness.as_deref() {
             println!("       freshness={freshness}");
-        }
-        if let Some(scope) = chunk.retrieval_scope.as_deref() {
-            println!("       retrieval_scope={scope}");
         }
         if let Some(address) = chunk.child_address.as_deref() {
             println!("       child_address={address}");
@@ -1108,6 +1229,7 @@ fn synthesize_hierarchy_from_docs(
     project_ident: &str,
     docs: &[ApiDocSummary],
     space_filter: Option<&str>,
+    scope_filter: Option<&str>,
 ) -> DocumentationHierarchy {
     let mut grouped: BTreeMap<String, DocumentationSpace> = BTreeMap::new();
     for doc in docs {
@@ -1124,6 +1246,14 @@ fn synthesize_hierarchy_from_docs(
                 title: Some(space_key.clone()),
                 app: Some(doc.app.clone()),
                 category: doc.category.clone(),
+                scope: doc
+                    .scope
+                    .clone()
+                    .or_else(|| doc.retrieval_scope.clone())
+                    .or_else(|| scope_filter.map(str::to_string)),
+                global_rank: doc.global_rank,
+                owner_project: doc.owner_project.clone(),
+                wiki_path: doc.wiki_path.clone(),
                 placement_hint: Some(
                     "Gateway hierarchy endpoint is unavailable; this tree is synthesized from Documentation metadata."
                         .to_string(),
@@ -1140,7 +1270,18 @@ fn synthesize_hierarchy_from_docs(
             space: doc.space.clone(),
             category: doc.category.clone(),
             parent_page: doc.parent_page.clone(),
+            parent_id: doc.parent_id.clone(),
             order: doc.order,
+            sort_order: doc.sort_order,
+            global_rank: doc.global_rank,
+            global_descendants: doc.global_descendants,
+            scope: doc
+                .scope
+                .clone()
+                .or_else(|| doc.retrieval_scope.clone())
+                .or_else(|| scope_filter.map(str::to_string)),
+            owner_project: doc.owner_project.clone(),
+            wiki_path: doc.wiki_path.clone(),
             labels: doc.labels.clone(),
             current_version_id: doc.artifact_version_id.clone(),
             accepted_version_id: doc.accepted_version_id.clone(),
@@ -1158,6 +1299,7 @@ fn synthesize_hierarchy_from_docs(
     DocumentationHierarchy {
         project_ident: Some(project_ident.to_string()),
         app: docs.first().map(|doc| doc.app.clone()),
+        scope: scope_filter.map(str::to_string),
         spaces: grouped.into_values().collect(),
         pages: Vec::new(),
         placement_hints: vec![
@@ -1168,7 +1310,11 @@ fn synthesize_hierarchy_from_docs(
 }
 
 fn print_hierarchy(project_ident: &str, hierarchy: &DocumentationHierarchy) {
-    println!("Documentation hierarchy for project {project_ident}");
+    if let Some(scope) = hierarchy.scope.as_deref() {
+        println!("Documentation hierarchy for project {project_ident} (scope={scope})");
+    } else {
+        println!("Documentation hierarchy for project {project_ident}");
+    }
     if let Some(app) = hierarchy.app.as_deref() {
         println!("app: {app}");
     }
@@ -1207,6 +1353,14 @@ fn print_hierarchy_space(space: &DocumentationSpace) {
     if let Some(order) = space.order {
         println!("    order: {order}");
     }
+    print_doc_visibility_metadata(
+        space.scope.as_deref(),
+        None,
+        space.global_rank,
+        space.owner_project.as_deref(),
+        space.wiki_path.as_deref(),
+        4,
+    );
     if let Some(hint) = space
         .placement_hint
         .as_deref()
@@ -1239,6 +1393,23 @@ fn print_hierarchy_node(node: &DocumentationNode, indent: usize) {
         &node.breadcrumbs,
         None,
         None,
+        indent + 2,
+    );
+    if let Some(parent_id) = node.parent_id.as_deref() {
+        println!("{pad}  parent_id: {parent_id}");
+    }
+    if let Some(sort_order) = node.sort_order {
+        println!("{pad}  sort_order: {sort_order}");
+    }
+    if let Some(global_descendants) = node.global_descendants {
+        println!("{pad}  global_descendants: {global_descendants}");
+    }
+    print_doc_visibility_metadata(
+        node.scope.as_deref(),
+        None,
+        node.global_rank,
+        node.owner_project.as_deref(),
+        node.wiki_path.as_deref(),
         indent + 2,
     );
     if let Some(path) = node.path.as_deref() {
@@ -1358,10 +1529,10 @@ fn print_doc_provenance_metadata(
     }
     let pad = " ".repeat(indent);
     if let Some(id) = artifact_id.as_deref() {
-        println!("{pad}provenance_artifact_id: {id}");
+        println!("{pad}artifact_id: {id}");
     }
     if let Some(id) = artifact_version_id {
-        println!("{pad}provenance_artifact_version_id: {id}");
+        println!("{pad}artifact_version_id: {id}");
     }
     if let Some(id) = accepted_version_id {
         println!("{pad}accepted_version_id: {id}");
@@ -1369,6 +1540,35 @@ fn print_doc_provenance_metadata(
     if let Some(status) = chunking_status {
         println!("{pad}chunking_status: {status}");
     }
+}
+
+fn print_doc_visibility_metadata(
+    scope: Option<&str>,
+    retrieval_scope: Option<&str>,
+    global_rank: Option<i64>,
+    owner_project: Option<&str>,
+    wiki_path: Option<&str>,
+    indent: usize,
+) {
+    let scope = scope.or(retrieval_scope);
+    if scope.is_none() && global_rank.is_none() && owner_project.is_none() && wiki_path.is_none() {
+        return;
+    }
+    let pad = " ".repeat(indent);
+    let mut parts = Vec::new();
+    if let Some(scope) = scope {
+        parts.push(format!("scope={scope}"));
+    }
+    if let Some(rank) = global_rank {
+        parts.push(format!("global_rank={rank}"));
+    }
+    if let Some(project) = owner_project {
+        parts.push(format!("owner_project={project}"));
+    }
+    if let Some(path) = wiki_path {
+        parts.push(format!("wiki_path={path}"));
+    }
+    println!("{pad}{}", parts.join(" "));
 }
 
 fn print_indented_lines(text: &str, indent: usize) {
@@ -1465,8 +1665,12 @@ fn starter_docs_file(app: &str, title: Option<String>) -> DocsFile {
         space: None,
         category: None,
         parent_page: None,
+        parent_id: None,
         slug: None,
         order: None,
+        sort_order: None,
+        global_rank: None,
+        global_descendants: None,
         summary: Some(
             "Agent-first API context for service workflows, auth, safety, and examples."
                 .to_string(),
@@ -1631,8 +1835,12 @@ content:
                 app: Some("payments".to_string()),
                 space: Some("apis".to_string()),
                 parent_page: Some("Billing".to_string()),
+                parent_id: Some("page-1".to_string()),
                 slug: Some("payments-api".to_string()),
                 order: Some(20),
+                sort_order: Some(30),
+                global_rank: Some(2),
+                global_descendants: Some(true),
                 labels: vec!["internal".to_string()],
                 ..Default::default()
             },
@@ -1640,8 +1848,12 @@ content:
         assert_eq!(file.app, "payments");
         assert_eq!(file.space.as_deref(), Some("apis"));
         assert_eq!(file.parent_page.as_deref(), Some("Billing"));
+        assert_eq!(file.parent_id.as_deref(), Some("page-1"));
         assert_eq!(file.slug.as_deref(), Some("payments-api"));
         assert_eq!(file.order, Some(20));
+        assert_eq!(file.sort_order, Some(30));
+        assert_eq!(file.global_rank, Some(2));
+        assert_eq!(file.global_descendants, Some(true));
         assert_eq!(file.labels, vec!["internal"]);
     }
 
@@ -1679,8 +1891,10 @@ content:
             space: None,
             category: None,
             parent_page: None,
+            parent_id: None,
             slug: None,
             order: None,
+            sort_order: None,
             breadcrumbs: Vec::new(),
             page_id: None,
             section_id: None,
@@ -1698,7 +1912,12 @@ content:
             subkind: Some("api_context".to_string()),
             manifest_chunk_count: Some(1),
             chunking_status: Some("current".to_string()),
+            scope: None,
             retrieval_scope: None,
+            global_rank: None,
+            global_descendants: None,
+            owner_project: None,
+            wiki_path: None,
             linked_ids: Vec::new(),
         };
         assert_eq!(
