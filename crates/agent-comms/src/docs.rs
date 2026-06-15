@@ -248,9 +248,13 @@ pub struct DocumentationNode {
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
+    pub node_type: Option<String>,
+    #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
     #[serde(default)]
     pub slug: Option<String>,
     #[serde(default)]
@@ -291,6 +295,10 @@ pub struct DocumentationNode {
     pub source_artifact_id: Option<String>,
     #[serde(default)]
     pub source_artifact_version_id: Option<String>,
+    #[serde(default)]
+    pub artifact_id: Option<String>,
+    #[serde(default)]
+    pub artifact_version_id: Option<String>,
     #[serde(default)]
     pub breadcrumbs: Vec<String>,
     #[serde(default)]
@@ -412,9 +420,28 @@ impl GatewayClient {
             return Ok(DocumentationHierarchy::default());
         }
         let value: Value = decode_or_bail(resp).await?;
-        let payload = value.get("data").cloned().unwrap_or(value);
-        serde_json::from_value(payload).context("decode api-docs hierarchy response")
+        decode_hierarchy_payload(value, ident, filters)
     }
+}
+
+fn decode_hierarchy_payload(
+    value: Value,
+    ident: &str,
+    filters: &ApiDocHierarchyFilters<'_>,
+) -> Result<DocumentationHierarchy> {
+    let payload = value.get("data").cloned().unwrap_or(value);
+    if payload.is_array() {
+        let pages: Vec<DocumentationNode> =
+            serde_json::from_value(payload).context("decode api-docs hierarchy node array")?;
+        return Ok(DocumentationHierarchy {
+            project_ident: Some(ident.to_string()),
+            app: filters.app.map(str::to_string),
+            scope: filters.scope.map(str::to_string),
+            pages,
+            ..Default::default()
+        });
+    }
+    serde_json::from_value(payload).context("decode api-docs hierarchy response")
 }
 
 async fn decode_or_bail<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
@@ -667,6 +694,53 @@ mod tests {
         assert_eq!(
             build_api_doc_hierarchy_url("https://gateway.example", "agent-tools", &filters),
             "https://gateway.example/v1/projects/agent-tools/api-docs/hierarchy?q=setup%20hooks&app=agent%2Ftools&space=API%20Context&scope=all"
+        );
+    }
+
+    #[test]
+    fn hierarchy_decoder_accepts_gateway_v1_13_node_array() {
+        let value = serde_json::json!([
+            {
+                "id": "doc-1",
+                "node_type": "page",
+                "owner_project": "agent-gateway",
+                "scope": "local",
+                "app": "agent-gateway",
+                "title": "Agent Gateway API context",
+                "summary": "Gateway docs",
+                "kind": "agent_context",
+                "labels": ["gateway", "api-docs"],
+                "parent_id": null,
+                "slug": "agent-gateway-api-context",
+                "sort_order": 0,
+                "wiki_path": "/agent-gateway-api-context",
+                "breadcrumbs": ["agent-gateway-api-context"],
+                "global_rank": null,
+                "direct_global_rank": null,
+                "global_descendants": false,
+                "artifact_id": "art-1",
+                "artifact_version_id": "ver-1",
+                "children": []
+            }
+        ]);
+        let filters = ApiDocHierarchyFilters {
+            app: Some("agent-gateway"),
+            scope: Some("all"),
+            ..Default::default()
+        };
+        let hierarchy = decode_hierarchy_payload(value, "agent-gateway", &filters).unwrap();
+        assert_eq!(hierarchy.project_ident.as_deref(), Some("agent-gateway"));
+        assert_eq!(hierarchy.app.as_deref(), Some("agent-gateway"));
+        assert_eq!(hierarchy.scope.as_deref(), Some("all"));
+        assert_eq!(hierarchy.pages.len(), 1);
+        let node = &hierarchy.pages[0];
+        assert_eq!(node.node_type.as_deref(), Some("page"));
+        assert_eq!(node.kind.as_deref(), Some("agent_context"));
+        assert_eq!(node.artifact_id.as_deref(), Some("art-1"));
+        assert_eq!(node.artifact_version_id.as_deref(), Some("ver-1"));
+        assert_eq!(
+            node.wiki_path.as_deref(),
+            Some("/agent-gateway-api-context")
         );
     }
 }

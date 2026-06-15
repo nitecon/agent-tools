@@ -1389,9 +1389,18 @@ fn print_hierarchy_node(node: &DocumentationNode, indent: usize) {
         .or(node.slug.as_deref())
         .or(node.id.as_deref())
         .unwrap_or("untitled");
-    let kind = node.kind.as_deref().unwrap_or("page");
+    let kind = node
+        .node_type
+        .as_deref()
+        .or(node.kind.as_deref())
+        .unwrap_or("page");
     let id = node.id.as_deref().unwrap_or("-");
     println!("{pad}- {kind} [{id}] {title}");
+    if node.node_type.is_some() {
+        if let Some(doc_kind) = node.kind.as_deref() {
+            println!("{pad}  kind: {doc_kind}");
+        }
+    }
     print_doc_location(
         node.space.as_deref(),
         node.category.as_deref(),
@@ -1432,9 +1441,18 @@ fn print_hierarchy_node(node: &DocumentationNode, indent: usize) {
     if let Some(source) = node.source_ref.as_deref() {
         println!("{pad}  source_ref: {source}");
     }
+    let artifact_id = node
+        .source_artifact_id
+        .as_ref()
+        .or(node.artifact_id.as_ref())
+        .cloned();
+    let artifact_version_id = node
+        .source_artifact_version_id
+        .as_deref()
+        .or(node.artifact_version_id.as_deref());
     print_doc_provenance_metadata(
-        &node.source_artifact_id,
-        node.source_artifact_version_id.as_deref(),
+        &artifact_id,
+        artifact_version_id,
         node.accepted_version_id.as_deref(),
         None,
         indent + 2,
