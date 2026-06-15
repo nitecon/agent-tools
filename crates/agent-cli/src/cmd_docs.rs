@@ -113,16 +113,20 @@ pub enum DocsCommands {
         category: Option<String>,
         #[arg(long = "parent-page")]
         parent_page: Option<String>,
+        /// Parent Documentation node id for hierarchy placement.
         #[arg(long = "parent-id")]
         parent_id: Option<String>,
         #[arg(long)]
         slug: Option<String>,
         #[arg(long)]
         order: Option<i64>,
+        /// Sort order within the selected hierarchy parent.
         #[arg(long = "sort-order")]
         sort_order: Option<i64>,
+        /// Gateway global visibility rank, for example 1 for Global 1.
         #[arg(long = "global-rank")]
         global_rank: Option<i64>,
+        /// Apply global visibility to descendants when supported by the gateway.
         #[arg(long = "global-descendants", default_missing_value = "true", num_args = 0..=1)]
         global_descendants: Option<bool>,
         #[arg(long)]
@@ -165,16 +169,20 @@ pub enum DocsCommands {
         category: Option<String>,
         #[arg(long = "parent-page")]
         parent_page: Option<String>,
+        /// Parent Documentation node id for hierarchy placement.
         #[arg(long = "parent-id")]
         parent_id: Option<String>,
         #[arg(long)]
         slug: Option<String>,
         #[arg(long)]
         order: Option<i64>,
+        /// Sort order within the selected hierarchy parent.
         #[arg(long = "sort-order")]
         sort_order: Option<i64>,
+        /// Gateway global visibility rank, for example 1 for Global 1.
         #[arg(long = "global-rank")]
         global_rank: Option<i64>,
+        /// Apply global visibility to descendants when supported by the gateway.
         #[arg(long = "global-descendants", default_missing_value = "true", num_args = 0..=1)]
         global_descendants: Option<bool>,
         #[arg(long)]
@@ -229,7 +237,7 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Show the Documentation hierarchy and placement hints.
+    /// Browse the Documentation hierarchy for the current project and visible global docs.
     #[command(alias = "tree", alias = "list-tree", alias = "get-tree")]
     Hierarchy {
         #[arg(long)]
