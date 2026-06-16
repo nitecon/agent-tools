@@ -244,6 +244,12 @@ agent-tools tasks get <id>
 agent-tools tasks comment <id> "Verified against gateway commit 6980730."
 agent-tools tasks done <id>
 
+# Drop ownership back to TODO (clears the owner) if you can't finish
+agent-tools tasks release <id>
+
+# Reorder within a column (lower rank = higher priority)
+agent-tools tasks rank <id> 0
+
 # Inspect Eventic build status for the current project
 agent-tools tasks builds
 agent-tools tasks builds --repo nitecon/agent-tools
@@ -400,6 +406,20 @@ agent-tools setup skill --print      # dump the Claude body to stdout
 Writes `TaskCreate*` / `TodoWrite` denies into `~/.claude/settings.json` so Claude-Code sessions can't route around the gateway-backed task board. **Claude-only** — Codex has no equivalent tool-deny facility in its config, so running `setup perms` is a no-op for Codex setups.
 
 If you'd rather inspect and paste the content yourself, the manual blocks below are kept in sync with the installer's output.
+
+### One-shot bootstrap: `agent-tools setup all`
+
+The recommended way to bootstrap a fresh machine is the non-interactive `setup all`, which runs every installer in order — **gateway → rules → skill → perms** — in a single pass:
+
+```bash
+# Prompts once for confirmation, then runs all four installers
+agent-tools setup all
+
+# Skip the confirmation prompt (useful for provisioning scripts)
+agent-tools setup all -y      # or: agent-tools setup all --yes
+```
+
+Running with no subcommand (`agent-tools setup`) opens the interactive menu instead, which probes each component's current state before letting you choose what to install.
 
 ### CLAUDE.md / Cline / Aider
 
