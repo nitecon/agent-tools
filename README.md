@@ -156,9 +156,6 @@ Once the gateway is configured (see [Gateway Integration](#gateway-integration))
 # Send a message to the project's channel (auto-derives ident + agent-id)
 agent-tools comms send "build green on main"
 
-# Poll unread messages for this project + agent
-agent-tools comms recv
-
 # Acknowledge a message so it stops reappearing
 agent-tools comms confirm 1234
 

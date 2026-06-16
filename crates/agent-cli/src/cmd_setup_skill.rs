@@ -155,9 +155,9 @@ item.
 
 Project ident auto-derives from the cwd git remote; agent id is
 machine-persistent. Do not use the deprecated MCP comms tools.
+Use comms for explicit gateway or cronjob messages; tasks are the normal work queue.
 
 ```bash
-agent-tools comms recv                   # fetch unread at session start
 agent-tools comms confirm <id>           # ack each handled message
 agent-tools comms send "<body>"          # post to project channel
 agent-tools comms reply <id> "<body>"    # threaded reply
@@ -261,9 +261,9 @@ item.
 
 Project ident auto-derives from the cwd git remote; agent id is
 machine-persistent.
+Use comms for explicit gateway or cronjob messages; tasks are the normal work queue.
 
 ```bash
-agent-tools comms recv                   # fetch unread at session start
 agent-tools comms confirm <id>           # ack each handled message
 agent-tools comms send "<body>"          # post to project channel
 agent-tools comms reply <id> "<body>"    # threaded reply
@@ -407,6 +407,10 @@ mod tests {
         assert!(body.contains("agent-tools docs hierarchy"));
         assert!(body.contains("agent-tools docs publish"));
         assert!(body.contains("Comms"));
+        // Comms polling was removed; tasks are the normal work queue.
+        assert!(body.contains("Use comms for explicit gateway or cronjob messages"));
+        assert!(body.contains("agent-tools comms send"));
+        assert!(!body.contains("agent-tools comms recv"));
         assert!(body.contains("Memory"));
     }
 
@@ -428,6 +432,10 @@ mod tests {
         assert!(body.contains("agent-tools docs hierarchy"));
         assert!(body.contains("agent-tools docs publish"));
         assert!(body.contains("Comms"));
+        // Comms polling was removed; tasks are the normal work queue.
+        assert!(body.contains("Use comms for explicit gateway or cronjob messages"));
+        assert!(body.contains("agent-tools comms send"));
+        assert!(!body.contains("agent-tools comms recv"));
         assert!(body.contains("Memory"));
     }
 
