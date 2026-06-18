@@ -621,6 +621,14 @@ async fn cmd_status_transition(
         task.status,
         task.owner_agent_id.as_deref().unwrap_or("—")
     );
+
+    // Completing a task is the natural memory-save moment — remind the agent to
+    // persist durable learnings + update WorkingContext. Only on `done`, never
+    // on `claim`/`release`, and only after the transition actually succeeded.
+    if new_status == "done" {
+        crate::memory_reminder::emit_done_reminder();
+    }
+
     Ok(())
 }
 

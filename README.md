@@ -252,6 +252,16 @@ agent-tools tasks builds
 agent-tools tasks builds --repo nitecon/agent-tools
 ```
 
+Completing a task with `tasks done` is the natural memory-save moment, so it
+prints a short reminder (to stderr) to persist durable learnings and update
+WorkingContext via the [`memory`](https://github.com/nitecon/agent-memory) CLI.
+This makes gateway task-completion the save trigger that the native Claude Code
+`TaskCompleted` hook would otherwise provide — but cannot, because the native
+task tools are disabled in favour of this gateway board. The reminder fires only
+on `done` (never on `claim`/`release`/`comment`) and only after the transition
+succeeds. Set `AGENT_TOOLS_MEMORY_REMINDER=off` to suppress it if you don't run
+agent-memory.
+
 ### Documentation (CLI)
 
 Gateway-backed Documentation gives agents context for services and apps: intent,

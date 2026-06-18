@@ -11,6 +11,7 @@ mod cmd_setup_rules;
 mod cmd_setup_skill;
 mod cmd_tasks;
 mod cmd_text;
+mod memory_reminder;
 mod nudge;
 
 use anyhow::Result;

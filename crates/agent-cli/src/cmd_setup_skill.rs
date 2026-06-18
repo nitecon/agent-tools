@@ -122,7 +122,7 @@ agent-tools tasks add --title "..." [--label x] [--description "..."] [--specifi
 agent-tools tasks add-delegated --target-project "..." --title "..." --description "..." --specification "..."
 agent-tools tasks claim <id>             # take ownership (-> in_progress)
 agent-tools tasks release <id>           # drop ownership (-> todo)
-agent-tools tasks done <id>              # mark complete
+agent-tools tasks done <id>              # mark complete; prompts you to save durable memory + WorkingContext
 agent-tools tasks comment <id> "<note>"  # append a note
 ```
 
@@ -228,7 +228,7 @@ agent-tools tasks add --title "..." [--label x] [--description "..."] [--specifi
 agent-tools tasks add-delegated --target-project "..." --title "..." --description "..." --specification "..."
 agent-tools tasks claim <id>             # take ownership (-> in_progress)
 agent-tools tasks release <id>           # drop ownership (-> todo)
-agent-tools tasks done <id>              # mark complete
+agent-tools tasks done <id>              # mark complete; prompts you to save durable memory + WorkingContext
 agent-tools tasks comment <id> "<note>"  # append a note
 ```
 
