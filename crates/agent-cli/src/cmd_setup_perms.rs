@@ -13,7 +13,6 @@
 //! Claude Code build we block it; if it's been retired the entry is a
 //! harmless no-op.
 
-use agent_comms::config::home_dir;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -98,24 +97,20 @@ pub fn is_fully_installed() -> bool {
 }
 
 pub fn settings_path() -> PathBuf {
-    home_dir().join(".claude").join("settings.json")
+    crate::settings_json::claude_settings_path()
 }
 
 // -- Internals ---------------------------------------------------------------
+//
+// Generic JSON settings I/O is owned by `crate::settings_json` (DRY): these are
+// thin local delegates so the module and its tests keep their original names.
 
 fn read_settings_text(path: &Path) -> Result<String> {
-    match std::fs::read_to_string(path) {
-        Ok(s) => Ok(s),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
-    }
+    crate::settings_json::read_settings_text(path)
 }
 
 fn parse_or_empty(text: &str) -> Result<Value> {
-    if text.trim().is_empty() {
-        return Ok(Value::Object(Map::new()));
-    }
-    Ok(serde_json::from_str(text)?)
+    crate::settings_json::parse_or_empty(text)
 }
 
 /// Core merge. Returns the updated Value with deny entries either added (when
@@ -181,28 +176,15 @@ fn apply_denies(root: Value, add: bool) -> Result<Value> {
 fn render_pretty(v: &Value) -> Result<String> {
     // serde_json's default pretty printer uses two-space indent, which
     // matches what Claude Code writes from its own `/config` UI.
-    let mut out = serde_json::to_string_pretty(v).context("serialize settings to JSON")?;
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    Ok(out)
+    crate::settings_json::render_pretty(v)
 }
 
 fn type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
+    crate::settings_json::type_name(v)
 }
 
 fn backup_path(path: &Path) -> PathBuf {
-    let mut s = path.as_os_str().to_owned();
-    s.push(".bak");
-    PathBuf::from(s)
+    crate::settings_json::backup_path(path)
 }
 
 // -- Tests -------------------------------------------------------------------

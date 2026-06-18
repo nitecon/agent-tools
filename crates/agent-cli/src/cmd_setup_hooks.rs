@@ -1,6 +1,17 @@
-//! `agent-tools setup hooks` - sync app-scoped hooks from the gateway.
+//! `agent-tools setup hooks` - sync app-scoped hooks from the gateway and
+//! install the local `agent-tools hook` context-injection entries.
+//!
+//! Two distinct kinds of hook are synced per detected agent:
+//!   1. Gateway-published hook *files* dropped under `<agent_home>/hooks/`.
+//!   2. The local context-injection *command* entries that wire the calling
+//!      agent CLI to `agent-tools hook ...`. These live in the agent's own
+//!      settings file (`settings.json` for Claude/Gemini, `config.toml` for
+//!      Codex) and are merged idempotently via `settings_json` /
+//!      `codex_hooks_toml`.
 
 use crate::cmd_setup_rules::codex_home;
+use crate::codex_hooks_toml;
+use crate::settings_json::{self, SettingsOutcome};
 use agent_comms::config::{home_dir, load_config};
 use agent_comms::gateway::GatewayClient;
 use agent_comms::hooks::HookRecord;
@@ -10,6 +21,23 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component as PathComponent, Path, PathBuf};
+
+/// Marker substring that identifies a hook command entry as one we own.
+/// Every command we install contains `<exe> hook ` so a single substring
+/// match cleanly distinguishes our entries from user-authored hooks.
+fn agent_tools_hook_marker(exe: &str) -> String {
+    format!("{exe} hook ")
+}
+
+/// Resolve the current executable path for building hook command strings.
+/// Falls back to the bare `agent-tools` name if resolution fails so installs
+/// still produce a runnable command on a PATH-configured system.
+fn current_exe_string() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string))
+        .unwrap_or_else(|| "agent-tools".to_string())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HookTarget {
@@ -49,6 +77,17 @@ impl HookTarget {
         self.agent_home().join("hooks")
     }
 
+    /// Path to the settings file that holds local context-injection hook
+    /// entries: `settings.json` for Claude/Gemini, `config.toml` for Codex.
+    fn local_hook_settings_path(self) -> PathBuf {
+        match self {
+            HookTarget::Claude | HookTarget::Gemini => {
+                settings_json::agent_settings_path(&self.agent_home())
+            }
+            HookTarget::Codex => self.agent_home().join("config.toml"),
+        }
+    }
+
     fn detected(self) -> bool {
         self.agent_home().exists()
     }
@@ -74,16 +113,36 @@ pub fn detected_target_labels() -> Vec<&'static str> {
         .collect()
 }
 
-pub fn installed_hook_roots() -> Vec<PathBuf> {
-    HookTarget::ALL
+/// Whether every detected agent has our local context-injection hook entries
+/// present in its settings file. Returns `None` when no agents are detected so
+/// callers can distinguish "nothing to install" from "installed/not installed".
+pub fn local_hook_entries_installed() -> Option<bool> {
+    let exe = current_exe_string();
+    let marker = agent_tools_hook_marker(&exe);
+    let detected: Vec<HookTarget> = HookTarget::ALL
         .iter()
         .copied()
-        .filter(|target| target.detected() && target.hooks_root().exists())
-        .map(HookTarget::hooks_root)
-        .collect()
+        .filter(|t| t.detected())
+        .collect();
+    if detected.is_empty() {
+        return None;
+    }
+    Some(
+        detected
+            .iter()
+            .all(|t| settings_file_has_marker(&t.local_hook_settings_path(), &marker)),
+    )
 }
 
-pub fn run(apps: Vec<String>, dry_run: bool) -> Result<()> {
+/// True when the settings file at `path` contains our hook marker anywhere.
+/// A missing or unreadable file reads as "no marker" rather than erroring.
+fn settings_file_has_marker(path: &Path, marker: &str) -> bool {
+    std::fs::read_to_string(path)
+        .map(|s| s.contains(marker))
+        .unwrap_or(false)
+}
+
+pub fn run(apps: Vec<String>, dry_run: bool, remove: bool) -> Result<()> {
     let targets = resolve_targets(apps)?;
     if targets.is_empty() {
         anyhow::bail!(
@@ -91,17 +150,28 @@ pub fn run(apps: Vec<String>, dry_run: bool) -> Result<()> {
         );
     }
 
+    // Step 1: local context-injection command entries. These wire the agent
+    // CLI to `agent-tools hook ...` and are gateway-independent, so they run
+    // (or unwire on --remove) even when no gateway is configured.
+    sync_local_hook_entries(&targets, dry_run, remove)?;
+
+    // Step 2: gateway-published hook files. Removal mode never touches these
+    // (the gateway owns their lifecycle), and a missing gateway config is a
+    // soft skip rather than a hard error so local wiring still succeeds.
+    if remove {
+        return Ok(());
+    }
+
     let cfg = load_config();
-    let gateway_url = cfg
-        .gateway
-        .url
-        .clone()
-        .context("gateway URL not configured -- run `agent-tools setup gateway`")?;
-    let api_key = cfg
-        .gateway
-        .api_key
-        .clone()
-        .context("gateway API key not configured -- run `agent-tools setup gateway`")?;
+    let (Some(gateway_url), Some(api_key)) =
+        (cfg.gateway.url.clone(), cfg.gateway.api_key.clone())
+    else {
+        println!(
+            "Gateway not configured — skipped gateway hook-file sync. \
+             Run `agent-tools setup gateway` to enable it."
+        );
+        return Ok(());
+    };
     let timeout_ms = cfg.gateway.timeout_ms.unwrap_or(5000);
     let gateway = GatewayClient::new(gateway_url, api_key, timeout_ms)?;
     let agent_id = load_or_generate_agent_id()?;
@@ -135,6 +205,138 @@ fn resolve_targets(apps: Vec<String>) -> Result<Vec<HookTarget>> {
         selected.insert(target);
     }
     Ok(selected.into_iter().collect())
+}
+
+/// One local context-injection hook entry to install for an agent: the event
+/// name in that agent's settings vocabulary and the command to run.
+struct LocalHookEntry {
+    event: &'static str,
+    command: String,
+    /// JSON hook timeout. `None` for Codex (its TOML form omits timeout).
+    timeout: Option<i64>,
+}
+
+/// Build the local hook entries for a target. The command always routes
+/// through `agent-tools hook <kind> --agent <app>` so the marker
+/// (`<exe> hook `) matches on remove.
+fn local_hook_entries(target: HookTarget, exe: &str) -> Vec<LocalHookEntry> {
+    let app = target.app();
+    match target {
+        HookTarget::Claude => vec![
+            // session-start is Claude-only: Codex/Gemini have no equivalent
+            // session-scoped event in this wiring, so we only inject the
+            // open-tasks context there.
+            LocalHookEntry {
+                event: "SessionStart",
+                command: format!("{exe} hook session-start --agent {app}"),
+                timeout: Some(10),
+            },
+            LocalHookEntry {
+                event: "UserPromptSubmit",
+                command: format!("{exe} hook user-prompt-submit --agent {app}"),
+                timeout: Some(10),
+            },
+        ],
+        HookTarget::Gemini => vec![LocalHookEntry {
+            // Gemini's per-turn event is `BeforeAgent`; its timeouts are in
+            // milliseconds, unlike Claude's seconds.
+            event: "BeforeAgent",
+            command: format!("{exe} hook user-prompt-submit --agent {app}"),
+            timeout: Some(10000),
+        }],
+        HookTarget::Codex => vec![LocalHookEntry {
+            event: "UserPromptSubmit",
+            command: format!("{exe} hook user-prompt-submit --agent {app}"),
+            timeout: None,
+        }],
+    }
+}
+
+/// Install (or remove) the local context-injection hook entries for every
+/// target. JSON-backed agents (Claude, Gemini) merge into `settings.json`;
+/// Codex merges into `config.toml` via `toml_edit`.
+fn sync_local_hook_entries(targets: &[HookTarget], dry_run: bool, remove: bool) -> Result<()> {
+    let exe = current_exe_string();
+    let marker = agent_tools_hook_marker(&exe);
+
+    for &target in targets {
+        let entries = local_hook_entries(target, &exe);
+        let path = target.local_hook_settings_path();
+        let verb = if remove { "remove from" } else { "install into" };
+
+        if dry_run {
+            println!(
+                "Would {verb} {} hook entries in {}:",
+                target.label(),
+                path.display()
+            );
+            for e in &entries {
+                println!("  [{}] {}", e.event, e.command);
+            }
+            continue;
+        }
+
+        for entry in &entries {
+            let outcome = if matches!(target, HookTarget::Codex) {
+                apply_codex_entry(&path, entry, &marker, remove)?
+            } else {
+                apply_json_entry(&path, entry, &marker, remove)?
+            };
+            report_outcome(target, entry, &path, &outcome);
+        }
+    }
+    Ok(())
+}
+
+/// Apply one JSON-backed (Claude/Gemini) hook entry.
+fn apply_json_entry(
+    path: &Path,
+    entry: &LocalHookEntry,
+    marker: &str,
+    remove: bool,
+) -> Result<SettingsOutcome> {
+    if remove {
+        settings_json::remove_hook_group(path, entry.event, marker)
+    } else {
+        let timeout = entry.timeout.unwrap_or(10);
+        settings_json::merge_hook_group(path, entry.event, &entry.command, timeout, marker)
+    }
+}
+
+/// Apply one Codex (TOML-backed) hook entry.
+fn apply_codex_entry(
+    path: &Path,
+    entry: &LocalHookEntry,
+    marker: &str,
+    remove: bool,
+) -> Result<SettingsOutcome> {
+    if remove {
+        codex_hooks_toml::remove(path, entry.event, marker)
+    } else {
+        codex_hooks_toml::install(path, entry.event, &entry.command, marker)
+    }
+}
+
+/// Print a concise per-entry status line.
+fn report_outcome(
+    target: HookTarget,
+    entry: &LocalHookEntry,
+    path: &Path,
+    outcome: &SettingsOutcome,
+) {
+    let status = match outcome {
+        SettingsOutcome::Created => "created",
+        SettingsOutcome::Updated => "updated",
+        SettingsOutcome::AlreadyCorrect => "already current",
+        SettingsOutcome::AlreadyAbsent => "already absent",
+        SettingsOutcome::Removed => "removed",
+    };
+    println!(
+        "  {} [{}] {status} in {}",
+        target.label(),
+        entry.event,
+        path.display()
+    );
 }
 
 async fn sync_targets(

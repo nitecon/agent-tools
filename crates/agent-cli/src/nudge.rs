@@ -30,6 +30,7 @@ pub fn should_nudge(cmd: &Commands) -> bool {
         Commands::Tasks { .. }
             | Commands::Patterns { .. }
             | Commands::Setup { .. }
+            | Commands::Hook { .. }
             | Commands::Init
             | Commands::Version
             | Commands::Update

@@ -2,6 +2,7 @@ mod cmd_comms;
 mod cmd_docs;
 mod cmd_docs_artifacts;
 mod cmd_gateway_context;
+mod cmd_hook;
 mod cmd_patterns;
 mod cmd_read;
 mod cmd_setup_hooks;
@@ -11,8 +12,10 @@ mod cmd_setup_rules;
 mod cmd_setup_skill;
 mod cmd_tasks;
 mod cmd_text;
+mod codex_hooks_toml;
 mod memory_reminder;
 mod nudge;
+mod settings_json;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -349,6 +352,13 @@ enum Commands {
         command: cmd_patterns::PatternsCommands,
     },
 
+    /// Runtime context-injection hooks called by agent CLIs (installed via
+    /// `setup hooks`). Fail-soft: always exits 0. Not for direct human use.
+    Hook {
+        #[command(subcommand)]
+        command: cmd_hook::HookCommands,
+    },
+
     /// Check for updates and install the latest version
     Update,
 
@@ -406,7 +416,8 @@ enum SetupCommands {
         print: bool,
     },
 
-    /// Sync app-scoped hooks from the gateway for detected agent clients.
+    /// Sync app-scoped hooks from the gateway and install the local
+    /// context-injection hook entries for detected agent clients.
     Hooks {
         /// Client app to sync. Repeatable. Defaults to every detected app.
         #[arg(long = "app")]
@@ -414,6 +425,9 @@ enum SetupCommands {
         /// Show target paths without writing hook files.
         #[arg(long)]
         dry_run: bool,
+        /// Remove the local context-injection hook entries instead of adding them.
+        #[arg(long)]
+        remove: bool,
     },
 
     /// Run gateway -> hooks -> rules -> skill -> perms non-interactively.
@@ -663,7 +677,11 @@ fn main_inner() -> Result<()> {
                 dry_run,
                 print,
             }) => cmd_setup_perms::run(remove, dry_run, print),
-            Some(SetupCommands::Hooks { app, dry_run }) => cmd_setup_hooks::run(app, dry_run),
+            Some(SetupCommands::Hooks {
+                app,
+                dry_run,
+                remove,
+            }) => cmd_setup_hooks::run(app, dry_run, remove),
             Some(SetupCommands::All { yes }) => cmd_setup_menu::run_all(yes),
         },
 
@@ -682,6 +700,8 @@ fn main_inner() -> Result<()> {
         Commands::Specs { command } => cmd_docs_artifacts::dispatch_specs(command),
 
         Commands::Patterns { command } => cmd_patterns::dispatch(command),
+
+        Commands::Hook { command } => cmd_hook::dispatch(command),
 
         Commands::Update => agent_updater::manual_update_blocking(),
 

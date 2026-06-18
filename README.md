@@ -215,6 +215,11 @@ context for a disconnected or new agent to resume the work. A gateway-backed
 task specification is more durable than a local plan file because it survives a
 full system crash.
 
+When hooks are installed via `agent-tools setup hooks`, open tasks are
+auto-injected as context at session start, and prompt-relevant open tasks are
+surfaced on each prompt submit — so agents see live work without running
+`tasks list` manually. Set `AGENT_TOOLS_HOOK=off` to opt out.
+
 ```bash
 # List open work for the current project
 agent-tools tasks list
@@ -317,6 +322,11 @@ Repositories can opt into known guidance with a `.patterns` file in the current
 working directory. The file is intentionally minimal: gateway pattern ids as
 keys, with optional paths as values, and no comments.
 
+When hooks are installed via `agent-tools setup hooks`, patterns relevant to
+the current prompt are auto-injected on prompt submit, so agents surface
+established guidance without running `patterns search` manually. Set
+`AGENT_TOOLS_HOOK=off` to opt out.
+
 ```yaml
 01JZEXAMPLEPATTERNID:
   - src/main.rs
@@ -385,15 +395,19 @@ When the gateway is configured, the injected block includes code-exploration + c
 
 ### Automated install: `agent-tools setup hooks`
 
-Syncs app-scoped hook files from the gateway for detected clients. Hooks are pulled per app namespace and written only under that client's local hook directory.
+Does two things for detected clients:
+
+1. Installs the **local context-injection hook entries** that wire each agent CLI to `agent-tools hook ...`. These drive the auto-injection of open tasks (session start) and prompt-relevant tasks + patterns (prompt submit). They merge idempotently into the agent's own settings: `~/.claude/settings.json` and `~/.gemini/settings.json` (JSON), and `$CODEX_HOME/config.toml` (TOML, comment/format-preserving). Existing user hooks are preserved; re-runs are no-ops.
+2. Syncs **app-scoped hook files** published by the gateway for detected clients, written only under that client's local hook directory.
 
 ```bash
-agent-tools setup hooks                 # sync every detected app
-agent-tools setup hooks --app codex     # sync one app
-agent-tools setup hooks --dry-run       # show target paths without writing
+agent-tools setup hooks                 # install entries + sync every detected app
+agent-tools setup hooks --app codex     # one app
+agent-tools setup hooks --dry-run       # show targets without writing
+agent-tools setup hooks --remove        # remove the local context-injection entries
 ```
 
-If the gateway has no hooks for an app, setup skips that app without error. Hook names must be safe relative paths; absolute paths, `..`, and backslash-separated paths are rejected before writing.
+The local hook entries are installed even when the gateway is unconfigured (a missing gateway only skips the gateway file sync). If the gateway has no hooks for an app, setup skips that app without error. Gateway hook names must be safe relative paths; absolute paths, `..`, and backslash-separated paths are rejected before writing. Set `AGENT_TOOLS_HOOK=off` in the agent's environment to disable injection at runtime without uninstalling the entries.
 
 ### Automated install: `agent-tools setup skill`
 

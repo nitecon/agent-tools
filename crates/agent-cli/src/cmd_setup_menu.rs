@@ -146,10 +146,22 @@ fn probe_hooks() -> ComponentState {
             detail: "no supported agent homes detected".to_string(),
         };
     }
-    let installed_roots = cmd_setup_hooks::installed_hook_roots();
+    // "Installed" now reflects whether the local context-injection hook
+    // entries are present in every detected agent's settings file, not merely
+    // whether a hooks directory exists. This keeps the checklist honest about
+    // the wiring that actually drives `agent-tools hook`.
+    let entries_installed = cmd_setup_hooks::local_hook_entries_installed().unwrap_or(false);
     ComponentState {
-        installed: !installed_roots.is_empty(),
-        detail: format!("detected apps: {}", detected.join(", ")),
+        installed: entries_installed,
+        detail: format!(
+            "detected apps: {} (context-injection entries {})",
+            detected.join(", "),
+            if entries_installed {
+                "present"
+            } else {
+                "missing"
+            }
+        ),
     }
 }
 
@@ -264,7 +276,7 @@ fn run_components(components: &[Component]) -> Result<()> {
         println!("=== {} ===", c.label());
         let result = match c {
             Component::Gateway => agent_comms::config::run_setup_gateway(),
-            Component::Hooks => cmd_setup_hooks::run(Vec::new(), false),
+            Component::Hooks => cmd_setup_hooks::run(Vec::new(), false, false),
             Component::Rules => cmd_setup_rules::run(None, true, false, false),
             Component::Skill => cmd_setup_skill::run(false, false),
             Component::Perms => cmd_setup_perms::run(false, false, false),

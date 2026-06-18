@@ -77,6 +77,7 @@ const TASKS_SECTION: &str = r#"
 
 - Use this as your TODO surface when the gateway is configured.
 - For complex tasks, add `--specification` handoff context.
+- Open tasks are auto-injected at session start (and ranked tasks on prompt submit) when hooks are installed via `setup hooks`. Set `AGENT_TOOLS_HOOK=off` to opt out.
 
 ```bash
 agent-tools tasks list                   # TODO + IN PROGRESS for this project
@@ -116,6 +117,7 @@ const PATTERNS_SECTION: &str = r#"
 
 - Search latest active patterns before established-practice work.
 - If `$PWD/.patterns` exists, run `agent-tools patterns check` first.
+- Relevant patterns are auto-injected on prompt submit when hooks are installed via `setup hooks`. Set `AGENT_TOOLS_HOOK=off` to opt out.
 
 ```bash
 agent-tools patterns search "<query>" --version latest --state active
