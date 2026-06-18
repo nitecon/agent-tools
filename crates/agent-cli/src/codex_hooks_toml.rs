@@ -200,8 +200,9 @@ fn read_document(path: &Path) -> Result<Option<DocumentMut>> {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            return Err(anyhow::Error::new(e)
-                .context(format!("read config file {}", path.display())))
+            return Err(
+                anyhow::Error::new(e).context(format!("read config file {}", path.display()))
+            )
         }
     };
     if raw.trim().is_empty() {
@@ -268,7 +269,11 @@ mod tests {
             .and_then(|e| e.as_array_of_tables())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|t| t.get("command").and_then(|v| v.as_str()).map(str::to_string))
+                    .filter_map(|t| {
+                        t.get("command")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    })
                     .collect()
             })
             .unwrap_or_default()

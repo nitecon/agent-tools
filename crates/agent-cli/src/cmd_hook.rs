@@ -99,7 +99,14 @@ pub(crate) fn event_name(is_session_start: bool, agent: &str) -> &'static str {
 /// Extract prompt from a JSON payload trying multiple keys in order.
 /// Returns None if all keys are missing, non-string, or whitespace-only.
 pub(crate) fn extract_prompt(payload: &Value) -> Option<String> {
-    for key in &["prompt", "user_prompt", "userPrompt", "message", "input", "text"] {
+    for key in &[
+        "prompt",
+        "user_prompt",
+        "userPrompt",
+        "message",
+        "input",
+        "text",
+    ] {
         if let Some(Value::String(s)) = payload.get(key) {
             let trimmed = s.trim();
             if !trimmed.is_empty() {
@@ -255,7 +262,7 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
             }
         })
         .collect();
-    scored_tasks.sort_by(|a, b| b.0.cmp(&a.0));
+    scored_tasks.sort_by_key(|b| std::cmp::Reverse(b.0));
     let top_tasks: Vec<_> = scored_tasks.into_iter().take(3).map(|(_, t)| t).collect();
 
     if patterns.is_empty() && top_tasks.is_empty() {
@@ -267,7 +274,10 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
     if !patterns.is_empty() {
         let mut lines = vec!["Relevant patterns:".to_string()];
         for p in &patterns {
-            lines.push(format!("  {} [{}/{}] — {}", p.title, p.slug, p.id, p.summary));
+            lines.push(format!(
+                "  {} [{}/{}] — {}",
+                p.title, p.slug, p.id, p.summary
+            ));
             // `patterns get` accepts the slug or the id; the slug is the
             // stabler, human-readable handle so we surface it first.
             lines.push(format!("  fetch: agent-tools patterns get {}", p.slug));
@@ -401,7 +411,10 @@ mod tests {
         let ctx = "line1\nline2\t\"quoted\"";
         let out = render_envelope("SessionStart", ctx);
         let parsed: Value = serde_json::from_str(&out).expect("should be valid JSON");
-        assert_eq!(parsed["hookSpecificOutput"]["additionalContext"], json!(ctx));
+        assert_eq!(
+            parsed["hookSpecificOutput"]["additionalContext"],
+            json!(ctx)
+        );
     }
 
     // -- task ranking --------------------------------------------------------

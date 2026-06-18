@@ -163,8 +163,7 @@ pub fn run(apps: Vec<String>, dry_run: bool, remove: bool) -> Result<()> {
     }
 
     let cfg = load_config();
-    let (Some(gateway_url), Some(api_key)) =
-        (cfg.gateway.url.clone(), cfg.gateway.api_key.clone())
+    let (Some(gateway_url), Some(api_key)) = (cfg.gateway.url.clone(), cfg.gateway.api_key.clone())
     else {
         println!(
             "Gateway not configured — skipped gateway hook-file sync. \
@@ -262,7 +261,11 @@ fn sync_local_hook_entries(targets: &[HookTarget], dry_run: bool, remove: bool) 
     for &target in targets {
         let entries = local_hook_entries(target, &exe);
         let path = target.local_hook_settings_path();
-        let verb = if remove { "remove from" } else { "install into" };
+        let verb = if remove {
+            "remove from"
+        } else {
+            "install into"
+        };
 
         if dry_run {
             println!(

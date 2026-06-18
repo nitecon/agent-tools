@@ -4,8 +4,8 @@
 //! the hook-install machinery in `cmd_setup_hooks` need, so neither has to
 //! duplicate the serde round-trip, atomic write, or backup logic.
 
-pub(crate) use serde_json::{Map, Value};
 use anyhow::{Context, Result};
+pub(crate) use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
 // --- Path helpers ---
@@ -124,11 +124,7 @@ pub(crate) fn merge_hook_group(
 ///
 /// Collapses empty `hooks[event]` → event key removed; empty `hooks` → key
 /// removed. File never deleted. Returns AlreadyAbsent when nothing to remove.
-pub(crate) fn remove_hook_group(
-    path: &Path,
-    event: &str,
-    marker: &str,
-) -> Result<SettingsOutcome> {
+pub(crate) fn remove_hook_group(path: &Path, event: &str, marker: &str) -> Result<SettingsOutcome> {
     match read_json_object(path)? {
         None => Ok(SettingsOutcome::AlreadyAbsent),
         Some(mut obj) => {
@@ -249,8 +245,9 @@ fn read_json_object(path: &Path) -> Result<Option<Map<String, Value>>> {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
-            return Err(anyhow::Error::new(e)
-                .context(format!("read settings file {}", path.display())))
+            return Err(
+                anyhow::Error::new(e).context(format!("read settings file {}", path.display()))
+            )
         }
     };
     if raw.trim().is_empty() {
@@ -348,7 +345,10 @@ mod tests {
         let out = merge_hook_group(&path, "UserPromptSubmit", CMD, 10, MARKER).unwrap();
         assert_eq!(out, SettingsOutcome::Created);
         let parsed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(commands_in(&parsed, "UserPromptSubmit"), vec![CMD.to_string()]);
+        assert_eq!(
+            commands_in(&parsed, "UserPromptSubmit"),
+            vec![CMD.to_string()]
+        );
     }
 
     #[test]
