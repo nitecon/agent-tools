@@ -1,13 +1,23 @@
 //! Codex `config.toml` hook merge for `agent-tools setup hooks`.
 //!
 //! Uses `toml_edit` for a conservative, comment/format-preserving merge.
-//! Codex expresses per-turn hooks as an array-of-tables:
+//! Codex CLI 0.141 expresses per-turn hooks with a nested, Claude-Code-
+//! compatible shape: `hooks.<event>` is an array of matcher groups, each with
+//! its own inner `hooks` array of handler tables:
 //!
 //! ```toml
 //! [[hooks.UserPromptSubmit]]
+//!
+//! [[hooks.UserPromptSubmit.hooks]]
 //! type = "command"
 //! command = "<exe> hook user-prompt-submit --agent codex"
 //! ```
+//!
+//! Structurally:
+//! `hooks.UserPromptSubmit = [ { hooks = [ { type = "command", command = "..." } ] } ]`.
+//! The matcher group's top-level `matcher` key is optional and is omitted.
+//! Older flat `{ type, command }` tables parse as matcher groups with no
+//! handlers, so Codex reports Installed 0 / Active 0 for them.
 //!
 //! No `timeout` key is written (unit uncertain for Codex).
 //!
@@ -18,6 +28,8 @@ use crate::settings_json::SettingsOutcome;
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
+
+const HOOKS_TABLE: &str = "hooks";
 
 /// Install (or refresh) our per-turn hook table in `config_path` under `event`.
 pub fn install(
@@ -73,12 +85,41 @@ pub fn remove(config_path: &Path, event: &str, marker: &str) -> Result<SettingsO
 
 // -- internals ---------------------------------------------------------------
 
-/// Build a single `[[hooks.<event>]]` table: `type = "command"`, `command = ...`.
+/// Build one Codex matcher group with a single nested command handler.
 fn hook_entry(command: &str) -> Table {
-    let mut tbl = Table::new();
-    tbl.insert("type", toml_edit::value("command"));
-    tbl.insert("command", toml_edit::value(command));
-    tbl
+    let mut handler = Table::new();
+    handler.insert("type", toml_edit::value("command"));
+    handler.insert("command", toml_edit::value(command));
+
+    let mut handlers = ArrayOfTables::new();
+    handlers.push(handler);
+
+    let mut group = Table::new();
+    group.insert(HOOKS_TABLE, Item::ArrayOfTables(handlers));
+    group
+}
+
+/// True when a matcher group contains one of our commands.
+///
+/// This recognizes the current nested Codex 0.141 shape and the deprecated
+/// flat shape we used to install, so rerunning setup replaces broken existing
+/// entries instead of leaving them behind.
+fn hook_entry_has_marker(group: &Table, marker: &str) -> bool {
+    group
+        .get(HOOKS_TABLE)
+        .and_then(|item| item.as_array_of_tables())
+        .is_some_and(|handlers| {
+            handlers.iter().any(|handler| {
+                handler
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|cmd| cmd.contains(marker))
+            })
+        })
+        || group
+            .get("command")
+            .and_then(|v| v.as_str())
+            .is_some_and(|cmd| cmd.contains(marker))
 }
 
 fn apply_install(
@@ -115,15 +156,12 @@ fn apply_install(
     // Remove stale copies of our entries.
     let mut i = 0;
     while i < event_arr.len() {
-        if let Some(cmd) = event_arr
+        if event_arr
             .get(i)
-            .and_then(|t| t.get("command"))
-            .and_then(|v| v.as_str())
+            .is_some_and(|group| hook_entry_has_marker(group, marker))
         {
-            if cmd.contains(marker) {
-                event_arr.remove(i);
-                continue;
-            }
+            event_arr.remove(i);
+            continue;
         }
         i += 1;
     }
@@ -161,15 +199,12 @@ fn apply_remove(doc: &mut DocumentMut, event: &str, marker: &str, path: &Path) -
     let original_len = event_arr.len();
     let mut i = 0;
     while i < event_arr.len() {
-        if let Some(cmd) = event_arr
+        if event_arr
             .get(i)
-            .and_then(|t| t.get("command"))
-            .and_then(|v| v.as_str())
+            .is_some_and(|group| hook_entry_has_marker(group, marker))
         {
-            if cmd.contains(marker) {
-                event_arr.remove(i);
-                continue;
-            }
+            event_arr.remove(i);
+            continue;
         }
         i += 1;
     }
@@ -263,20 +298,40 @@ mod tests {
 
     fn commands_in_doc(body: &str, event: &str) -> Vec<String> {
         let doc: DocumentMut = body.parse().unwrap();
+        let mut commands = Vec::new();
+        let Some(groups) = doc
+            .get("hooks")
+            .and_then(|h| h.as_table())
+            .and_then(|t| t.get(event))
+            .and_then(|e| e.as_array_of_tables())
+        else {
+            return commands;
+        };
+
+        for group in groups {
+            if let Some(cmd) = group.get("command").and_then(|v| v.as_str()) {
+                commands.push(cmd.to_string());
+            }
+            if let Some(handlers) = group.get(HOOKS_TABLE).and_then(|h| h.as_array_of_tables()) {
+                commands.extend(
+                    handlers
+                        .iter()
+                        .filter_map(|handler| handler.get("command").and_then(|v| v.as_str()))
+                        .map(str::to_string),
+                );
+            }
+        }
+        commands
+    }
+
+    fn event_group_count(body: &str, event: &str) -> usize {
+        let doc: DocumentMut = body.parse().unwrap();
         doc.get("hooks")
             .and_then(|h| h.as_table())
             .and_then(|t| t.get(event))
             .and_then(|e| e.as_array_of_tables())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|t| {
-                        t.get("command")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+            .map(ArrayOfTables::len)
+            .unwrap_or(0)
     }
 
     #[test]
@@ -287,6 +342,10 @@ mod tests {
         assert_eq!(out, SettingsOutcome::Created);
         let body = fs::read_to_string(&path).unwrap();
         assert!(body.contains("[[hooks.UserPromptSubmit]]"), "got: {body}");
+        assert!(
+            body.contains("[[hooks.UserPromptSubmit.hooks]]"),
+            "got: {body}"
+        );
         assert!(body.contains(CMD), "got: {body}");
         assert!(!body.contains("timeout"), "got: {body}");
     }
@@ -313,7 +372,7 @@ mod tests {
         let path = dir.path.join("config.toml");
         fs::write(
             &path,
-            "[[hooks.UserPromptSubmit]]\ntype = \"command\"\ncommand = \"user-hook.sh\"\n",
+            "[[hooks.UserPromptSubmit]]\n[[hooks.UserPromptSubmit.hooks]]\ntype = \"command\"\ncommand = \"user-hook.sh\"\n",
         )
         .unwrap();
         install(&path, EVENT, CMD, MARKER).unwrap();
@@ -321,6 +380,28 @@ mod tests {
         let cmds = commands_in_doc(&body, EVENT);
         assert!(cmds.contains(&"user-hook.sh".to_string()), "got {cmds:?}");
         assert!(cmds.contains(&CMD.to_string()), "got {cmds:?}");
+    }
+
+    #[test]
+    fn install_replaces_legacy_flat_owned_hook() {
+        let dir = TempDir::new("legacy-replace");
+        let path = dir.path.join("config.toml");
+        fs::write(
+            &path,
+            format!("[[hooks.UserPromptSubmit]]\ntype = \"command\"\ncommand = \"{CMD}\"\n"),
+        )
+        .unwrap();
+
+        install(&path, EVENT, CMD, MARKER).unwrap();
+
+        let body = fs::read_to_string(&path).unwrap();
+        assert_eq!(event_group_count(&body, EVENT), 1);
+        assert!(
+            body.contains("[[hooks.UserPromptSubmit.hooks]]"),
+            "got: {body}"
+        );
+        let cmds = commands_in_doc(&body, EVENT);
+        assert_eq!(cmds.iter().filter(|cmd| cmd.contains(MARKER)).count(), 1);
     }
 
     #[test]
@@ -354,7 +435,7 @@ mod tests {
         let path = dir.path.join("config.toml");
         fs::write(
             &path,
-            "[[hooks.UserPromptSubmit]]\ntype = \"command\"\ncommand = \"user-hook.sh\"\n",
+            "[[hooks.UserPromptSubmit]]\n[[hooks.UserPromptSubmit.hooks]]\ntype = \"command\"\ncommand = \"user-hook.sh\"\n",
         )
         .unwrap();
         install(&path, EVENT, CMD, MARKER).unwrap();
@@ -363,6 +444,25 @@ mod tests {
         let body = fs::read_to_string(&path).unwrap();
         let cmds = commands_in_doc(&body, EVENT);
         assert_eq!(cmds, vec!["user-hook.sh".to_string()]);
+    }
+
+    #[test]
+    fn remove_strips_legacy_flat_owned_hook() {
+        let dir = TempDir::new("legacy-remove");
+        let path = dir.path.join("config.toml");
+        fs::write(
+            &path,
+            format!("model = \"gpt-5\"\n[[hooks.UserPromptSubmit]]\ntype = \"command\"\ncommand = \"{CMD}\"\n"),
+        )
+        .unwrap();
+
+        let out = remove(&path, EVENT, MARKER).unwrap();
+
+        assert_eq!(out, SettingsOutcome::Removed);
+        let body = fs::read_to_string(&path).unwrap();
+        let doc: DocumentMut = body.parse().unwrap();
+        assert!(!doc.contains_key("hooks"), "empty hooks must be dropped");
+        assert_eq!(doc.get("model").and_then(|v| v.as_str()), Some("gpt-5"));
     }
 
     #[test]
