@@ -29,14 +29,17 @@ fn agent_tools_hook_marker(exe: &str) -> String {
     format!("{exe} hook ")
 }
 
-/// Resolve the current executable path for building hook command strings.
-/// Falls back to the bare `agent-tools` name if resolution fails so installs
-/// still produce a runnable command on a PATH-configured system.
+/// Command name used in hook command strings.
+///
+/// We deliberately emit the bare `agent-tools` name rather than the resolved
+/// `current_exe()` path: `agent-tools` is installed on PATH on every platform,
+/// and absolute paths break across machines — on Windows in particular the
+/// backslashes get stripped when the command string is re-parsed by the shell
+/// (e.g. `C:\Users\nitec\.agentic\bin\agent-tools.exe` collapses to
+/// `C:Usersnitec.agenticbinagent-tools.exe`). The bare name is portable and
+/// has no platform-specific `.exe` suffix.
 fn current_exe_string() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(str::to_string))
-        .unwrap_or_else(|| "agent-tools".to_string())
+    "agent-tools".to_string()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

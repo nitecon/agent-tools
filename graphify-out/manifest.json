@@ -1,0 +1,322 @@
+{
+  "build.sh": {
+    "mtime": 1781556243.2849128,
+    "ast_hash": "2cb0ea0126ed75c486fe6173c3a66747",
+    "semantic_hash": "2cb0ea0126ed75c486fe6173c3a66747"
+  },
+  "crates/agent-cli/build.rs": {
+    "mtime": 1781556243.2855592,
+    "ast_hash": "41b2f077a46346b7820b339e8c5ec172",
+    "semantic_hash": "41b2f077a46346b7820b339e8c5ec172"
+  },
+  "crates/agent-cli/src/cmd_comms.rs": {
+    "mtime": 1781556243.2855592,
+    "ast_hash": "771dc5a4b4d5231cd294ed2b1db49699",
+    "semantic_hash": "771dc5a4b4d5231cd294ed2b1db49699"
+  },
+  "crates/agent-cli/src/cmd_docs.rs": {
+    "mtime": 1781558710.972473,
+    "ast_hash": "0e193620454a9cb670de570783f07aef",
+    "semantic_hash": "0e193620454a9cb670de570783f07aef"
+  },
+  "crates/agent-cli/src/cmd_docs_artifacts.rs": {
+    "mtime": 1781556243.2856917,
+    "ast_hash": "e179ffce03cb8e51b77e61882b8d951c",
+    "semantic_hash": "e179ffce03cb8e51b77e61882b8d951c"
+  },
+  "crates/agent-cli/src/cmd_gateway_context.rs": {
+    "mtime": 1781556243.2856917,
+    "ast_hash": "c0b89c654d6ab7ea89c77788515b0781",
+    "semantic_hash": "c0b89c654d6ab7ea89c77788515b0781"
+  },
+  "crates/agent-cli/src/cmd_hook.rs": {
+    "mtime": 1781814226.3667238,
+    "ast_hash": "682ddcf52dc95a64bbcabfa9f3a18ff1",
+    "semantic_hash": "682ddcf52dc95a64bbcabfa9f3a18ff1"
+  },
+  "crates/agent-cli/src/cmd_patterns.rs": {
+    "mtime": 1781556243.2859128,
+    "ast_hash": "b5c99af527dc110f0c5c4f42d32c0ad8",
+    "semantic_hash": "b5c99af527dc110f0c5c4f42d32c0ad8"
+  },
+  "crates/agent-cli/src/cmd_read.rs": {
+    "mtime": 1781556243.2859128,
+    "ast_hash": "84f2a0997678f01732f84825e3bc8b71",
+    "semantic_hash": "84f2a0997678f01732f84825e3bc8b71"
+  },
+  "crates/agent-cli/src/cmd_setup_hooks.rs": {
+    "mtime": 1781843144.9096591,
+    "ast_hash": "c4624642e145f17b194f4337a9945981",
+    "semantic_hash": "c4624642e145f17b194f4337a9945981"
+  },
+  "crates/agent-cli/src/cmd_setup_menu.rs": {
+    "mtime": 1781807588.454997,
+    "ast_hash": "af80451a3903a27b2bcccff8f312798f",
+    "semantic_hash": "af80451a3903a27b2bcccff8f312798f"
+  },
+  "crates/agent-cli/src/cmd_setup_perms.rs": {
+    "mtime": 1781807486.9990199,
+    "ast_hash": "69bc6fbc9ca40cc944cd88212adfa7bc",
+    "semantic_hash": "69bc6fbc9ca40cc944cd88212adfa7bc"
+  },
+  "crates/agent-cli/src/cmd_setup_rules.rs": {
+    "mtime": 1781807621.9569814,
+    "ast_hash": "1754aa8c393ed1f8684adb44fae3586d",
+    "semantic_hash": "1754aa8c393ed1f8684adb44fae3586d"
+  },
+  "crates/agent-cli/src/cmd_setup_skill.rs": {
+    "mtime": 1781802175.8828034,
+    "ast_hash": "4ee7822b2486da9e76e3eeefb8ee2942",
+    "semantic_hash": "4ee7822b2486da9e76e3eeefb8ee2942"
+  },
+  "crates/agent-cli/src/cmd_tasks.rs": {
+    "mtime": 1781801822.979357,
+    "ast_hash": "898199293fecd4fb7732560ee300ca03",
+    "semantic_hash": "898199293fecd4fb7732560ee300ca03"
+  },
+  "crates/agent-cli/src/cmd_text.rs": {
+    "mtime": 1781556243.2859128,
+    "ast_hash": "afed24dac7c977fc3260c1c85a6539ab",
+    "semantic_hash": "afed24dac7c977fc3260c1c85a6539ab"
+  },
+  "crates/agent-cli/src/codex_hooks_toml.rs": {
+    "mtime": 1781827072.4473093,
+    "ast_hash": "e3aa882e008f1829932b4cf44635e028",
+    "semantic_hash": "e3aa882e008f1829932b4cf44635e028"
+  },
+  "crates/agent-cli/src/main.rs": {
+    "mtime": 1781807612.03469,
+    "ast_hash": "f0a4b9e5b3fe53e0310ec29929928f6c",
+    "semantic_hash": "f0a4b9e5b3fe53e0310ec29929928f6c"
+  },
+  "crates/agent-cli/src/memory_reminder.rs": {
+    "mtime": 1781801812.9559379,
+    "ast_hash": "e6b9224f82041700904ab4f20b6a11eb",
+    "semantic_hash": "e6b9224f82041700904ab4f20b6a11eb"
+  },
+  "crates/agent-cli/src/nudge.rs": {
+    "mtime": 1781807561.7702136,
+    "ast_hash": "09e556f680480cd597a59f8d18fdc2ec",
+    "semantic_hash": "09e556f680480cd597a59f8d18fdc2ec"
+  },
+  "crates/agent-cli/src/settings_json.rs": {
+    "mtime": 1781814226.396725,
+    "ast_hash": "dc7ef7a2620577b4b934478ae77ff82e",
+    "semantic_hash": "dc7ef7a2620577b4b934478ae77ff82e"
+  },
+  "crates/agent-cli/tests/grep_sed_conformance.rs": {
+    "mtime": 1781556243.2875144,
+    "ast_hash": "d161f0f0a90a70593f75478ae74d497e",
+    "semantic_hash": "d161f0f0a90a70593f75478ae74d497e"
+  },
+  "crates/agent-comms/src/config.rs": {
+    "mtime": 1781556243.287876,
+    "ast_hash": "f68b99e9ee44f89c03966ada53ae62b7",
+    "semantic_hash": "f68b99e9ee44f89c03966ada53ae62b7"
+  },
+  "crates/agent-comms/src/docs.rs": {
+    "mtime": 1781558730.9610648,
+    "ast_hash": "63737a87e4dc41164b5708615959c195",
+    "semantic_hash": "63737a87e4dc41164b5708615959c195"
+  },
+  "crates/agent-comms/src/gateway.rs": {
+    "mtime": 1781556243.2879581,
+    "ast_hash": "39babd874ce28f29f9a331d8ddf043db",
+    "semantic_hash": "39babd874ce28f29f9a331d8ddf043db"
+  },
+  "crates/agent-comms/src/hooks.rs": {
+    "mtime": 1781556243.2879581,
+    "ast_hash": "c80bbb7207e73f1126a2e06a4f66b37e",
+    "semantic_hash": "c80bbb7207e73f1126a2e06a4f66b37e"
+  },
+  "crates/agent-comms/src/identity.rs": {
+    "mtime": 1781556243.2879581,
+    "ast_hash": "24bb1f08cb8f4886a1f503b485b10309",
+    "semantic_hash": "24bb1f08cb8f4886a1f503b485b10309"
+  },
+  "crates/agent-comms/src/lib.rs": {
+    "mtime": 1781556243.2879581,
+    "ast_hash": "8bbebfcde0a48596be76853bab622991",
+    "semantic_hash": "8bbebfcde0a48596be76853bab622991"
+  },
+  "crates/agent-comms/src/patterns.rs": {
+    "mtime": 1781556243.2879581,
+    "ast_hash": "c76769845ef67c4455d1b0cddfd78756",
+    "semantic_hash": "c76769845ef67c4455d1b0cddfd78756"
+  },
+  "crates/agent-comms/src/sanitize.rs": {
+    "mtime": 1781556243.2879581,
+    "ast_hash": "ab61e244c0cc31b2c375d34beee670ca",
+    "semantic_hash": "ab61e244c0cc31b2c375d34beee670ca"
+  },
+  "crates/agent-comms/src/tasks.rs": {
+    "mtime": 1781556243.2879581,
+    "ast_hash": "a09ed1791eca66d3aeb0ed32757fffbe",
+    "semantic_hash": "a09ed1791eca66d3aeb0ed32757fffbe"
+  },
+  "crates/agent-core/src/error.rs": {
+    "mtime": 1781556243.2884214,
+    "ast_hash": "469270579e7bcd3a3cfb19262d9c6680",
+    "semantic_hash": "469270579e7bcd3a3cfb19262d9c6680"
+  },
+  "crates/agent-core/src/lib.rs": {
+    "mtime": 1781556243.2884524,
+    "ast_hash": "bb90700569ee53b0c5872a2872efc470",
+    "semantic_hash": "bb90700569ee53b0c5872a2872efc470"
+  },
+  "crates/agent-core/src/output.rs": {
+    "mtime": 1781556243.2884524,
+    "ast_hash": "19a695f642d9455f0e4b100e2a32e8b5",
+    "semantic_hash": "19a695f642d9455f0e4b100e2a32e8b5"
+  },
+  "crates/agent-core/src/path.rs": {
+    "mtime": 1781556243.2884524,
+    "ast_hash": "bc0cd1f408f73f2c555e115069cacc13",
+    "semantic_hash": "bc0cd1f408f73f2c555e115069cacc13"
+  },
+  "crates/agent-core/src/storage.rs": {
+    "mtime": 1781556243.2884524,
+    "ast_hash": "0862488da2ae814902d1482e6a4eda32",
+    "semantic_hash": "0862488da2ae814902d1482e6a4eda32"
+  },
+  "crates/agent-fs/src/lib.rs": {
+    "mtime": 1781556243.288663,
+    "ast_hash": "996a843f986ff87db8ad0d78f2030f3d",
+    "semantic_hash": "996a843f986ff87db8ad0d78f2030f3d"
+  },
+  "crates/agent-fs/src/list.rs": {
+    "mtime": 1781556243.2886903,
+    "ast_hash": "08d93c30b670efbc039cea2a2983ca3f",
+    "semantic_hash": "08d93c30b670efbc039cea2a2983ca3f"
+  },
+  "crates/agent-fs/src/markdown.rs": {
+    "mtime": 1781556243.2886903,
+    "ast_hash": "82ba55b441da5e69e32d17c3bad56c4f",
+    "semantic_hash": "82ba55b441da5e69e32d17c3bad56c4f"
+  },
+  "crates/agent-fs/src/ops.rs": {
+    "mtime": 1781556243.2886903,
+    "ast_hash": "594c8ff78dc56f6f5b0af6c8d5934dde",
+    "semantic_hash": "594c8ff78dc56f6f5b0af6c8d5934dde"
+  },
+  "crates/agent-fs/src/text_ops.rs": {
+    "mtime": 1781556243.2886903,
+    "ast_hash": "61e93368e1df54f36eecceb8bc51b168",
+    "semantic_hash": "61e93368e1df54f36eecceb8bc51b168"
+  },
+  "crates/agent-fs/src/tree.rs": {
+    "mtime": 1781556243.2886903,
+    "ast_hash": "8b696e581e4b4a706dea76fbd4941813",
+    "semantic_hash": "8b696e581e4b4a706dea76fbd4941813"
+  },
+  "crates/agent-mcp/build.rs": {
+    "mtime": 1781556243.2890036,
+    "ast_hash": "41b2f077a46346b7820b339e8c5ec172",
+    "semantic_hash": "41b2f077a46346b7820b339e8c5ec172"
+  },
+  "crates/agent-mcp/src/main.rs": {
+    "mtime": 1781556243.2890036,
+    "ast_hash": "931e066853e62377974f357b2232c55b",
+    "semantic_hash": "931e066853e62377974f357b2232c55b"
+  },
+  "crates/agent-mcp/src/server.rs": {
+    "mtime": 1781556243.289074,
+    "ast_hash": "bba76247739197ef0bb7889a5f1e2099",
+    "semantic_hash": "bba76247739197ef0bb7889a5f1e2099"
+  },
+  "crates/agent-search/src/cache.rs": {
+    "mtime": 1781556243.2892938,
+    "ast_hash": "0e8b87cf2a882baf2fd58bcd59b97e87",
+    "semantic_hash": "0e8b87cf2a882baf2fd58bcd59b97e87"
+  },
+  "crates/agent-search/src/indexer.rs": {
+    "mtime": 1781556243.2893367,
+    "ast_hash": "c8ce72e342eb57fb0598d7be2887b118",
+    "semantic_hash": "c8ce72e342eb57fb0598d7be2887b118"
+  },
+  "crates/agent-search/src/lib.rs": {
+    "mtime": 1781556243.2893367,
+    "ast_hash": "c3b318e16725b46dbf8c457f6c370e35",
+    "semantic_hash": "c3b318e16725b46dbf8c457f6c370e35"
+  },
+  "crates/agent-search/src/query.rs": {
+    "mtime": 1781556243.2893367,
+    "ast_hash": "14cf2d0c3bc130a9715b9bafd52d1fa6",
+    "semantic_hash": "14cf2d0c3bc130a9715b9bafd52d1fa6"
+  },
+  "crates/agent-symbols/src/extractor.rs": {
+    "mtime": 1781556243.2895155,
+    "ast_hash": "f32ede3854990f8b3bc7f57782fbb121",
+    "semantic_hash": "f32ede3854990f8b3bc7f57782fbb121"
+  },
+  "crates/agent-symbols/src/index.rs": {
+    "mtime": 1781556243.2895753,
+    "ast_hash": "35939dce286c5cc570b40f2a1b08bf0c",
+    "semantic_hash": "35939dce286c5cc570b40f2a1b08bf0c"
+  },
+  "crates/agent-symbols/src/languages.rs": {
+    "mtime": 1781556243.2895753,
+    "ast_hash": "9dc76a9b0545079dce34717ff3450700",
+    "semantic_hash": "9dc76a9b0545079dce34717ff3450700"
+  },
+  "crates/agent-symbols/src/lib.rs": {
+    "mtime": 1781556243.2895753,
+    "ast_hash": "51ca0f161828c3d012b7bf17ff56f078",
+    "semantic_hash": "51ca0f161828c3d012b7bf17ff56f078"
+  },
+  "crates/agent-symbols/src/parser.rs": {
+    "mtime": 1781556243.2895753,
+    "ast_hash": "5745aa5881e6ff446830b62f3fe600ef",
+    "semantic_hash": "5745aa5881e6ff446830b62f3fe600ef"
+  },
+  "crates/agent-sync/build.rs": {
+    "mtime": 1781556243.289748,
+    "ast_hash": "37eeab916e06c54fed360e36f46a4d33",
+    "semantic_hash": "37eeab916e06c54fed360e36f46a4d33"
+  },
+  "crates/agent-sync/src/client.rs": {
+    "mtime": 1781556243.289748,
+    "ast_hash": "29481800ec740f8ed67a96ea47b02998",
+    "semantic_hash": "29481800ec740f8ed67a96ea47b02998"
+  },
+  "crates/agent-sync/src/lib.rs": {
+    "mtime": 1781556243.2898166,
+    "ast_hash": "e0d5befd4853386fb164b5b95e273165",
+    "semantic_hash": "e0d5befd4853386fb164b5b95e273165"
+  },
+  "crates/agent-sync/src/main.rs": {
+    "mtime": 1781556243.2898166,
+    "ast_hash": "51d94017998c3145b44c8c805c4f0e69",
+    "semantic_hash": "51d94017998c3145b44c8c805c4f0e69"
+  },
+  "crates/agent-sync/src/zip_util.rs": {
+    "mtime": 1781556243.2898166,
+    "ast_hash": "5b14428e80fa98da2a0f133218797bc2",
+    "semantic_hash": "5b14428e80fa98da2a0f133218797bc2"
+  },
+  "crates/agent-updater/build.rs": {
+    "mtime": 1781556243.289989,
+    "ast_hash": "41b2f077a46346b7820b339e8c5ec172",
+    "semantic_hash": "41b2f077a46346b7820b339e8c5ec172"
+  },
+  "crates/agent-updater/src/lib.rs": {
+    "mtime": 1781556243.289989,
+    "ast_hash": "43da41e6320e961702d5c83b5576a43c",
+    "semantic_hash": "43da41e6320e961702d5c83b5576a43c"
+  },
+  "install-macos.sh": {
+    "mtime": 1781556243.2909129,
+    "ast_hash": "bb9e971106cb105750ef9393732fb762",
+    "semantic_hash": "bb9e971106cb105750ef9393732fb762"
+  },
+  "install.ps1": {
+    "mtime": 1781556243.2909129,
+    "ast_hash": "c631500555fecc6766d796b388565202",
+    "semantic_hash": "c631500555fecc6766d796b388565202"
+  },
+  "install.sh": {
+    "mtime": 1781556243.2909129,
+    "ast_hash": "2829f84100a6b1282d89e1ce387cc9e1",
+    "semantic_hash": "2829f84100a6b1282d89e1ce387cc9e1"
+  }
+}
