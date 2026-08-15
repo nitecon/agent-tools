@@ -368,8 +368,21 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum SetupCommands {
-    /// Configure gateway connection (creates ~/.agentic/agent-tools/gateway.conf)
-    Gateway,
+    /// Configure the default gateway or project-based upstream gateways
+    Gateway {
+        /// Add or update a project upstream profile (prompts for URL and credentials).
+        #[arg(long, value_name = "PROFILE", conflicts_with_all = ["list", "remove_upstream"])]
+        add_upstream: Option<String>,
+        /// List the default gateway and current repository upstreams.
+        #[arg(long, conflicts_with_all = ["add_upstream", "remove_upstream"])]
+        list: bool,
+        /// Remove an upstream declaration and its local credentials.
+        #[arg(long, value_name = "PROFILE", conflicts_with_all = ["add_upstream", "list"])]
+        remove_upstream: Option<String>,
+        /// With --remove-upstream, preserve the repository declaration.
+        #[arg(long, requires = "remove_upstream")]
+        credentials_only: bool,
+    },
 
     /// Inject the agent-tools usage protocols into known agent rule files
     /// (e.g. ~/.claude/CLAUDE.md). Idempotent — re-runs replace the existing
@@ -664,7 +677,25 @@ fn main_inner() -> Result<()> {
 
         Commands::Setup { command } => match command {
             None => cmd_setup_menu::run_interactive(),
-            Some(SetupCommands::Gateway) => agent_comms::config::run_setup_gateway(),
+            Some(SetupCommands::Gateway {
+                add_upstream,
+                list,
+                remove_upstream,
+                credentials_only,
+            }) => {
+                if let Some(profile) = add_upstream {
+                    agent_comms::config::run_add_project_gateway(Some(&profile))
+                } else if list {
+                    agent_comms::config::print_gateway_status()
+                } else if let Some(profile) = remove_upstream {
+                    agent_comms::config::run_remove_project_gateway(
+                        Some(&profile),
+                        credentials_only,
+                    )
+                } else {
+                    agent_comms::config::run_setup_gateway()
+                }
+            }
             Some(SetupCommands::Rules {
                 target,
                 all,

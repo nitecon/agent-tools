@@ -14,7 +14,7 @@
 //! positive instructions (rules+skill) in place without the blocking denies.
 
 use crate::{cmd_setup_hooks, cmd_setup_perms, cmd_setup_rules, cmd_setup_skill};
-use agent_comms::config::{load_config, user_gateway_conf_path};
+use agent_comms::config::{load_config, project_gateway_statuses, user_gateway_conf_path};
 use anyhow::{Context, Result};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -124,10 +124,22 @@ fn probe(c: Component) -> ComponentState {
 fn probe_gateway() -> ComponentState {
     let cfg = load_config();
     match (cfg.gateway.url.as_ref(), cfg.gateway.api_key.as_ref()) {
-        (Some(url), Some(_)) => ComponentState {
-            installed: true,
-            detail: format!("configured at {url}"),
-        },
+        (Some(url), Some(_)) => {
+            let statuses = project_gateway_statuses().unwrap_or_default();
+            let configured = statuses.iter().filter(|status| status.configured).count();
+            let missing = statuses.len().saturating_sub(configured);
+            let detail = if statuses.is_empty() {
+                format!("default configured at {url}; no project upstreams")
+            } else if missing == 0 {
+                format!("default configured; {configured} project upstream(s) configured")
+            } else {
+                format!("default configured; {configured} project upstream(s) configured, {missing} need credentials")
+            };
+            ComponentState {
+                installed: missing == 0,
+                detail,
+            }
+        }
         _ => ComponentState {
             installed: false,
             detail: format!(

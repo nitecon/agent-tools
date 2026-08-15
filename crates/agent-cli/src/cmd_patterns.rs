@@ -1,13 +1,14 @@
 //! `agent-tools patterns` subcommands.
 
-use agent_comms::config::{home_dir, load_config};
-use agent_comms::gateway::GatewayClient;
-use agent_comms::identity::load_or_generate_agent_id;
+use crate::cmd_gateway_context::{
+    ensure_all_registered, print_gateway_warnings, resolve_context_for, GatewayContext,
+    GatewayTarget,
+};
+use agent_comms::config::load_config;
 use agent_comms::patterns::{
     AddPatternCommentRequest, CreatePatternRequest, Pattern, PatternComment, PatternFilters,
     PatternSummary, UpdatePatternRequest,
 };
-use agent_comms::sanitize::short_project_ident;
 use agent_comms::tasks::{CreateTaskRequest, TaskSummary};
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -191,12 +192,7 @@ pub enum PatternsCommands {
     },
 }
 
-struct PatternsContext {
-    ident: String,
-    canonical_ident: String,
-    agent_id: String,
-    gateway: GatewayClient,
-}
+type PatternsContext = GatewayContext;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PatternUsage {
@@ -466,6 +462,8 @@ async fn cmd_search(
     agent_id: Option<String>,
 ) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
+    print_gateway_warnings(&ctx);
+    ensure_all_registered(&ctx).await?;
     let request_label_storage = category.as_deref().map(category_marker);
     let request_label = label.as_deref().or(request_label_storage.as_deref());
     let filters = PatternFilters {
@@ -476,18 +474,38 @@ async fn cmd_search(
         state: state.as_deref(),
         superseded_by: superseded_by.as_deref(),
     };
-    let mut patterns = ctx
-        .gateway
-        .list_patterns(&filters, Some(&ctx.agent_id))
-        .await
-        .context("list patterns")?;
-    if let Some(category) = category.as_deref() {
-        patterns.retain(|pattern| summary_matches_category(pattern, category));
+    let mut patterns: Vec<(String, PatternSummary)> = Vec::new();
+    for target in &ctx.gateways {
+        match target
+            .gateway
+            .list_patterns(&filters, Some(&ctx.agent_id))
+            .await
+        {
+            Ok(mut found) => {
+                if let Some(category) = category.as_deref() {
+                    found.retain(|pattern| summary_matches_category(pattern, category));
+                }
+                patterns.extend(
+                    found
+                        .into_iter()
+                        .map(|pattern| (target.profile.clone(), pattern)),
+                );
+            }
+            Err(error) if !target.primary => eprintln!(
+                "warning: gateway {} could not list patterns: {error:#}",
+                target.profile
+            ),
+            Err(error) => return Err(error).context("list patterns on default gateway"),
+        }
     }
     if patterns.is_empty() {
         println!("(no patterns)");
     } else {
-        for pattern in patterns {
+        let show_profile = patterns.iter().any(|(profile, _)| profile != "default");
+        for (profile, pattern) in patterns {
+            if show_profile {
+                print!("[{profile}] ");
+            }
             print_summary_row(&pattern);
         }
     }
@@ -496,11 +514,10 @@ async fn cmd_search(
 
 async fn cmd_get(id: String, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
-    let pattern = ctx
-        .gateway
-        .get_pattern(&id, Some(&ctx.agent_id))
-        .await
-        .context("fetch pattern")?;
+    let (target, pattern) = find_pattern(&ctx, &id).await?;
+    if ctx.gateways.len() > 1 {
+        println!("gateway: {}", target.profile);
+    }
     print_pattern(&pattern);
     Ok(())
 }
@@ -537,6 +554,7 @@ async fn cmd_create(args: CreatePatternArgs) -> Result<()> {
 
 async fn cmd_update(args: UpdatePatternArgs) -> Result<()> {
     let ctx = resolve_context(args.agent_id)?;
+    let (target, _) = find_pattern(&ctx, &args.id).await?;
     let body = match args.body_file {
         Some(path) => Some(
             fs::read_to_string(&path)
@@ -557,7 +575,7 @@ async fn cmd_update(args: UpdatePatternArgs) -> Result<()> {
         version: args.version.as_deref(),
         state: args.state.as_deref(),
     };
-    let pattern = ctx
+    let pattern = target
         .gateway
         .update_pattern(&args.id, &req, Some(&ctx.agent_id))
         .await
@@ -571,7 +589,9 @@ async fn cmd_update(args: UpdatePatternArgs) -> Result<()> {
 
 async fn cmd_delete(id: String, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
-    ctx.gateway
+    let (target, _) = find_pattern(&ctx, &id).await?;
+    target
+        .gateway
         .delete_pattern(&id, Some(&ctx.agent_id))
         .await
         .context("delete pattern")?;
@@ -581,7 +601,8 @@ async fn cmd_delete(id: String, agent_id: Option<String>) -> Result<()> {
 
 async fn cmd_comments(id: String, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
-    let comments = ctx
+    let (target, _) = find_pattern(&ctx, &id).await?;
+    let comments = target
         .gateway
         .list_pattern_comments(&id, Some(&ctx.agent_id))
         .await
@@ -598,12 +619,13 @@ async fn cmd_comments(id: String, agent_id: Option<String>) -> Result<()> {
 
 async fn cmd_comment(id: String, content: String, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
+    let (target, _) = find_pattern(&ctx, &id).await?;
     let req = AddPatternCommentRequest {
         content: &content,
         author: &ctx.agent_id,
         author_type: "agent",
     };
-    let comment = ctx
+    let comment = target
         .gateway
         .add_pattern_comment(&id, &req, Some(&ctx.agent_id))
         .await
@@ -712,11 +734,7 @@ async fn cmd_check(agent_id: Option<String>) -> Result<()> {
 
 async fn cmd_use(id: String, paths: Vec<PathBuf>, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
-    let pattern = ctx
-        .gateway
-        .get_pattern(&id, Some(&ctx.agent_id))
-        .await
-        .context("fetch pattern")?;
+    let (_, pattern) = find_pattern(&ctx, &id).await?;
     let file = patterns_file()?;
     let mut usages = if file.exists() {
         read_patterns_file(&file)?
@@ -743,9 +761,7 @@ async fn check_usages(
 ) -> Result<Vec<PatternCheck>> {
     let mut checks = Vec::new();
     for usage in usages {
-        let pattern = ctx
-            .gateway
-            .get_pattern(&usage.id, Some(&ctx.agent_id))
+        let (_, pattern) = find_pattern(ctx, &usage.id)
             .await
             .with_context(|| format!("fetch pattern {}", usage.id))?;
         let replacement = superseded_replacement(&pattern);
@@ -820,54 +836,28 @@ async fn ensure_superseded_task(
 }
 
 fn resolve_context(agent_id_override: Option<String>) -> Result<PatternsContext> {
-    let canonical_ident =
-        agent_core::project_ident_from_cwd().context("derive project ident from cwd")?;
-    let ident = short_project_ident(&canonical_ident);
-    if ident.is_empty() {
-        anyhow::bail!(
-            "could not derive a short project ident from {canonical_ident:?}; \
-             set a git origin or run from a stable project directory"
-        );
-    }
-    let agent_id = match agent_id_override {
-        Some(id) => id,
-        None => load_or_generate_agent_id()?,
-    };
-    let config = load_config();
-    let gateway_url = config
-        .gateway
-        .url
-        .clone()
-        .context("gateway URL not configured -- run `agent-tools setup gateway`")?;
-    let api_key = config
-        .gateway
-        .api_key
-        .clone()
-        .context("gateway API key not configured -- run `agent-tools setup gateway`")?;
-    let timeout_ms = config.gateway.timeout_ms.unwrap_or(5000);
-    let gateway = GatewayClient::new(gateway_url, api_key, timeout_ms)?;
-    Ok(PatternsContext {
-        ident,
-        canonical_ident,
-        agent_id,
-        gateway,
-    })
+    resolve_context_for("patterns", agent_id_override)
 }
 
 async fn ensure_registered(ctx: &PatternsContext) -> Result<()> {
-    let marker = registration_marker_path(&ctx.canonical_ident);
-    if read_registration_marker(&marker).as_deref() == Some(&ctx.ident) {
-        return Ok(());
+    ensure_all_registered(ctx).await
+}
+
+async fn find_pattern<'a>(
+    ctx: &'a PatternsContext,
+    id: &str,
+) -> Result<(&'a GatewayTarget, Pattern)> {
+    let mut errors = Vec::new();
+    for target in &ctx.gateways {
+        match target.gateway.get_pattern(id, Some(&ctx.agent_id)).await {
+            Ok(pattern) => return Ok((target, pattern)),
+            Err(error) => errors.push(format!("{}: {error:#}", target.profile)),
+        }
     }
-    ctx.gateway
-        .register_project(&ctx.ident, None)
-        .await
-        .context("register project")?;
-    if let Some(parent) = marker.parent() {
-        fs::create_dir_all(parent).ok();
-    }
-    fs::write(&marker, &ctx.ident).ok();
-    Ok(())
+    anyhow::bail!(
+        "pattern {id:?} was not found on configured gateways ({})",
+        errors.join("; ")
+    )
 }
 
 fn load_and_prepare_patterns(
@@ -1141,18 +1131,6 @@ fn markdown_heading_level(trimmed: &str) -> usize {
 
 fn markdown_heading_text(trimmed: &str, level: usize) -> String {
     trimmed[level + 1..].trim().to_string()
-}
-
-fn registration_marker_path(canonical_ident: &str) -> PathBuf {
-    let hash = agent_core::hash_project_ident(canonical_ident);
-    home_dir()
-        .join(".agent-tools")
-        .join(hash)
-        .join("gateway-project")
-}
-
-fn read_registration_marker(path: &PathBuf) -> Option<String> {
-    fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }
 
 fn patterns_file() -> Result<PathBuf> {

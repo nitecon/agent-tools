@@ -813,6 +813,41 @@ The MCP server includes 6 communication tools (`set_identity`, `send_message`, `
 
    You can also set these via environment variables (`GATEWAY_URL`, `GATEWAY_API_KEY`) or CLI flags.
 
+### Project upstream gateways
+
+A repository can declare additional read sources for tasks, patterns, and
+Documentation in `.agents/alternate-gateways.yml`. Credentials never belong in
+that file; each developer binds the declared profile locally through setup.
+
+```yaml
+version: 1
+gateways:
+  - profile: prod-sre
+    url: https://prod-gateway.example.com
+    read:
+      - tasks
+      - patterns
+      - docs
+```
+
+When a default gateway is already configured, `agent-tools setup gateway`
+offers actions to add a project upstream, configure a repository-declared
+profile that is missing local credentials, or remove an upstream. Direct forms
+are also available:
+
+```bash
+agent-tools setup gateway --list
+agent-tools setup gateway --add-upstream prod-sre
+agent-tools setup gateway --remove-upstream prod-sre
+agent-tools setup gateway --remove-upstream prod-sre --credentials-only
+```
+
+Profile credentials are stored at
+`~/.agentic/agent-tools/gateways/<profile>.conf`. Read commands fan out to the
+default and eligible project upstreams. Results show their gateway when more
+than one source contributes; updates and deletes are sent back to the gateway
+where the object was found. Creates continue to use the default gateway.
+
 3. **Verify the connection** — once configured, the MCP comms tools will connect automatically. Without configuration, they return a helpful error message instead of failing.
 
 ### Configuration hierarchy

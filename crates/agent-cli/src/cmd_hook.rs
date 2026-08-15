@@ -8,7 +8,7 @@
 //! A non-zero exit on UserPromptSubmit blocks the user's prompt in Claude.
 //! Every Err path silently returns Ok(()). Unconfigured gateway => silent.
 
-use crate::cmd_gateway_context::resolve_context;
+use crate::cmd_gateway_context::{ensure_all_registered, resolve_context, resolve_context_for};
 use agent_comms::patterns::PatternFilters;
 use anyhow::Result;
 use clap::Subcommand;
@@ -167,14 +167,23 @@ fn run_session_start(agent: &str) -> Result<()> {
         .build()?;
 
     let tasks = rt.block_on(async {
-        ctx.gateway
-            .list_tasks(
-                &ctx.ident,
-                Some(&["todo", "in_progress"]),
-                false,
-                Some(&ctx.agent_id),
-            )
-            .await
+        ensure_all_registered(&ctx).await?;
+        let mut tasks = Vec::new();
+        for target in &ctx.gateways {
+            if let Ok(mut found) = target
+                .gateway
+                .list_tasks(
+                    &ctx.ident,
+                    Some(&["todo", "in_progress"]),
+                    false,
+                    Some(&ctx.agent_id),
+                )
+                .await
+            {
+                tasks.append(&mut found);
+            }
+        }
+        Ok::<_, anyhow::Error>(tasks)
     })?;
 
     if tasks.is_empty() {
@@ -216,6 +225,7 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
     let prompt = extract_prompt(&payload).ok_or_else(|| anyhow::anyhow!("no prompt"))?;
 
     let ctx = resolve_context(None)?;
+    let patterns_ctx = resolve_context_for("patterns", Some(ctx.agent_id.clone()))?;
     let k = hook_limit();
     let tokens = prompt_tokens(&prompt);
 
@@ -230,21 +240,33 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
             version: Some("latest"),
             ..Default::default()
         };
-        let p = ctx
-            .gateway
-            .list_patterns(&filters, Some(&ctx.agent_id))
-            .await
-            .unwrap_or_default();
-        let t = ctx
-            .gateway
-            .list_tasks(
-                &ctx.ident,
-                Some(&["todo", "in_progress"]),
-                false,
-                Some(&ctx.agent_id),
-            )
-            .await
-            .unwrap_or_default();
+        let _ = ensure_all_registered(&ctx).await;
+        let _ = ensure_all_registered(&patterns_ctx).await;
+        let mut p = Vec::new();
+        for target in &patterns_ctx.gateways {
+            if let Ok(mut found) = target
+                .gateway
+                .list_patterns(&filters, Some(&ctx.agent_id))
+                .await
+            {
+                p.append(&mut found);
+            }
+        }
+        let mut t = Vec::new();
+        for target in &ctx.gateways {
+            if let Ok(mut found) = target
+                .gateway
+                .list_tasks(
+                    &ctx.ident,
+                    Some(&["todo", "in_progress"]),
+                    false,
+                    Some(&ctx.agent_id),
+                )
+                .await
+            {
+                t.append(&mut found);
+            }
+        }
         (p, t)
     });
 

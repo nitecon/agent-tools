@@ -1,7 +1,9 @@
 //! `agent-tools docs` subcommands for gateway-backed Documentation context.
 
-use crate::cmd_gateway_context::{read_registration_marker, write_registration_marker};
-use agent_comms::config::load_config;
+use crate::cmd_gateway_context::{
+    read_registration_marker, write_registration_marker, GatewayTarget,
+};
+use agent_comms::config::{load_config, resolve_gateways};
 use agent_comms::docs::{
     ApiDoc, ApiDocChunk, ApiDocFilters, ApiDocHierarchyFilters, ApiDocSummary,
     DocumentationHierarchy, DocumentationNode, DocumentationSpace, PublishApiDocRequest,
@@ -261,7 +263,8 @@ struct DocsContext {
     canonical_ident: String,
     agent_id: String,
     gateway: GatewayClient,
-    gateway_url: String,
+    gateways: Vec<GatewayTarget>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -549,12 +552,28 @@ async fn cmd_list(
         kind.as_deref(),
         scope.as_deref(),
     );
-    let docs = ctx
-        .gateway
-        .list_api_docs(&ctx.ident, &filters, Some(&ctx.agent_id))
-        .await
-        .context("list Documentation entries")?;
-    print_doc_list(&ctx.ident, &docs);
+    print_warnings(&ctx);
+    for target in &ctx.gateways {
+        match target
+            .gateway
+            .list_api_docs(&ctx.ident, &filters, Some(&ctx.agent_id))
+            .await
+        {
+            Ok(docs) => {
+                if ctx.gateways.len() > 1 {
+                    println!("Gateway: {}", target.profile);
+                }
+                print_doc_list(&ctx.ident, &docs);
+            }
+            Err(error) if !target.primary => eprintln!(
+                "warning: gateway {} could not list documentation: {error:#}",
+                target.profile
+            ),
+            Err(error) => {
+                return Err(error).context("list Documentation entries on default gateway")
+            }
+        }
+    }
     Ok(())
 }
 
@@ -562,11 +581,10 @@ async fn cmd_get(id: String, project: Option<String>, agent_id: Option<String>) 
     require_nonempty("--id", &id)?;
     let ctx = resolve_context(project, agent_id)?;
     ensure_registered(&ctx).await?;
-    let doc = ctx
-        .gateway
-        .get_api_doc(&ctx.ident, &id, Some(&ctx.agent_id))
-        .await
-        .context("fetch API context doc")?;
+    let (target, doc) = find_doc(&ctx, &id).await?;
+    if ctx.gateways.len() > 1 {
+        println!("gateway: {}", target.profile);
+    }
     print_doc_detail(&doc);
     Ok(())
 }
@@ -575,7 +593,8 @@ async fn cmd_delete(id: String, project: Option<String>, agent_id: Option<String
     require_nonempty("--id", &id)?;
     let ctx = resolve_context(project, agent_id)?;
     ensure_registered(&ctx).await?;
-    ctx.gateway
+    let (target, _) = find_doc(&ctx, &id).await?;
+    target.gateway
         .delete_api_doc(&ctx.ident, &id, Some(&ctx.agent_id))
         .await
         .with_context(|| {
@@ -605,12 +624,25 @@ async fn cmd_chunks(
         kind.as_deref(),
         scope.as_deref(),
     );
-    let chunks = ctx
-        .gateway
-        .api_doc_chunks(&ctx.ident, &filters, Some(&ctx.agent_id))
-        .await
-        .context("fetch API context chunks")?;
-    print_chunks(&ctx.ident, &chunks);
+    for target in &ctx.gateways {
+        match target
+            .gateway
+            .api_doc_chunks(&ctx.ident, &filters, Some(&ctx.agent_id))
+            .await
+        {
+            Ok(chunks) => {
+                if ctx.gateways.len() > 1 {
+                    println!("Gateway: {}", target.profile);
+                }
+                print_chunks(&ctx.ident, &chunks);
+            }
+            Err(error) if !target.primary => eprintln!(
+                "warning: gateway {} could not fetch documentation chunks: {error:#}",
+                target.profile
+            ),
+            Err(error) => return Err(error).context("fetch API context chunks on default gateway"),
+        }
+    }
     Ok(())
 }
 
@@ -630,30 +662,51 @@ async fn cmd_hierarchy(
         space: space.as_deref(),
         scope: scope.as_deref(),
     };
-    let mut hierarchy = ctx
-        .gateway
-        .api_doc_hierarchy(&ctx.ident, &hierarchy_filters, Some(&ctx.agent_id))
-        .await
-        .context("fetch Documentation hierarchy")?;
-    if hierarchy.spaces.is_empty() && hierarchy.pages.is_empty() {
-        let list_filters = filters(
-            query.as_deref(),
-            app.as_deref(),
-            None,
-            None,
-            scope.as_deref(),
-        );
-        let docs = ctx
+    for target in &ctx.gateways {
+        let result = target
             .gateway
-            .list_api_docs(&ctx.ident, &list_filters, Some(&ctx.agent_id))
-            .await
-            .context("fallback list Documentation entries for hierarchy")?;
-        hierarchy =
-            synthesize_hierarchy_from_docs(&ctx.ident, &docs, space.as_deref(), scope.as_deref());
-    } else if hierarchy.scope.is_none() {
-        hierarchy.scope = scope;
+            .api_doc_hierarchy(&ctx.ident, &hierarchy_filters, Some(&ctx.agent_id))
+            .await;
+        let mut hierarchy = match result {
+            Ok(value) => value,
+            Err(error) if !target.primary => {
+                eprintln!(
+                    "warning: gateway {} could not fetch documentation hierarchy: {error:#}",
+                    target.profile
+                );
+                continue;
+            }
+            Err(error) => {
+                return Err(error).context("fetch Documentation hierarchy on default gateway")
+            }
+        };
+        if hierarchy.spaces.is_empty() && hierarchy.pages.is_empty() {
+            let list_filters = filters(
+                query.as_deref(),
+                app.as_deref(),
+                None,
+                None,
+                scope.as_deref(),
+            );
+            let docs = target
+                .gateway
+                .list_api_docs(&ctx.ident, &list_filters, Some(&ctx.agent_id))
+                .await
+                .context("fallback list Documentation entries for hierarchy")?;
+            hierarchy = synthesize_hierarchy_from_docs(
+                &ctx.ident,
+                &docs,
+                space.as_deref(),
+                scope.as_deref(),
+            );
+        } else if hierarchy.scope.is_none() {
+            hierarchy.scope = scope.clone();
+        }
+        if ctx.gateways.len() > 1 {
+            println!("Gateway: {}", target.profile);
+        }
+        print_hierarchy(&ctx.ident, &hierarchy);
     }
-    print_hierarchy(&ctx.ident, &hierarchy);
     Ok(())
 }
 
@@ -779,28 +832,32 @@ async fn cmd_export(
     let doc = match id {
         Some(id) => {
             require_nonempty("id", &id)?;
-            ctx.gateway
-                .get_api_doc(&ctx.ident, &id, Some(&ctx.agent_id))
-                .await
-                .context("fetch API context doc for export")?
+            find_doc(&ctx, &id).await?.1
         }
         None => {
             let app = app.context("provide an id or --app")?;
             require_nonempty("--app", &app)?;
             let filters = filters(None, Some(&app), None, None, None);
-            let docs = ctx
-                .gateway
-                .list_api_docs(&ctx.ident, &filters, Some(&ctx.agent_id))
-                .await
-                .context("find Documentation entry for export")?;
-            if docs.len() != 1 {
+            let mut matches = Vec::new();
+            for target in &ctx.gateways {
+                if let Ok(docs) = target
+                    .gateway
+                    .list_api_docs(&ctx.ident, &filters, Some(&ctx.agent_id))
+                    .await
+                {
+                    matches.extend(docs.into_iter().map(|doc| (target, doc)));
+                }
+            }
+            if matches.len() != 1 {
                 anyhow::bail!(
                     "--app {app} matched {} docs; pass the exact id from `agent-tools docs list --app {app}`",
-                    docs.len()
+                    matches.len()
                 );
             }
-            ctx.gateway
-                .get_api_doc(&ctx.ident, &docs[0].id, Some(&ctx.agent_id))
+            matches[0]
+                .0
+                .gateway
+                .get_api_doc(&ctx.ident, &matches[0].1.id, Some(&ctx.agent_id))
                 .await
                 .context("fetch Documentation entry for export")?
         }
@@ -894,39 +951,78 @@ fn resolve_context(
         None => load_or_generate_agent_id()?,
     };
 
-    let config = load_config();
-    let gateway_url = config
-        .gateway
-        .url
-        .clone()
-        .context("gateway URL not configured -- run `agent-tools setup gateway`")?;
-    let api_key = config
-        .gateway
-        .api_key
-        .clone()
-        .context("gateway API key not configured -- run `agent-tools setup gateway`")?;
-    let timeout_ms = config.gateway.timeout_ms.unwrap_or(5000);
-    let gateway = GatewayClient::new(gateway_url.clone(), api_key, timeout_ms)?;
+    let (resolved, warnings) = resolve_gateways("docs")?;
+    let mut gateways = Vec::new();
+    for item in resolved {
+        gateways.push(GatewayTarget {
+            profile: item.profile,
+            gateway: GatewayClient::new(item.url.clone(), item.api_key, item.timeout_ms)?,
+            gateway_url: item.url,
+            primary: item.primary,
+        });
+    }
+    let primary = gateways
+        .iter()
+        .find(|target| target.primary)
+        .unwrap_or(&gateways[0]);
+    let gateway = primary.gateway.clone();
     Ok(DocsContext {
         ident,
         canonical_ident,
         agent_id,
         gateway,
-        gateway_url,
+        gateways,
+        warnings,
     })
 }
 
 async fn ensure_registered(ctx: &DocsContext) -> Result<()> {
-    if read_registration_marker(&ctx.canonical_ident, &ctx.gateway_url).is_some() {
-        return Ok(());
+    for target in &ctx.gateways {
+        if read_registration_marker(&ctx.canonical_ident, &target.gateway_url).is_some() {
+            continue;
+        }
+        let resp = match target.gateway.register_project(&ctx.ident, None).await {
+            Ok(response) => response,
+            Err(error) if !target.primary => {
+                eprintln!(
+                    "warning: gateway {} could not register project: {error:#}",
+                    target.profile
+                );
+                continue;
+            }
+            Err(error) => return Err(error).context("register project with default gateway"),
+        };
+        write_registration_marker(
+            &ctx.canonical_ident,
+            &target.gateway_url,
+            &resp.channel_name,
+        )?;
     }
-    let resp = ctx
-        .gateway
-        .register_project(&ctx.ident, None)
-        .await
-        .context("register project with gateway")?;
-    write_registration_marker(&ctx.canonical_ident, &ctx.gateway_url, &resp.channel_name)?;
     Ok(())
+}
+
+fn print_warnings(ctx: &DocsContext) {
+    for warning in &ctx.warnings {
+        eprintln!("warning: {warning}");
+    }
+}
+
+async fn find_doc<'a>(ctx: &'a DocsContext, id: &str) -> Result<(&'a GatewayTarget, ApiDoc)> {
+    let mut errors = Vec::new();
+    for target in &ctx.gateways {
+        match target
+            .gateway
+            .get_api_doc(&ctx.ident, id, Some(&ctx.agent_id))
+            .await
+        {
+            Ok(doc) => return Ok((target, doc)),
+            Err(error) => errors.push(format!("{}: {error:#}", target.profile)),
+        }
+    }
+    anyhow::bail!(
+        "Documentation entry {id:?} was not found on configured gateways ({})",
+        errors.join("; ")
+    )
 }
 
 fn filters<'a>(

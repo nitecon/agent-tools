@@ -7,9 +7,10 @@
 //! 3. Environment variables (`GATEWAY_URL`, `GATEWAY_API_KEY`, etc.)
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // -- Public types -------------------------------------------------------------
 
@@ -26,6 +27,48 @@ pub struct GatewayConfig {
     pub api_key: Option<String>,
     pub timeout_ms: Option<u64>,
     pub default_project: Option<String>,
+}
+
+/// Non-secret repository declaration for an additional gateway.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectGateway {
+    pub profile: String,
+    pub url: String,
+    #[serde(default = "default_read_capabilities")]
+    pub read: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectGatewaysFile {
+    #[serde(default = "gateway_file_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub gateways: Vec<ProjectGateway>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedGateway {
+    pub profile: String,
+    pub url: String,
+    pub api_key: String,
+    pub timeout_ms: u64,
+    pub primary: bool,
+    pub read: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectGatewayStatus {
+    pub declaration: ProjectGateway,
+    pub configured: bool,
+    pub error: Option<String>,
+}
+
+fn gateway_file_version() -> u32 {
+    1
+}
+
+fn default_read_capabilities() -> Vec<String> {
+    vec!["tasks".into(), "patterns".into(), "docs".into()]
 }
 
 // -- Path helpers -------------------------------------------------------------
@@ -55,6 +98,201 @@ pub fn user_gateway_conf_path() -> PathBuf {
 /// Path to the system-wide gateway config: `/opt/agentic/agent-tools/gateway.conf`.
 pub fn global_gateway_conf_path() -> PathBuf {
     PathBuf::from("/opt/agentic/agent-tools/gateway.conf")
+}
+
+pub fn gateway_profiles_dir() -> PathBuf {
+    home_dir()
+        .join(".agentic")
+        .join("agent-tools")
+        .join("gateways")
+}
+
+pub fn gateway_profile_path(profile: &str) -> Result<PathBuf> {
+    validate_profile_name(profile)?;
+    Ok(gateway_profiles_dir().join(format!("{profile}.conf")))
+}
+
+pub fn project_gateways_path_from(start: &Path) -> Option<PathBuf> {
+    let mut current = if start.is_file() {
+        start.parent()?
+    } else {
+        start
+    };
+    loop {
+        let candidate = current.join(".agents").join("alternate-gateways.yml");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if current.join(".git").exists() {
+            return Some(candidate);
+        }
+        current = current.parent()?;
+    }
+}
+
+pub fn project_gateways_path() -> Result<PathBuf> {
+    let cwd = std::env::current_dir().context("resolve current directory")?;
+    project_gateways_path_from(&cwd)
+        .context("not inside a git repository; project gateway configuration requires a repository")
+}
+
+pub fn load_project_gateways() -> Result<ProjectGatewaysFile> {
+    let cwd = std::env::current_dir().context("resolve current directory")?;
+    let Some(path) = project_gateways_path_from(&cwd) else {
+        return Ok(ProjectGatewaysFile {
+            version: 1,
+            gateways: Vec::new(),
+        });
+    };
+    if !path.is_file() {
+        return Ok(ProjectGatewaysFile {
+            version: 1,
+            gateways: Vec::new(),
+        });
+    }
+    let body = std::fs::read_to_string(&path)
+        .with_context(|| format!("read project gateways from {}", path.display()))?;
+    let parsed: ProjectGatewaysFile =
+        serde_yaml::from_str(&body).with_context(|| format!("parse {}", path.display()))?;
+    if parsed.version != 1 {
+        anyhow::bail!(
+            "unsupported project gateway config version {} in {}",
+            parsed.version,
+            path.display()
+        );
+    }
+    let mut seen = std::collections::HashSet::new();
+    for gateway in &parsed.gateways {
+        validate_profile_name(&gateway.profile)?;
+        if !seen.insert(&gateway.profile) {
+            anyhow::bail!(
+                "duplicate gateway profile {:?} in {}",
+                gateway.profile,
+                path.display()
+            );
+        }
+        if gateway.url.trim().is_empty() {
+            anyhow::bail!("gateway profile {:?} has an empty url", gateway.profile);
+        }
+    }
+    Ok(parsed)
+}
+
+pub fn project_gateway_statuses() -> Result<Vec<ProjectGatewayStatus>> {
+    Ok(load_project_gateways()?
+        .gateways
+        .into_iter()
+        .map(|declaration| {
+            let result = load_profile(&declaration.profile).and_then(|profile| {
+                let url = profile.get("GATEWAY_URL").context("GATEWAY_URL missing")?;
+                profile
+                    .get("GATEWAY_API_KEY")
+                    .context("GATEWAY_API_KEY missing")?;
+                if normalize_url(url) != normalize_url(&declaration.url) {
+                    anyhow::bail!(
+                        "configured URL {url} does not match repository URL {}",
+                        declaration.url
+                    );
+                }
+                Ok(())
+            });
+            ProjectGatewayStatus {
+                declaration,
+                configured: result.is_ok(),
+                error: result.err().map(|e| e.to_string()),
+            }
+        })
+        .collect())
+}
+
+/// Resolve the default gateway plus locally configured repository upstreams.
+/// Missing upstream credentials are returned as warnings so read operations can
+/// remain useful while setup exposes the incomplete binding.
+pub fn resolve_gateways(capability: &str) -> Result<(Vec<ResolvedGateway>, Vec<String>)> {
+    let cfg = load_config();
+    let mut gateways = Vec::new();
+    if let (Some(url), Some(api_key)) = (cfg.gateway.url, cfg.gateway.api_key) {
+        gateways.push(ResolvedGateway {
+            profile: "default".into(),
+            url,
+            api_key,
+            timeout_ms: cfg.gateway.timeout_ms.unwrap_or(5000),
+            primary: true,
+            read: default_read_capabilities(),
+        });
+    }
+    let mut warnings = Vec::new();
+    for declaration in load_project_gateways()?.gateways {
+        if !declaration.read.iter().any(|item| item == capability) {
+            continue;
+        }
+        match load_profile(&declaration.profile) {
+            Ok(profile) => {
+                let Some(url) = profile.get("GATEWAY_URL").cloned() else {
+                    warnings.push(format!(
+                        "project gateway {:?} is missing GATEWAY_URL",
+                        declaration.profile
+                    ));
+                    continue;
+                };
+                let Some(api_key) = profile.get("GATEWAY_API_KEY").cloned() else {
+                    warnings.push(format!(
+                        "project gateway {:?} needs credentials; run `agent-tools setup gateway`",
+                        declaration.profile
+                    ));
+                    continue;
+                };
+                if normalize_url(&url) != normalize_url(&declaration.url) {
+                    warnings.push(format!(
+                        "project gateway {:?} URL mismatch (local {url}, repository {})",
+                        declaration.profile, declaration.url
+                    ));
+                    continue;
+                }
+                let timeout_ms = profile
+                    .get("GATEWAY_TIMEOUT_MS")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(5000);
+                gateways.push(ResolvedGateway {
+                    profile: declaration.profile,
+                    url,
+                    api_key,
+                    timeout_ms,
+                    primary: false,
+                    read: declaration.read,
+                });
+            }
+            Err(_) => warnings.push(format!(
+                "project gateway {:?} needs credentials; run `agent-tools setup gateway`",
+                declaration.profile
+            )),
+        }
+    }
+    if gateways.is_empty() {
+        anyhow::bail!("gateway is not configured -- run `agent-tools setup gateway`");
+    }
+    Ok((gateways, warnings))
+}
+
+fn load_profile(profile: &str) -> Result<HashMap<String, String>> {
+    let path = gateway_profile_path(profile)?;
+    read_key_value_file(&path).with_context(|| format!("profile {} is not configured", profile))
+}
+
+fn validate_profile_name(profile: &str) -> Result<()> {
+    if profile == "default"
+        || profile.is_empty()
+        || !profile
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    {
+        anyhow::bail!("invalid gateway profile {profile:?}; use letters, numbers, '-' or '_'");
+    }
+    Ok(())
+}
+
+fn normalize_url(url: &str) -> &str {
+    url.trim_end_matches('/')
 }
 
 // -- Config loading -----------------------------------------------------------
@@ -151,6 +389,39 @@ fn read_key_value_file(path: &PathBuf) -> Option<HashMap<String, String>> {
 /// Returns an error if stdin/stdout interaction fails or the config file cannot
 /// be written.
 pub fn run_setup_gateway() -> Result<()> {
+    let cfg = load_config();
+    if cfg.gateway.url.is_none() || cfg.gateway.api_key.is_none() {
+        println!("No default gateway is configured.");
+        println!();
+        return configure_default_gateway();
+    }
+
+    print_gateway_status()?;
+    println!();
+    println!("Gateway actions:");
+    println!("  1) Update default gateway");
+    println!("  2) Add project-based upstream gateway");
+    println!("  3) Configure credentials for a declared project upstream");
+    println!("  4) Remove a project upstream");
+    println!("  c) Cancel");
+    print!("> ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().lock().read_line(&mut input)?;
+    match input.trim().to_ascii_lowercase().as_str() {
+        "1" => configure_default_gateway(),
+        "2" => run_add_project_gateway(None),
+        "3" => configure_declared_gateway(),
+        "4" => run_remove_project_gateway(None, false),
+        "" | "c" | "cancel" => {
+            println!("Cancelled — nothing changed.");
+            Ok(())
+        }
+        other => anyhow::bail!("unknown gateway action {other:?}"),
+    }
+}
+
+fn configure_default_gateway() -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut out = stdout.lock();
@@ -217,6 +488,195 @@ pub fn run_setup_gateway() -> Result<()> {
     writeln!(out, "  }}")?;
 
     Ok(())
+}
+
+pub fn print_gateway_status() -> Result<()> {
+    let cfg = load_config();
+    println!("Gateway configuration");
+    println!();
+    match cfg.gateway.url {
+        Some(url) if cfg.gateway.api_key.is_some() => {
+            println!("Default:\n  default — {url} [configured]")
+        }
+        _ => println!("Default:\n  not configured"),
+    }
+    println!();
+    println!("Project upstreams:");
+    let statuses = project_gateway_statuses()?;
+    if statuses.is_empty() {
+        println!("  (none declared in .agents/alternate-gateways.yml)");
+    } else {
+        for status in statuses {
+            let state = if status.configured {
+                "configured"
+            } else {
+                "needs credentials"
+            };
+            println!(
+                "  {} — {} [{state}]",
+                status.declaration.profile, status.declaration.url
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn run_add_project_gateway(profile_override: Option<&str>) -> Result<()> {
+    let profile = match profile_override {
+        Some(profile) => profile.trim().to_string(),
+        None => prompt_line("Profile name (for example prod-sre): ", None)?,
+    };
+    validate_profile_name(&profile)?;
+    let url = prompt_line("Gateway URL: ", None)?;
+    if url.trim().is_empty() {
+        anyhow::bail!("gateway URL cannot be empty");
+    }
+    let api_key =
+        rpassword::prompt_password("Gateway API key: ").context("failed to read API key")?;
+    crate::sanitize::validate_api_key(api_key.trim()).map_err(anyhow::Error::msg)?;
+    let timeout = prompt_line("Request timeout in ms [5000]: ", Some("5000"))?;
+    let timeout_ms: u64 = timeout.parse().context("timeout must be an integer")?;
+    write_profile(&profile, &url, api_key.trim(), timeout_ms)?;
+
+    let mut project = load_project_gateways()?;
+    let declaration = ProjectGateway {
+        profile: profile.clone(),
+        url: url.clone(),
+        read: default_read_capabilities(),
+    };
+    if let Some(existing) = project.gateways.iter_mut().find(|g| g.profile == profile) {
+        *existing = declaration;
+    } else {
+        project.gateways.push(declaration);
+    }
+    write_project_gateways(&project)?;
+    println!("Configured project upstream {profile} at {url}.");
+    println!(
+        "Repository declaration: {}",
+        project_gateways_path()?.display()
+    );
+    println!(
+        "Local credentials: {}",
+        gateway_profile_path(&profile)?.display()
+    );
+    Ok(())
+}
+
+fn configure_declared_gateway() -> Result<()> {
+    let missing: Vec<_> = project_gateway_statuses()?
+        .into_iter()
+        .filter(|s| !s.configured)
+        .collect();
+    if missing.is_empty() {
+        println!("All declared project gateways are configured.");
+        return Ok(());
+    }
+    println!("Declared gateways needing credentials:");
+    for (index, status) in missing.iter().enumerate() {
+        println!(
+            "  {}) {} — {}",
+            index + 1,
+            status.declaration.profile,
+            status.declaration.url
+        );
+    }
+    let selected = prompt_line("Select gateway: ", None)?
+        .parse::<usize>()
+        .context("selection must be a number")?;
+    let status = missing
+        .get(selected.saturating_sub(1))
+        .context("selection out of range")?;
+    let api_key =
+        rpassword::prompt_password("Gateway API key: ").context("failed to read API key")?;
+    crate::sanitize::validate_api_key(api_key.trim()).map_err(anyhow::Error::msg)?;
+    let timeout = prompt_line("Request timeout in ms [5000]: ", Some("5000"))?;
+    let timeout_ms: u64 = timeout.parse().context("timeout must be an integer")?;
+    write_profile(
+        &status.declaration.profile,
+        &status.declaration.url,
+        api_key.trim(),
+        timeout_ms,
+    )?;
+    println!("Configured credentials for {}.", status.declaration.profile);
+    Ok(())
+}
+
+pub fn run_remove_project_gateway(
+    profile_override: Option<&str>,
+    credentials_only: bool,
+) -> Result<()> {
+    let mut project = load_project_gateways()?;
+    if project.gateways.is_empty() {
+        println!("No project upstream gateways are declared.");
+        return Ok(());
+    }
+    let profile = match profile_override {
+        Some(profile) => profile.to_string(),
+        None => {
+            for (index, gateway) in project.gateways.iter().enumerate() {
+                println!("  {}) {} — {}", index + 1, gateway.profile, gateway.url);
+            }
+            let selected = prompt_line("Select gateway to remove: ", None)?
+                .parse::<usize>()
+                .context("selection must be a number")?;
+            project
+                .gateways
+                .get(selected.saturating_sub(1))
+                .context("selection out of range")?
+                .profile
+                .clone()
+        }
+    };
+    validate_profile_name(&profile)?;
+    let path = gateway_profile_path(&profile)?;
+    if path.exists() {
+        std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+    }
+    if !credentials_only {
+        project
+            .gateways
+            .retain(|gateway| gateway.profile != profile);
+        write_project_gateways(&project)?;
+        println!("Removed project upstream {profile} and its local credentials.");
+    } else {
+        println!("Removed local credentials for {profile}; repository declaration remains.");
+    }
+    Ok(())
+}
+
+fn write_profile(profile: &str, url: &str, api_key: &str, timeout_ms: u64) -> Result<()> {
+    let path = gateway_profile_path(profile)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let body = format!(
+        "GATEWAY_URL={}\nGATEWAY_API_KEY={}\nGATEWAY_TIMEOUT_MS={}\n",
+        url.trim_end_matches('/'),
+        api_key,
+        timeout_ms
+    );
+    std::fs::write(&path, body).with_context(|| format!("write {}", path.display()))
+}
+
+fn write_project_gateways(project: &ProjectGatewaysFile) -> Result<()> {
+    let path = project_gateways_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let body = serde_yaml::to_string(project).context("serialize project gateway configuration")?;
+    std::fs::write(&path, body).with_context(|| format!("write {}", path.display()))
+}
+
+fn prompt_line(prompt: &str, default: Option<&str>) -> Result<String> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut value = String::new();
+    io::stdin().lock().read_line(&mut value)?;
+    let value = value.trim();
+    if value.is_empty() {
+        return default.map(str::to_string).context("a value is required");
+    }
+    Ok(value.to_string())
 }
 
 /// Backwards-compatible alias for [`run_setup_gateway`].
@@ -298,5 +758,35 @@ mod tests {
         assert_eq!(map.get("API_KEY").unwrap(), "secret");
         assert_eq!(map.get("TIMEOUT").unwrap(), "5000");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn project_gateway_yaml_defaults_read_capabilities() {
+        let parsed: ProjectGatewaysFile = serde_yaml::from_str(
+            "version: 1\ngateways:\n  - profile: prod-sre\n    url: https://gateway.example\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.gateways[0].read, vec!["tasks", "patterns", "docs"]);
+    }
+
+    #[test]
+    fn project_gateway_path_stops_at_git_root() {
+        let root =
+            std::env::temp_dir().join(format!("agent-tools-gateway-root-{}", std::process::id()));
+        let nested = root.join("a").join("b");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        assert_eq!(
+            project_gateways_path_from(&nested).unwrap(),
+            root.join(".agents").join("alternate-gateways.yml")
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn profile_names_cannot_escape_profile_directory() {
+        assert!(validate_profile_name("prod-sre").is_ok());
+        assert!(validate_profile_name("../prod").is_err());
+        assert!(validate_profile_name("default").is_err());
     }
 }

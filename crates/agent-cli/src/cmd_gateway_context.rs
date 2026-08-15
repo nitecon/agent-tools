@@ -1,4 +1,4 @@
-use agent_comms::config::{home_dir, load_config};
+use agent_comms::config::{home_dir, resolve_gateways};
 use agent_comms::gateway::GatewayClient;
 use agent_comms::identity::load_or_generate_agent_id;
 use agent_comms::sanitize::short_project_ident;
@@ -17,9 +17,25 @@ pub(crate) struct GatewayContext {
     pub(crate) agent_id: String,
     pub(crate) gateway: GatewayClient,
     pub(crate) gateway_url: String,
+    pub(crate) gateways: Vec<GatewayTarget>,
+    pub(crate) warnings: Vec<String>,
+}
+
+pub(crate) struct GatewayTarget {
+    pub(crate) profile: String,
+    pub(crate) gateway: GatewayClient,
+    pub(crate) gateway_url: String,
+    pub(crate) primary: bool,
 }
 
 pub(crate) fn resolve_context(agent_id_override: Option<String>) -> Result<GatewayContext> {
+    resolve_context_for("tasks", agent_id_override)
+}
+
+pub(crate) fn resolve_context_for(
+    capability: &str,
+    agent_id_override: Option<String>,
+) -> Result<GatewayContext> {
     let canonical_ident =
         agent_core::project_ident_from_cwd().context("derive project ident from cwd")?;
     let ident = short_project_ident(&canonical_ident);
@@ -35,20 +51,22 @@ pub(crate) fn resolve_context(agent_id_override: Option<String>) -> Result<Gatew
         None => load_or_generate_agent_id()?,
     };
 
-    let config = load_config();
-    let gateway_url = config
-        .gateway
-        .url
-        .clone()
-        .context("gateway URL not configured -- run `agent-tools setup gateway`")?;
-    let api_key = config
-        .gateway
-        .api_key
-        .clone()
-        .context("gateway API key not configured -- run `agent-tools setup gateway`")?;
-    let timeout_ms = config.gateway.timeout_ms.unwrap_or(5000);
-
-    let gateway = GatewayClient::new(gateway_url.clone(), api_key, timeout_ms)?;
+    let (resolved, warnings) = resolve_gateways(capability)?;
+    let mut gateways = Vec::new();
+    for item in resolved {
+        gateways.push(GatewayTarget {
+            profile: item.profile,
+            gateway: GatewayClient::new(item.url.clone(), item.api_key, item.timeout_ms)?,
+            gateway_url: item.url,
+            primary: item.primary,
+        });
+    }
+    let primary = gateways
+        .iter()
+        .find(|item| item.primary)
+        .unwrap_or(&gateways[0]);
+    let gateway = primary.gateway.clone();
+    let gateway_url = primary.gateway_url.clone();
 
     Ok(GatewayContext {
         ident,
@@ -56,6 +74,8 @@ pub(crate) fn resolve_context(agent_id_override: Option<String>) -> Result<Gatew
         agent_id,
         gateway,
         gateway_url,
+        gateways,
+        warnings,
     })
 }
 
@@ -77,20 +97,50 @@ pub(crate) async fn ensure_registered(
     Ok(resp.channel_name)
 }
 
-/// Marker file that records which (project, gateway) pair has been registered.
-/// Stored centrally so every cwd within a project shares the same state.
-pub(crate) fn registration_marker_path(ident: &str) -> PathBuf {
-    let hash = agent_core::hash_project_ident(ident);
+pub(crate) async fn ensure_all_registered(ctx: &GatewayContext) -> Result<()> {
+    for target in &ctx.gateways {
+        if read_registration_marker(&ctx.canonical_ident, &target.gateway_url).is_some() {
+            continue;
+        }
+        let response = match target.gateway.register_project(&ctx.ident, None).await {
+            Ok(response) => response,
+            Err(error) if !target.primary => {
+                eprintln!(
+                    "warning: gateway {} could not register project: {error:#}",
+                    target.profile
+                );
+                continue;
+            }
+            Err(error) => return Err(error).context("register project with default gateway"),
+        };
+        write_registration_marker(
+            &ctx.canonical_ident,
+            &target.gateway_url,
+            &response.channel_name,
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn print_gateway_warnings(ctx: &GatewayContext) {
+    for warning in &ctx.warnings {
+        eprintln!("warning: {warning}");
+    }
+}
+
+fn registration_marker_for_gateway(ident: &str, gateway_url: &str) -> PathBuf {
+    let ident_hash = agent_core::hash_project_ident(ident);
+    let gateway_hash = agent_core::hash_project_ident(gateway_url);
     home_dir()
         .join(".agentic")
         .join("agent-tools")
         .join("registered")
-        .join(hash)
+        .join(format!("{ident_hash}-{gateway_hash}"))
 }
 
 /// Return Some(channel_name) if this (ident, gateway_url) has been registered.
 pub(crate) fn read_registration_marker(ident: &str, gateway_url: &str) -> Option<String> {
-    let path = registration_marker_path(ident);
+    let path = registration_marker_for_gateway(ident, gateway_url);
     let content = std::fs::read_to_string(&path).ok()?;
     let mut url = None;
     let mut channel = None;
@@ -113,7 +163,7 @@ pub(crate) fn write_registration_marker(
     gateway_url: &str,
     channel_name: &str,
 ) -> Result<()> {
-    let path = registration_marker_path(ident);
+    let path = registration_marker_for_gateway(ident, gateway_url);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create directory {}", parent.display()))?;
@@ -130,9 +180,10 @@ mod tests {
 
     #[test]
     fn marker_path_has_stable_shape() {
-        let p = registration_marker_path("github.com/foo/bar.git");
+        let p = registration_marker_for_gateway("github.com/foo/bar.git", "https://gateway.test");
         let file = p.file_name().unwrap().to_str().unwrap().to_string();
-        assert_eq!(file.len(), 64);
+        assert_eq!(file.len(), 129);
+        assert_eq!(file.chars().filter(|c| *c == '-').count(), 1);
         let parent = p.parent().unwrap();
         assert!(parent.ends_with(PathBuf::from(".agentic/agent-tools/registered")));
     }
@@ -141,8 +192,8 @@ mod tests {
     fn marker_round_trips() {
         let ident = format!("test-ident-{}", std::process::id());
         let url = "http://localhost:0";
-        let path = registration_marker_path(&ident);
-        let _ = std::fs::remove_file(&path);
+        let gateway_path = registration_marker_for_gateway(&ident, url);
+        let _ = std::fs::remove_file(&gateway_path);
 
         assert_eq!(read_registration_marker(&ident, url), None);
 
@@ -154,6 +205,6 @@ mod tests {
 
         assert_eq!(read_registration_marker(&ident, "http://other"), None);
 
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&gateway_path);
     }
 }

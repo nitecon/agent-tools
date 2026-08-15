@@ -5,7 +5,10 @@
 //! gateway-not-configured case with a friendly message rather than an opaque
 //! "missing config" error.
 
-use crate::cmd_gateway_context::{ensure_registered, resolve_context};
+use crate::cmd_gateway_context::{
+    ensure_all_registered, ensure_registered, print_gateway_warnings, resolve_context,
+    GatewayContext, GatewayTarget,
+};
 use agent_comms::config::load_config;
 use agent_comms::tasks::{
     AddCommentRequest, CreateTaskRequest, DelegateTaskRequest, Task, TaskComment,
@@ -17,6 +20,9 @@ use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+
+type SourcedTaskSummary = (String, TaskSummary);
+type TaskGroup<'a> = (&'a str, &'a str, Vec<&'a SourcedTaskSummary>);
 
 #[derive(Subcommand)]
 pub enum TasksCommands {
@@ -320,19 +326,30 @@ fn require_full_task_id(task_id: &str) -> Result<()> {
 
 async fn cmd_list(status: String, include_stale: bool, agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx, None).await?;
+    print_gateway_warnings(&ctx);
+    ensure_all_registered(&ctx).await?;
 
     let statuses = parse_status_csv(&status);
-    let tasks: Vec<TaskSummary> = ctx
-        .gateway
-        .list_tasks(
-            &ctx.ident,
-            Some(&statuses),
-            include_stale,
-            Some(&ctx.agent_id),
-        )
-        .await
-        .context("list tasks")?;
+    let mut tasks: Vec<SourcedTaskSummary> = Vec::new();
+    for target in &ctx.gateways {
+        match target
+            .gateway
+            .list_tasks(
+                &ctx.ident,
+                Some(&statuses),
+                include_stale,
+                Some(&ctx.agent_id),
+            )
+            .await
+        {
+            Ok(found) => tasks.extend(found.into_iter().map(|task| (target.profile.clone(), task))),
+            Err(error) if !target.primary => eprintln!(
+                "warning: gateway {} could not list tasks: {error:#}",
+                target.profile
+            ),
+            Err(error) => return Err(error).context("list tasks on default gateway"),
+        }
+    }
 
     if tasks.is_empty() {
         println!("(no tasks matching {status})");
@@ -342,14 +359,15 @@ async fn cmd_list(status: String, include_stale: bool, agent_id: Option<String>)
     Ok(())
 }
 
-fn render_grouped_list(tasks: &[TaskSummary]) {
-    let mut groups: Vec<(&str, &str, Vec<&TaskSummary>)> = vec![
+fn render_grouped_list(tasks: &[SourcedTaskSummary]) {
+    let show_profile = tasks.iter().any(|(profile, _)| profile != "default");
+    let mut groups: Vec<TaskGroup<'_>> = vec![
         ("todo", "TODO", Vec::new()),
         ("in_progress", "IN PROGRESS", Vec::new()),
         ("done", "DONE", Vec::new()),
     ];
     for t in tasks {
-        if let Some(g) = groups.iter_mut().find(|(s, _, _)| *s == t.status) {
+        if let Some(g) = groups.iter_mut().find(|(s, _, _)| *s == t.1.status) {
             g.2.push(t);
         }
     }
@@ -363,15 +381,15 @@ fn render_grouped_list(tasks: &[TaskSummary]) {
             println!();
         }
         printed_any = true;
-        items.sort_by_key(|t| t.rank);
+        items.sort_by_key(|t| t.1.rank);
         println!("{label} ({})", items.len());
         for t in items {
-            print_summary_row(t);
+            print_summary_row(&t.1, show_profile.then_some(t.0.as_str()));
         }
     }
 }
 
-fn print_summary_row(t: &TaskSummary) {
+fn print_summary_row(t: &TaskSummary, profile: Option<&str>) {
     let labels = if t.labels.is_empty() {
         String::new()
     } else {
@@ -388,7 +406,8 @@ fn print_summary_row(t: &TaskSummary) {
         }
         _ => labels,
     };
-    println!("  [{}] {:<50} {}", t.id, t.title, trailing);
+    let source = profile.map(|p| format!("{p}/")).unwrap_or_default();
+    println!("  [{source}{}] {:<50} {}", t.id, t.title, trailing);
 }
 
 // -- get ---------------------------------------------------------------------
@@ -397,14 +416,13 @@ async fn cmd_get(task_id: String, agent_id: Option<String>) -> Result<()> {
     require_full_task_id(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx, None).await?;
+    print_gateway_warnings(&ctx);
+    ensure_all_registered(&ctx).await?;
+    let (target, detail) = find_task(&ctx, &task_id).await?;
 
-    let detail: TaskDetail = ctx
-        .gateway
-        .get_task(&ctx.ident, &task_id, Some(&ctx.agent_id))
-        .await
-        .context("fetch task")?;
-
+    if ctx.gateways.len() > 1 {
+        println!("gateway:  {}", target.profile);
+    }
     print_task_detail(&detail.task, &detail.comments);
     Ok(())
 }
@@ -601,14 +619,15 @@ async fn cmd_status_transition(
     require_full_task_id(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx, None).await?;
+    ensure_all_registered(&ctx).await?;
+    let (target, _) = find_task(&ctx, &task_id).await?;
 
     let patch = UpdateTaskRequest {
         status: Some(new_status),
         ..Default::default()
     };
 
-    let task: Task = ctx
+    let task: Task = target
         .gateway
         .update_task(&ctx.ident, &task_id, &patch, Some(&ctx.agent_id))
         .await
@@ -643,7 +662,8 @@ async fn cmd_comment(
     require_full_task_id(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx, None).await?;
+    ensure_all_registered(&ctx).await?;
+    let (target, _) = find_task(&ctx, &task_id).await?;
 
     // Default author_type: agent — we always send X-Agent-Id below, so the
     // server-side default would also be `agent`. We pass it explicitly so the
@@ -655,7 +675,7 @@ async fn cmd_comment(
         author_type: Some(&resolved_type),
     };
 
-    let comment: TaskComment = ctx
+    let comment: TaskComment = target
         .gateway
         .add_task_comment(&ctx.ident, &task_id, &req, Some(&ctx.agent_id))
         .await
@@ -674,13 +694,14 @@ async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>) -> Resul
     require_full_task_id(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
-    ensure_registered(&ctx, None).await?;
+    ensure_all_registered(&ctx).await?;
+    let (target, _) = find_task(&ctx, &task_id).await?;
 
     let patch = UpdateTaskRequest {
         rank: Some(rank),
         ..Default::default()
     };
-    let task: Task = ctx
+    let task: Task = target
         .gateway
         .update_task(&ctx.ident, &task_id, &patch, Some(&ctx.agent_id))
         .await
@@ -688,6 +709,27 @@ async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>) -> Resul
 
     println!("ranked [{}] {} → rank {}", task.id, task.title, task.rank);
     Ok(())
+}
+
+async fn find_task<'a>(
+    ctx: &'a GatewayContext,
+    task_id: &str,
+) -> Result<(&'a GatewayTarget, TaskDetail)> {
+    let mut errors = Vec::new();
+    for target in &ctx.gateways {
+        match target
+            .gateway
+            .get_task(&ctx.ident, task_id, Some(&ctx.agent_id))
+            .await
+        {
+            Ok(detail) => return Ok((target, detail)),
+            Err(error) => errors.push(format!("{}: {error:#}", target.profile)),
+        }
+    }
+    anyhow::bail!(
+        "task {task_id} was not found on configured gateways ({})",
+        errors.join("; ")
+    )
 }
 
 // -- builds ------------------------------------------------------------------
