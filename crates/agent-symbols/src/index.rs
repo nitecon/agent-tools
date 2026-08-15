@@ -91,7 +91,7 @@ impl SymbolIndex {
         let project_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let project_id = agent_core::project_ident(&project_root);
 
-        let walker = WalkBuilder::new(root)
+        let walker = WalkBuilder::new(&project_root)
             .hidden(true)
             .git_ignore(true)
             .git_global(false)
@@ -698,6 +698,23 @@ class DataProcessor:
 
         let results = index.search("main", None, None, 10).unwrap();
         assert!(!results.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_build_index_through_symlinked_root() {
+        let project_dir = TempDir::new().unwrap();
+        let link_dir = TempDir::new().unwrap();
+        let linked_root = link_dir.path().join("project-link");
+
+        create_test_project(project_dir.path());
+        std::os::unix::fs::symlink(project_dir.path(), &linked_root).unwrap();
+
+        let mut index = SymbolIndex::open_ephemeral().unwrap();
+        let stats = index.build(&linked_root).unwrap();
+
+        assert!(stats.files_indexed >= 2);
+        assert!(stats.symbols_indexed > 0);
     }
 
     #[test]
