@@ -78,7 +78,13 @@ Commands:
   read      Read a UTF-8 file, optionally limited to a line range
   symbol    Extract a symbol's source code by name
   symbols   List all symbols in a file
-  search    Search the project-wide symbol index
+  search    Search symbols, files, or unified knowledge
+  get       Get one canonical knowledge resource
+  graph     Traverse typed project relationships
+  refs      Show callers and callees for a symbol
+  imports   Show import relationships
+  impls     Show inheritance and implementation relationships
+  okf       Validate, import, export, or publish an OKF bundle
   grep      Portable, deterministic text search
   sed       Portable, deterministic stream-editor preview/rewrite
   index     Build or update the project index
@@ -124,10 +130,18 @@ agent-tools index
 
 # Search symbols across the project
 agent-tools search MyClass
-agent-tools search handle --type fn
+agent-tools search handle --type symbol
 
 # Search files by name
 agent-tools search config --type file
+
+# Search repository-authored Markdown and OKF knowledge
+agent-tools search checkout --type knowledge --status stable
+
+# Inspect and traverse a canonical resource
+agent-tools get "Checkout Service"
+agent-tools graph "Checkout Service" --relation links_to --depth 2
+agent-tools refs process_checkout
 
 # Portable text search and rewrite
 agent-tools grep needle src
@@ -147,6 +161,37 @@ Portable grep/sed user workflows are documented in
 [docs/grep-sed.md](docs/grep-sed.md). The stable behavior contract and test
 matrix live in [docs/grep-sed-contract.md](docs/grep-sed-contract.md) and
 [docs/grep-sed-conformance.md](docs/grep-sed-conformance.md).
+
+### Unified knowledge graph and OKF
+
+[Google Cloud's Open Knowledge Format (OKF)](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf)
+is a vendor-neutral format for human- and agent-readable knowledge using
+Markdown with YAML frontmatter. Agent-tools targets the official
+[OKF v0.2 specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
+Repository-authored OKF lives conventionally in `.agents/knowledge/`; a normal
+`agent-tools index` discovers that bundle, while explicit bundles can be
+validated and imported directly:
+
+```bash
+agent-tools okf validate .agents/knowledge
+agent-tools index
+agent-tools okf import path/to/bundle
+agent-tools okf export path/to/bundle --destination /tmp/normalized-okf
+agent-tools okf publish path/to/bundle --dry-run
+agent-tools okf publish path/to/bundle
+```
+
+Files, symbols, Markdown, OKF concepts, and typed relationships share one local
+`project.db`. Repository and gateway content remain authoritative at their
+source; the database is a rebuildable search/graph projection. Results expose
+canonical identity, origin, authority, lifecycle, and trust rather than
+silently treating draft, stale, unresolved, or unverified knowledge as equal.
+
+The complete authoring, query, federation, migration, and recovery workflow is
+in [docs/okf-knowledge.md](docs/okf-knowledge.md). The model contract and
+executable conformance evidence are in
+[docs/knowledge-graph-okf.md](docs/knowledge-graph-okf.md) and
+[docs/knowledge-graph-okf-conformance.md](docs/knowledge-graph-okf-conformance.md).
 
 ### Communication tools (CLI)
 
@@ -757,6 +802,10 @@ Once registered, the following MCP tools become available:
 | `extract_symbol` | Get a symbol's source code by name |
 | `list_symbols` | List all symbols in a file |
 | `search_symbols` | Search the project-wide symbol index |
+| `search_knowledge` | Filtered full-text search across indexed knowledge |
+| `get_knowledge` | Get canonical resource/version/authority/trust metadata |
+| `knowledge_graph` | Bounded typed graph traversal |
+| `knowledge_refs` | Incoming and outgoing call references |
 | `build_index` | Build/update file and symbol indexes |
 | `find_files` | Query the file index |
 | `project_summary` | Compact project overview |
@@ -896,12 +945,13 @@ Symbol extraction (via tree-sitter) supports:
 crates/
   agent-core/       Shared types, error handling, path normalization
   agent-fs/         Tree view, directory listing, file operations
-  agent-symbols/    Tree-sitter parsing, symbol extraction, SQLite index
+  agent-symbols/    Tree-sitter parsing, symbols, and relationship extraction
   agent-search/     File indexing, cached search, project summaries
+  agent-knowledge/  Shared resource/version/segment/edge graph and OKF codec
   agent-comms/      Gateway client library, config system, sanitization
   agent-updater/    Consolidated self-update mechanism (GitHub releases)
   agent-cli/        CLI binary (agent-tools)
-  agent-mcp/        MCP stdio server (agent-tools-mcp) — 22 tools via rmcp
+  agent-mcp/        MCP stdio server (agent-tools-mcp) via rmcp
   agent-sync/       Sync CLI binary (agent-sync)
 ```
 
@@ -922,6 +972,9 @@ Index data is stored centrally, with a writable-location resolution:
 | 3 | `/opt/agentic/tools/<hash>/` (Unix) or `%USERPROFILE%\.agentic\tools\<hash>\` (Windows) | Global / shared |
 
 If the user-level directory (`~/.agent-tools/<hash>`) exists for a project and is writable, it takes precedence. Otherwise the writable global directory is used. For new projects, the global directory is preferred when it exists and is writable; otherwise the user-level directory is used automatically. If no persistent index database can be opened, `agent-tools` falls back to an in-memory index for that invocation; this is slower because the index is rebuilt on demand, but it keeps sandboxed agents working.
+
+Each project uses one `project.db` for file metadata, symbols, immutable resource
+versions, full-text segments, provenance, verification, and typed edges.
 
 The `<hash>` is a blake3 digest of the normalized git remote origin URL (e.g., `github.com/nitecon/agent-tools.git`). For non-git directories, the hash is derived from the absolute path. This keeps index data out of your project tree (no `.gitignore` needed) and enables future cross-machine sync.
 

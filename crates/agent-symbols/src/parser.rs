@@ -1,5 +1,6 @@
 use crate::extractor::{extract_symbols_from_tree, Symbol};
 use crate::languages::Language;
+use crate::relationships::{extract_relationships_from_tree, ExtractedRelationship};
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -29,6 +30,14 @@ impl SymbolParser {
         self.parse_source(&source, language, path)
     }
 
+    /// Parse a file once and extract both definitions and explicit relationships.
+    pub fn parse_file_with_relationships(&mut self, path: &Path) -> Result<ParsedFile> {
+        let source = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let language = Language::from_path(path)?;
+        self.parse_source_with_relationships(&source, language, path)
+    }
+
     /// Parse source code and extract symbols.
     pub fn parse_source(
         &mut self,
@@ -48,6 +57,26 @@ impl SymbolParser {
         Ok(extract_symbols_from_tree(
             &tree, source, language, file_path,
         ))
+    }
+
+    /// Parse source once and extract both definitions and explicit relationships.
+    pub fn parse_source_with_relationships(
+        &mut self,
+        source: &str,
+        language: Language,
+        file_path: &Path,
+    ) -> Result<ParsedFile> {
+        self.parser
+            .set_language(&language.ts_language())
+            .with_context(|| format!("Failed to set language: {language}"))?;
+        let tree = self
+            .parser
+            .parse(source, None)
+            .with_context(|| "Failed to parse source code")?;
+        Ok(ParsedFile {
+            symbols: extract_symbols_from_tree(&tree, source, language, file_path),
+            relationships: extract_relationships_from_tree(&tree, source, language)?,
+        })
     }
 
     /// Extract a single symbol by name from a file.
@@ -98,6 +127,12 @@ impl SymbolParser {
 pub struct SymbolSource {
     pub symbol: Symbol,
     pub source: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedFile {
+    pub symbols: Vec<Symbol>,
+    pub relationships: Vec<ExtractedRelationship>,
 }
 
 impl std::fmt::Display for SymbolSource {

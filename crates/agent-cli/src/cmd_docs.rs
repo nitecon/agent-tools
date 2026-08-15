@@ -553,18 +553,14 @@ async fn cmd_list(
         scope.as_deref(),
     );
     print_warnings(&ctx);
+    let mut batches = Vec::new();
     for target in &ctx.gateways {
         match target
             .gateway
             .list_api_docs(&ctx.ident, &filters, Some(&ctx.agent_id))
             .await
         {
-            Ok(docs) => {
-                if ctx.gateways.len() > 1 {
-                    println!("Gateway: {}", target.profile);
-                }
-                print_doc_list(&ctx.ident, &docs);
-            }
+            Ok(docs) => batches.push((target.profile.clone(), docs)),
             Err(error) if !target.primary => eprintln!(
                 "warning: gateway {} could not list documentation: {error:#}",
                 target.profile
@@ -574,6 +570,35 @@ async fn cmd_list(
             }
         }
     }
+    if let Some(query) = query.as_deref() {
+        let root = std::env::current_dir()?;
+        let project_id = agent_core::project_ident(&root);
+        let index = agent_knowledge::ProjectIndex::open_for_project(&root)?;
+        let local = index.search_segments_filtered(
+            &project_id,
+            query,
+            &agent_knowledge::SearchFilter::default(),
+            100,
+        )?;
+        let mut seen = std::collections::BTreeSet::new();
+        let docs = local
+            .into_iter()
+            .filter(|item| seen.insert(item.resource.id))
+            .map(|item| ApiDocSummary {
+                id: format!("local:{}", item.resource.id),
+                app: item.resource.namespace,
+                title: item.resource.title,
+                source_ref: Some(item.resource.canonical_uri),
+                kind: Some(item.resource.kind),
+                source_format: Some("local-index".to_owned()),
+                scope: Some("local".to_owned()),
+                owner_project: Some(project_id.clone()),
+                ..ApiDocSummary::default()
+            })
+            .collect();
+        batches.push(("local".to_owned(), docs));
+    }
+    print_federated_doc_list(&ctx.ident, &batches);
     Ok(())
 }
 
@@ -1199,6 +1224,36 @@ fn print_doc_list(project_ident: &str, docs: &[ApiDocSummary]) {
         if let Some(summary) = doc.summary.as_deref().filter(|s| !s.trim().is_empty()) {
             println!("       {summary}");
         }
+    }
+}
+
+fn print_federated_doc_list(project_ident: &str, batches: &[(String, Vec<ApiDocSummary>)]) {
+    let mut grouped = BTreeMap::<String, (ApiDocSummary, Vec<String>)>::new();
+    for (origin, docs) in batches {
+        for doc in docs {
+            let identity = doc
+                .source_ref
+                .clone()
+                .or_else(|| doc.artifact_id.clone())
+                .unwrap_or_else(|| format!("gateway://{origin}/{}", doc.id));
+            grouped
+                .entry(identity)
+                .and_modify(|(_, origins)| {
+                    if !origins.contains(origin) {
+                        origins.push(origin.clone());
+                        origins.sort();
+                    }
+                })
+                .or_insert_with(|| (doc.clone(), vec![origin.clone()]));
+        }
+    }
+    if grouped.is_empty() {
+        print_doc_list(project_ident, &[]);
+        return;
+    }
+    for (_, (doc, origins)) in grouped {
+        print_doc_list(project_ident, std::slice::from_ref(&doc));
+        println!("  origins: {}", origins.join(", "));
     }
 }
 

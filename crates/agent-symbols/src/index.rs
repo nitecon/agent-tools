@@ -1,19 +1,27 @@
 use crate::extractor::{Symbol, SymbolKind};
 use crate::languages::Language;
 use crate::parser::SymbolParser;
+use crate::relationships::ExtractedRelationship;
+use agent_knowledge::{
+    CodeSnapshotInput, FileMetadataInput, ProjectIndex, RelationshipSnapshotInput, ResolutionStats,
+    ResourceMatch, SymbolSnapshotInput, TraversedEdge,
+};
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
-use rusqlite::{params, Connection, ErrorCode};
+use rusqlite::params;
+#[cfg(test)]
+use rusqlite::Connection;
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
-
-const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+use std::time::Duration;
+use std::time::SystemTime;
 
 /// Persistent symbol index backed by SQLite.
 pub struct SymbolIndex {
-    conn: Connection,
-    ephemeral: bool,
+    index: ProjectIndex,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -45,98 +53,43 @@ impl From<&Symbol> for SymbolMatch {
 impl SymbolIndex {
     /// Open or create a symbol index at the given path.
     pub fn open(db_path: &Path) -> Result<Self> {
-        Self::open_with_busy_timeout(db_path, SQLITE_BUSY_TIMEOUT)
-    }
-
-    fn open_with_busy_timeout(db_path: &Path, busy_timeout: Duration) -> Result<Self> {
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let conn = Connection::open(db_path)
-            .with_context(|| format!("Failed to open index at {}", db_path.display()))?;
-        conn.busy_timeout(busy_timeout)
-            .context("Failed to configure symbol index lock timeout")?;
-
-        Self::init_schema(&conn).with_context(|| {
-            format!("Failed to initialize symbol index at {}", db_path.display())
-        })?;
-
         Ok(Self {
-            conn,
-            ephemeral: false,
+            index: ProjectIndex::open(db_path)
+                .with_context(|| format!("Failed to open index at {}", db_path.display()))?,
         })
     }
 
+    #[cfg(test)]
     fn open_ephemeral() -> Result<Self> {
-        let conn = Connection::open_in_memory().context("Failed to open in-memory symbol index")?;
-        Self::init_schema(&conn)?;
         Ok(Self {
-            conn,
-            ephemeral: true,
+            index: ProjectIndex::open_ephemeral()?,
         })
-    }
-
-    fn init_schema(conn: &Connection) -> Result<()> {
-        conn.execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-
-            CREATE TABLE IF NOT EXISTS files (
-                id INTEGER PRIMARY KEY,
-                path TEXT UNIQUE NOT NULL,
-                mtime_secs INTEGER NOT NULL,
-                mtime_nanos INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS symbols (
-                id INTEGER PRIMARY KEY,
-                file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                name TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                start_line INTEGER NOT NULL,
-                end_line INTEGER NOT NULL,
-                language TEXT NOT NULL,
-                parent TEXT,
-                UNIQUE(file_id, name, start_line)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
-            CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
-            CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
-            ",
-        )?;
-        Ok(())
     }
 
     /// Open or create a symbol index in the centralized storage directory for the given project.
     pub fn open_for_project(project_root: &Path) -> Result<Self> {
-        let db_path = agent_core::project_data_dir(project_root).join("symbols.db");
-        Self::open_persistent_or_ephemeral(&db_path, SQLITE_BUSY_TIMEOUT)
+        Ok(Self {
+            index: ProjectIndex::open_for_project(project_root)?,
+        })
     }
 
     pub fn is_ephemeral(&self) -> bool {
-        self.ephemeral
+        self.index.is_ephemeral()
     }
 
+    #[cfg(test)]
     fn open_persistent_or_ephemeral(db_path: &Path, busy_timeout: Duration) -> Result<Self> {
-        match Self::open_with_busy_timeout(db_path, busy_timeout) {
-            Ok(index) => Ok(index),
-            Err(err) if is_sqlite_lock_error(&err) => Err(err.context(format!(
-                "Persistent symbol index at {} is busy or locked after waiting {}ms; \
-                 another agent-tools process may be indexing this project",
-                db_path.display(),
-                busy_timeout.as_millis()
-            ))),
-            Err(_) => Self::open_ephemeral(),
-        }
+        Ok(Self {
+            index: ProjectIndex::open_persistent_or_ephemeral(db_path, busy_timeout)?,
+        })
     }
 
     /// Build or incrementally update the index for all supported files under root.
-    pub fn build(&self, root: &Path) -> Result<IndexStats> {
+    pub fn build(&mut self, root: &Path) -> Result<IndexStats> {
         let mut parser = SymbolParser::new();
         let mut stats = IndexStats::default();
+        let project_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let project_id = agent_core::project_ident(&project_root);
 
         let walker = WalkBuilder::new(root)
             .hidden(true)
@@ -175,86 +128,167 @@ impl SymbolIndex {
             let mtime_secs = duration.as_secs() as i64;
             let mtime_nanos = duration.subsec_nanos() as i64;
 
-            let path_str = path.to_string_lossy();
-
-            // Check existing mtime
-            let needs_update: bool = {
-                let mut stmt = self
-                    .conn
-                    .prepare_cached("SELECT mtime_secs, mtime_nanos FROM files WHERE path = ?1")?;
-                match stmt.query_row(params![path_str.as_ref()], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-                }) {
-                    Ok((s, n)) => s != mtime_secs || n != mtime_nanos,
-                    Err(_) => true, // new file
+            let path_str = relative_path_string(&project_root, path)?;
+            let source = match std::fs::read_to_string(path) {
+                Ok(source) => source,
+                Err(_) => {
+                    stats.files_errored += 1;
+                    continue;
                 }
             };
+            let input_hash = blake3::hash(source.as_bytes()).to_hex().to_string();
 
-            if !needs_update {
+            if self
+                .index
+                .producer_is_current(&path_str, "tree-sitter/1", &input_hash)?
+            {
                 stats.files_skipped += 1;
                 continue;
             }
 
             // Parse and index
-            match parser.parse_file(path) {
-                Ok(symbols) => {
-                    self.index_file(path, &symbols, mtime_secs, mtime_nanos)?;
+            match parser.parse_source_with_relationships(&source, Language::from_path(path)?, path)
+            {
+                Ok(parsed) => {
+                    self.index_code_file(
+                        &project_id,
+                        &project_root,
+                        path,
+                        &source,
+                        &parsed.symbols,
+                        &parsed.relationships,
+                        mtime_secs,
+                        mtime_nanos,
+                    )?;
                     stats.files_indexed += 1;
-                    stats.symbols_indexed += symbols.len();
+                    stats.symbols_indexed += parsed.symbols.len();
+                    stats.edges_indexed += parsed.relationships.len();
                 }
-                Err(_) => {
-                    stats.files_errored += 1;
-                }
+                Err(_) => stats.files_errored += 1,
             }
         }
+
+        let resolution = self
+            .index
+            .resolve_code_edges(&project_id, "tree-sitter/1")?;
+        stats.edges_resolved = resolution.resolved;
+        stats.edges_unresolved = resolution.unresolved;
+        stats.edges_ambiguous = resolution.ambiguous;
 
         Ok(stats)
     }
 
-    fn index_file(
-        &self,
+    #[allow(clippy::too_many_arguments)]
+    fn index_code_file(
+        &mut self,
+        project_id: &str,
+        project_root: &Path,
         path: &Path,
+        source: &str,
         symbols: &[Symbol],
+        relationships: &[ExtractedRelationship],
         mtime_secs: i64,
         mtime_nanos: i64,
     ) -> Result<()> {
-        let path_str = path.to_string_lossy();
-
-        // Upsert file record
-        self.conn.execute(
-            "INSERT INTO files (path, mtime_secs, mtime_nanos) VALUES (?1, ?2, ?3)
-             ON CONFLICT(path) DO UPDATE SET mtime_secs = ?2, mtime_nanos = ?3",
-            params![path_str.as_ref(), mtime_secs, mtime_nanos],
-        )?;
-
-        let file_id: i64 = self.conn.query_row(
-            "SELECT id FROM files WHERE path = ?1",
-            params![path_str.as_ref()],
-            |row| row.get(0),
-        )?;
-
-        // Clear old symbols for this file
-        self.conn
-            .execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id])?;
-
-        // Insert new symbols
-        let mut stmt = self.conn.prepare_cached(
-            "INSERT OR IGNORE INTO symbols (file_id, name, kind, start_line, end_line, language, parent)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        )?;
-
-        for symbol in symbols {
-            stmt.execute(params![
-                file_id,
-                symbol.name,
-                format!("{}", symbol.kind),
-                symbol.start_line as i64,
-                symbol.end_line as i64,
-                format!("{}", symbol.language),
-                symbol.parent,
-            ])?;
-        }
-
+        let language = Language::from_path(path)?;
+        let stable_keys = stable_symbol_keys(symbols);
+        let symbol_kinds: Vec<String> = symbols
+            .iter()
+            .map(|symbol| symbol.kind.to_string())
+            .collect();
+        let symbol_inputs: Vec<_> = symbols
+            .iter()
+            .zip(&stable_keys)
+            .zip(&symbol_kinds)
+            .map(|((symbol, stable_key), kind)| SymbolSnapshotInput {
+                stable_key,
+                name: &symbol.name,
+                kind,
+                parent_stable_key: parent_stable_key(symbol, symbols, &stable_keys),
+                start_line: symbol.start_line,
+                end_line: symbol.end_line,
+                start_byte: Some(symbol.start_byte),
+                end_byte: Some(symbol.end_byte),
+            })
+            .collect();
+        let relationship_metadata: Vec<Value> = relationships
+            .iter()
+            .map(|relationship| {
+                serde_json::json!({
+                    "source_symbol": relationship.source_symbol,
+                    "raw_target": relationship.target,
+                })
+            })
+            .collect();
+        let relationship_hashes: Vec<String> = relationships
+            .iter()
+            .map(|relationship| {
+                blake3::hash(
+                    format!(
+                        "{}:{}:{}:{}:{}",
+                        relationship.kind,
+                        relationship.source_symbol.as_deref().unwrap_or(""),
+                        relationship.target,
+                        relationship.start_byte,
+                        relationship.end_byte
+                    )
+                    .as_bytes(),
+                )
+                .to_hex()
+                .to_string()
+            })
+            .collect();
+        let relationship_kinds: Vec<String> = relationships
+            .iter()
+            .map(|relationship| relationship.kind.to_string())
+            .collect();
+        let relationship_inputs: Vec<_> = relationships
+            .iter()
+            .zip(&relationship_metadata)
+            .zip(&relationship_hashes)
+            .zip(&relationship_kinds)
+            .map(
+                |(((relationship, metadata), content_hash), relation)| RelationshipSnapshotInput {
+                    source_stable_key: relationship_source_key(relationship, symbols, &stable_keys),
+                    dst_ref: &relationship.target,
+                    relation,
+                    confidence: match relationship.confidence {
+                        crate::relationships::RelationshipConfidence::Extracted => "extracted",
+                        crate::relationships::RelationshipConfidence::Ambiguous => "ambiguous",
+                    },
+                    start_line: relationship.start_line,
+                    end_line: relationship.end_line,
+                    start_byte: relationship.start_byte,
+                    end_byte: relationship.end_byte,
+                    content_hash,
+                    metadata,
+                },
+            )
+            .collect();
+        let metadata = std::fs::metadata(path)?;
+        let hash = blake3::hash(source.as_bytes()).to_hex().to_string();
+        let language_name = language.to_string();
+        self.index.replace_code_snapshot(&CodeSnapshotInput {
+            file: FileMetadataInput {
+                project_id,
+                project_root,
+                path,
+                language: Some(&language_name),
+                extension: path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or(""),
+                size: metadata.len(),
+                mtime_secs,
+                mtime_nanos,
+                content_hash: Some(&hash),
+                scan_id: None,
+            },
+            source,
+            extractor: "tree-sitter/1",
+            symbols: &symbol_inputs,
+            relationships: &relationship_inputs,
+        })?;
         Ok(())
     }
 
@@ -267,9 +301,10 @@ impl SymbolIndex {
         limit: usize,
     ) -> Result<Vec<SymbolMatch>> {
         let mut sql = String::from(
-            "SELECT s.name, s.kind, f.path, s.start_line, s.end_line, s.language, s.parent
+            "SELECT s.name, s.symbol_kind, f.path, s.start_line, s.end_line, s.language, pr.title
              FROM symbols s
-             JOIN files f ON s.file_id = f.id
+             JOIN files f ON s.file_resource_id = f.resource_id
+             LEFT JOIN resources pr ON pr.id = s.parent_resource_id
              WHERE s.name LIKE ?1",
         );
 
@@ -277,7 +312,7 @@ impl SymbolIndex {
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(name_pattern)];
 
         if let Some(kind) = kind_filter {
-            sql.push_str(" AND s.kind = ?");
+            sql.push_str(" AND s.symbol_kind = ?");
             sql.push_str(&(param_values.len() + 1).to_string());
             param_values.push(Box::new(kind.to_string()));
         }
@@ -310,7 +345,7 @@ impl SymbolIndex {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
 
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.index.connection().prepare(&sql)?;
         let results = stmt.query_map(param_refs.as_slice(), |row| {
             Ok(SymbolMatch {
                 name: row.get(0)?,
@@ -335,10 +370,11 @@ impl SymbolIndex {
     pub fn symbols_in_file(&self, path: &Path) -> Result<Vec<SymbolMatch>> {
         let path_str = path.to_string_lossy();
 
-        let mut stmt = self.conn.prepare(
-            "SELECT s.name, s.kind, f.path, s.start_line, s.end_line, s.language, s.parent
+        let mut stmt = self.index.connection().prepare(
+            "SELECT s.name, s.symbol_kind, f.path, s.start_line, s.end_line, s.language, pr.title
              FROM symbols s
-             JOIN files f ON s.file_id = f.id
+             JOIN files f ON s.file_resource_id = f.resource_id
+             LEFT JOIN resources pr ON pr.id = s.parent_resource_id
              WHERE f.path LIKE ?1
              ORDER BY s.start_line",
         )?;
@@ -366,27 +402,113 @@ impl SymbolIndex {
 
     /// Get total counts.
     pub fn stats(&self) -> Result<(usize, usize)> {
-        let file_count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
-        let symbol_count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))?;
+        let file_count: i64 =
+            self.index
+                .connection()
+                .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
+        let symbol_count: i64 =
+            self.index
+                .connection()
+                .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))?;
         Ok((file_count as usize, symbol_count as usize))
+    }
+
+    /// Locate graph resources by URI, title, or external identifier.
+    pub fn find_graph_resources(
+        &self,
+        project_root: &Path,
+        query: &str,
+        namespace: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ResourceMatch>> {
+        let project_id = agent_core::project_ident(project_root);
+        self.index
+            .find_resources(&project_id, query, namespace, limit)
+    }
+
+    /// Traverse resolved and unresolved relationships from a resource.
+    pub fn traverse_graph(
+        &self,
+        resource_id: i64,
+        relation: Option<&str>,
+        direction: &str,
+        depth: usize,
+        limit: usize,
+    ) -> Result<Vec<TraversedEdge>> {
+        self.index
+            .traverse(resource_id, relation, direction, depth, limit)
+    }
+
+    /// Re-run cross-file resolution after external resources are indexed.
+    pub fn resolve_graph(&mut self, project_root: &Path) -> Result<ResolutionStats> {
+        let project_id = agent_core::project_ident(project_root);
+        self.index.resolve_code_edges(&project_id, "tree-sitter/1")
     }
 }
 
-fn is_sqlite_lock_error(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        cause
-            .downcast_ref::<rusqlite::Error>()
-            .is_some_and(|sqlite_err| {
-                matches!(
-                    sqlite_err.sqlite_error_code(),
-                    Some(ErrorCode::DatabaseBusy) | Some(ErrorCode::DatabaseLocked)
-                )
-            })
-    })
+fn relative_path_string(root: &Path, path: &Path) -> Result<String> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let relative = path
+        .strip_prefix(root)
+        .with_context(|| format!("{} is outside {}", path.display(), root.display()))?;
+    Ok(relative.to_string_lossy().replace('\\', "/"))
+}
+
+fn stable_symbol_keys(symbols: &[Symbol]) -> Vec<String> {
+    let mut occurrences = BTreeMap::<String, usize>::new();
+    symbols
+        .iter()
+        .map(|symbol| {
+            let base = match symbol.parent.as_deref() {
+                Some(parent) => format!("{parent}::{}:{}", symbol.name, symbol.kind),
+                None => format!("{}:{}", symbol.name, symbol.kind),
+            };
+            let occurrence = occurrences.entry(base.clone()).or_default();
+            let key = if *occurrence == 0 {
+                base
+            } else {
+                format!("{base}~{occurrence}")
+            };
+            *occurrence += 1;
+            key
+        })
+        .collect()
+}
+
+fn parent_stable_key<'a>(
+    symbol: &Symbol,
+    symbols: &'a [Symbol],
+    stable_keys: &'a [String],
+) -> Option<&'a str> {
+    let parent = symbol.parent.as_deref()?;
+    symbols
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| {
+            candidate.name == parent
+                && candidate.start_line <= symbol.start_line
+                && candidate.end_line >= symbol.end_line
+        })
+        .min_by_key(|(_, candidate)| candidate.end_line - candidate.start_line)
+        .map(|(index, _)| stable_keys[index].as_str())
+}
+
+fn relationship_source_key<'a>(
+    relationship: &ExtractedRelationship,
+    symbols: &'a [Symbol],
+    stable_keys: &'a [String],
+) -> Option<&'a str> {
+    let source = relationship.source_symbol.as_deref()?;
+    symbols
+        .iter()
+        .enumerate()
+        .filter(|(_, symbol)| {
+            symbol.name == source
+                && symbol.start_line <= relationship.start_line
+                && symbol.end_line >= relationship.end_line
+        })
+        .min_by_key(|(_, symbol)| symbol.end_line - symbol.start_line)
+        .map(|(index, _)| stable_keys[index].as_str())
 }
 
 fn parse_symbol_kind(s: &str) -> SymbolKind {
@@ -417,14 +539,25 @@ pub struct IndexStats {
     pub files_skipped: usize,
     pub files_errored: usize,
     pub symbols_indexed: usize,
+    pub edges_indexed: usize,
+    pub edges_resolved: usize,
+    pub edges_unresolved: usize,
+    pub edges_ambiguous: usize,
 }
 
 impl std::fmt::Display for IndexStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Indexed {} files ({} symbols), skipped {} unchanged, {} errors",
-            self.files_indexed, self.symbols_indexed, self.files_skipped, self.files_errored
+            "Indexed {} files ({} symbols, {} edges; {} resolved, {} unresolved, {} ambiguous), skipped {} unchanged, {} errors",
+            self.files_indexed,
+            self.symbols_indexed,
+            self.edges_indexed,
+            self.edges_resolved,
+            self.edges_unresolved,
+            self.edges_ambiguous,
+            self.files_skipped,
+            self.files_errored
         )
     }
 }
@@ -480,7 +613,7 @@ class DataProcessor:
         create_test_project(project_dir.path());
 
         let db_path = db_dir.path().join("symbols.db");
-        let index = SymbolIndex::open(&db_path).unwrap();
+        let mut index = SymbolIndex::open(&db_path).unwrap();
 
         let stats = index.build(project_dir.path()).unwrap();
         assert!(stats.files_indexed >= 2);
@@ -503,7 +636,7 @@ class DataProcessor:
         create_test_project(project_dir.path());
 
         let db_path = db_dir.path().join("symbols.db");
-        let index = SymbolIndex::open(&db_path).unwrap();
+        let mut index = SymbolIndex::open(&db_path).unwrap();
 
         // First build
         let stats1 = index.build(project_dir.path()).unwrap();
@@ -516,11 +649,48 @@ class DataProcessor:
     }
 
     #[test]
+    fn test_relationship_edges_replace_incrementally_in_project_database() {
+        let project_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let source_path = project_dir.path().join("main.rs");
+        std::fs::write(&source_path, "fn helper() {}\nfn main() { helper(); }\n").unwrap();
+        let db_path = db_dir.path().join("project.db");
+        let mut index = SymbolIndex::open(&db_path).unwrap();
+
+        let first = index.build(project_dir.path()).unwrap();
+        assert_eq!(first.files_indexed, 1);
+        assert_eq!(first.edges_indexed, 1);
+        let edge_count: i64 = index
+            .index
+            .connection()
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(edge_count, 1);
+
+        std::fs::write(&source_path, "fn helper() {}\nfn main() {}\n").unwrap();
+        let second = index.build(project_dir.path()).unwrap();
+        assert_eq!(second.files_indexed, 1);
+        assert_eq!(second.edges_indexed, 0);
+        let edge_count: i64 = index
+            .index
+            .connection()
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        let producer_count: i64 = index
+            .index
+            .connection()
+            .query_row("SELECT COUNT(*) FROM producer_state", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(edge_count, 0);
+        assert_eq!(producer_count, 1);
+    }
+
+    #[test]
     fn test_ephemeral_index_builds_in_memory() {
         let project_dir = TempDir::new().unwrap();
         create_test_project(project_dir.path());
 
-        let index = SymbolIndex::open_ephemeral().unwrap();
+        let mut index = SymbolIndex::open_ephemeral().unwrap();
         assert!(index.is_ephemeral());
 
         let stats = index.build(project_dir.path()).unwrap();

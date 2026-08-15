@@ -1,0 +1,5 @@
+{
+  "gateway": "unavailable",
+  "error": "simulated timeout",
+  "retryable": true
+}

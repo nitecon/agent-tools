@@ -15,10 +15,12 @@ dependencies = [
  "agent-comms",
  "agent-core",
  "agent-fs",
+ "agent-knowledge",
  "agent-search",
  "agent-symbols",
  "agent-updater",
  "anyhow",
+ "blake3",
  "clap",
  "gethostname",
  "hex",
@@ -72,12 +74,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-knowledge"
+version = "0.1.0"
+dependencies = [
+ "agent-core",
+ "anyhow",
+ "blake3",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+]
+
+[[package]]
 name = "agent-mcp"
 version = "0.1.0"
 dependencies = [
  "agent-comms",
  "agent-core",
  "agent-fs",
+ "agent-knowledge",
  "agent-search",
  "agent-symbols",
  "agent-sync",
@@ -102,6 +119,7 @@ name = "agent-search"
 version = "0.1.0"
 dependencies = [
  "agent-core",
+ "agent-knowledge",
  "anyhow",
  "blake3",
  "ignore",
@@ -118,11 +136,14 @@ name = "agent-symbols"
 version = "0.1.0"
 dependencies = [
  "agent-core",
+ "agent-knowledge",
  "anyhow",
+ "blake3",
  "ignore",
  "rusqlite",
  "serde",
  "serde_json",
+ "streaming-iterator",
  "tempfile",
  "thiserror 2.0.18",
  "tree-sitter",

@@ -1,0 +1,12 @@
+{
+  "gateway": "default",
+  "results": [
+    {
+      "canonical_uri": "okf://prod/operations/checkout-runbook",
+      "authority": "gateway",
+      "title": "Checkout Recovery",
+      "content_hash": "shared-checkout-hash",
+      "authorized": true
+    }
+  ]
+}

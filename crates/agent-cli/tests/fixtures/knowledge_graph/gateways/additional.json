@@ -1,0 +1,19 @@
+{
+  "gateway": "production",
+  "results": [
+    {
+      "canonical_uri": "okf://prod/operations/checkout-runbook",
+      "authority": "gateway",
+      "title": "Checkout Recovery",
+      "content_hash": "shared-checkout-hash",
+      "authorized": true
+    },
+    {
+      "canonical_uri": "okf://prod/operations/private-runbook",
+      "authority": "gateway",
+      "title": "Private Recovery",
+      "content_hash": "private-hash",
+      "authorized": false
+    }
+  ]
+}

@@ -82,6 +82,40 @@ struct SearchSymbolsParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SearchKnowledgeParams {
+    #[schemars(description = "Full-text query")]
+    query: String,
+    namespace: Option<String>,
+    kind: Option<String>,
+    status: Option<String>,
+    origin: Option<String>,
+    path: Option<String>,
+    language: Option<String>,
+    relation: Option<String>,
+    #[schemars(description = "Maximum results (default 20, maximum 100)")]
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct KnowledgeResourceParams {
+    #[schemars(description = "Canonical URI, exact title, or external identifier")]
+    resource: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct KnowledgeGraphParams {
+    #[schemars(description = "Canonical URI, exact title, or external identifier")]
+    resource: String,
+    relation: Option<String>,
+    #[schemars(description = "in, out, or both (default both)")]
+    direction: Option<String>,
+    #[schemars(description = "Maximum depth (default 1, maximum 5)")]
+    depth: Option<u64>,
+    #[schemars(description = "Maximum edges (default 20, maximum 100)")]
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct BuildIndexParams {
     #[schemars(description = "Directory to index (default: current directory)")]
     path: Option<String>,
@@ -359,7 +393,7 @@ impl AgentToolsServer {
                 Ok(r) => r,
                 Err(e) => return format!("Error: {e}"),
             };
-            let index = match agent_symbols::SymbolIndex::open_for_project(&root) {
+            let mut index = match agent_symbols::SymbolIndex::open_for_project(&root) {
                 Ok(i) => i,
                 Err(e) => return format!("Error: {e}"),
             };
@@ -447,7 +481,7 @@ impl AgentToolsServer {
             Ok(r) => r,
             Err(e) => return format!("Error: {e}"),
         };
-        let index = match agent_symbols::SymbolIndex::open_for_project(&root) {
+        let mut index = match agent_symbols::SymbolIndex::open_for_project(&root) {
             Ok(i) => i,
             Err(e) => return format!("Error: {e}"),
         };
@@ -480,6 +514,60 @@ impl AgentToolsServer {
         text
     }
 
+    /// Search indexed Markdown and OKF content with resource filters.
+    #[tool(description = "Search the unified project knowledge graph full-text index.")]
+    fn search_knowledge(&self, Parameters(params): Parameters<SearchKnowledgeParams>) -> String {
+        let root = match std::env::current_dir() {
+            Ok(root) => root,
+            Err(error) => return format!("Error: {error}"),
+        };
+        let index = match agent_knowledge::ProjectIndex::open_for_project(&root) {
+            Ok(index) => index,
+            Err(error) => return format!("Error: {error}"),
+        };
+        let project_id = agent_core::project_ident(&root);
+        let filter = agent_knowledge::SearchFilter {
+            namespace: params.namespace.as_deref(),
+            kind: params.kind.as_deref(),
+            status: params.status.as_deref(),
+            origin: params.origin.as_deref(),
+            path: params.path.as_deref(),
+            language: params.language.as_deref(),
+            relation: params.relation.as_deref(),
+        };
+        let limit = params.limit.unwrap_or(20).min(100) as usize;
+        match index.search_segments_filtered(&project_id, &params.query, &filter, limit) {
+            Ok(results) => serde_json::to_string_pretty(&results)
+                .unwrap_or_else(|error| format!("Error: {error}")),
+            Err(error) => format!("Error: {error}"),
+        }
+    }
+
+    /// Get canonical identity, current version, authority, lifecycle, and trust metadata.
+    #[tool(description = "Get one unified knowledge graph resource and its direct relationships.")]
+    fn get_knowledge(&self, Parameters(params): Parameters<KnowledgeResourceParams>) -> String {
+        knowledge_resource_json(&params.resource, None, "both", 1, 100, true)
+    }
+
+    /// Traverse bounded typed relationships from one resource.
+    #[tool(description = "Traverse the unified project graph with deterministic bounds.")]
+    fn knowledge_graph(&self, Parameters(params): Parameters<KnowledgeGraphParams>) -> String {
+        knowledge_resource_json(
+            &params.resource,
+            params.relation.as_deref(),
+            params.direction.as_deref().unwrap_or("both"),
+            params.depth.unwrap_or(1).min(5) as usize,
+            params.limit.unwrap_or(20).min(100) as usize,
+            false,
+        )
+    }
+
+    /// Return incoming and outgoing call references for a symbol.
+    #[tool(description = "Return callers and callees for an indexed symbol.")]
+    fn knowledge_refs(&self, Parameters(params): Parameters<KnowledgeResourceParams>) -> String {
+        knowledge_resource_json(&params.resource, Some("calls"), "both", 1, 100, false)
+    }
+
     /// Build or update the project index.
     #[tool(description = "Build or incrementally update the project file and symbol index.")]
     fn build_index(&self, Parameters(params): Parameters<BuildIndexParams>) -> String {
@@ -510,7 +598,7 @@ impl AgentToolsServer {
             Err(e) => return format!("Error building file index: {e}"),
         };
 
-        let symbol_index = match agent_symbols::SymbolIndex::open_for_project(&root) {
+        let mut symbol_index = match agent_symbols::SymbolIndex::open_for_project(&root) {
             Ok(i) => i,
             Err(e) => return format!("Error: {e}"),
         };
@@ -1423,6 +1511,59 @@ impl AgentToolsServer {
             pushed, pulled
         ));
         output.join("\n")
+    }
+}
+
+fn knowledge_resource_json(
+    query: &str,
+    relation: Option<&str>,
+    direction: &str,
+    depth: usize,
+    limit: usize,
+    include_detail: bool,
+) -> String {
+    let root = match std::env::current_dir() {
+        Ok(root) => root,
+        Err(error) => return format!("Error: {error}"),
+    };
+    let index = match agent_knowledge::ProjectIndex::open_for_project(&root) {
+        Ok(index) => index,
+        Err(error) => return format!("Error: {error}"),
+    };
+    let project_id = agent_core::project_ident(&root);
+    let matches = match index.find_resources(&project_id, query, None, 20) {
+        Ok(matches) => matches,
+        Err(error) => return format!("Error: {error}"),
+    };
+    let resource = match matches.as_slice() {
+        [] => return format!("Error: no resource found matching '{query}'"),
+        [resource] => resource,
+        resources => {
+            let candidates = resources
+                .iter()
+                .map(|resource| resource.canonical_uri.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!("Error: resource '{query}' is ambiguous: {candidates}");
+        }
+    };
+    let edges = match index.traverse(resource.id, relation, direction, depth, limit) {
+        Ok(edges) => edges,
+        Err(error) => return format!("Error: {error}"),
+    };
+    if include_detail {
+        let detail = match index.resource_detail(resource.id) {
+            Ok(Some(detail)) => detail,
+            Ok(None) => return "Error: resource disappeared".to_owned(),
+            Err(error) => return format!("Error: {error}"),
+        };
+        serde_json::to_string_pretty(&serde_json::json!({
+            "resource": detail,
+            "relationships": edges,
+        }))
+        .unwrap_or_else(|error| format!("Error: {error}"))
+    } else {
+        serde_json::to_string_pretty(&edges).unwrap_or_else(|error| format!("Error: {error}"))
     }
 }
 

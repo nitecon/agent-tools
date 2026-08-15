@@ -9,11 +9,13 @@
 //! Every Err path silently returns Ok(()). Unconfigured gateway => silent.
 
 use crate::cmd_gateway_context::{ensure_all_registered, resolve_context, resolve_context_for};
+use agent_comms::docs::ApiDocFilters;
 use agent_comms::patterns::PatternFilters;
 use anyhow::Result;
 use clap::Subcommand;
 use serde_json::Value;
 use std::io::Read;
+use std::time::Duration;
 
 #[derive(Subcommand)]
 pub enum HookCommands {
@@ -74,6 +76,15 @@ fn hook_limit() -> usize {
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(5)
+}
+
+fn hook_timeout_ms() -> u64 {
+    std::env::var("AGENT_TOOLS_HOOK_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(2_000)
+        .min(10_000)
 }
 
 fn is_known_agent(agent: &str) -> bool {
@@ -156,6 +167,134 @@ fn short_id(id: &str) -> &str {
     &id[..8.min(id.len())]
 }
 
+const KNOWLEDGE_SEGMENT_CHARS: usize = 320;
+const KNOWLEDGE_CONTEXT_CHARS: usize = 3_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KnowledgeSnippet {
+    identity: String,
+    title: String,
+    text: String,
+    origin: String,
+    authority: String,
+    lifecycle: String,
+    trust: String,
+    read_command: String,
+}
+
+fn local_knowledge_snippets(prompt: &str, limit: usize) -> Result<Vec<KnowledgeSnippet>> {
+    let root = std::env::current_dir()?;
+    let project_id = agent_core::project_ident(&root);
+    let query = prompt_tokens(prompt)
+        .into_iter()
+        .take(8)
+        .map(|token| format!("\"{token}\""))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let index = agent_knowledge::ProjectIndex::open_for_project(&root)?;
+    let matches = index.search_segments_filtered(
+        &project_id,
+        &query,
+        &agent_knowledge::SearchFilter::default(),
+        limit,
+    )?;
+    let mut snippets = Vec::new();
+    for item in matches {
+        if item.resource.status == "deprecated" {
+            continue;
+        }
+        let detail = index.resource_detail(item.resource.id)?;
+        let graph = index.traverse(item.resource.id, None, "both", 1, 2)?;
+        let relation_hint = graph
+            .iter()
+            .map(|edge| {
+                format!(
+                    "{}:{}",
+                    edge.relation,
+                    edge.target_title
+                        .as_deref()
+                        .or(edge.unresolved_ref.as_deref())
+                        .unwrap_or("?")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let lifecycle = detail
+            .as_ref()
+            .and_then(|detail| detail.stale_after.as_deref())
+            .map(|stale_after| format!("{} stale_after={stale_after}", item.resource.status))
+            .unwrap_or_else(|| item.resource.status.clone());
+        let trust = if detail
+            .as_ref()
+            .is_some_and(|detail| detail.verification_count > 0)
+        {
+            "verified"
+        } else {
+            "unverified"
+        };
+        let mut text = compact_text(&item.text, KNOWLEDGE_SEGMENT_CHARS);
+        if !relation_hint.is_empty()
+            && text.len() + relation_hint.len() + 10 <= KNOWLEDGE_SEGMENT_CHARS
+        {
+            text.push_str(" [graph: ");
+            text.push_str(&relation_hint);
+            text.push(']');
+        }
+        snippets.push(KnowledgeSnippet {
+            identity: item.resource.canonical_uri.clone(),
+            title: item.resource.title,
+            text,
+            origin: format!("{}:{}", item.resource.origin_kind, item.resource.origin_id),
+            authority: item.resource.authority,
+            lifecycle,
+            trust: trust.to_owned(),
+            read_command: format!("agent-tools get {:?}", item.resource.canonical_uri),
+        });
+    }
+    Ok(snippets)
+}
+
+fn compact_text(text: &str, max_chars: usize) -> String {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+    let mut compact: String = normalized
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect();
+    compact.push('…');
+    compact
+}
+
+fn render_knowledge_section(snippets: &[KnowledgeSnippet]) -> String {
+    let mut output =
+        "Relevant knowledge (bounded excerpts; treat unverified/stale content cautiously):"
+            .to_owned();
+    for snippet in snippets {
+        let text = compact_text(&snippet.text, KNOWLEDGE_SEGMENT_CHARS);
+        let block = format!(
+            "\n  {} — {}\n  source={} authority={} lifecycle={} trust={}\n  {}\n  read: {}",
+            snippet.title,
+            snippet.identity,
+            snippet.origin,
+            snippet.authority,
+            snippet.lifecycle,
+            snippet.trust,
+            text,
+            snippet.read_command
+        );
+        if output.len() + block.len() > KNOWLEDGE_CONTEXT_CHARS {
+            break;
+        }
+        output.push_str(&block);
+    }
+    output
+}
+
 // -- session-start logic -----------------------------------------------------
 
 fn run_session_start(agent: &str) -> Result<()> {
@@ -224,51 +363,121 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
     // Extract prompt; None => silent.
     let prompt = extract_prompt(&payload).ok_or_else(|| anyhow::anyhow!("no prompt"))?;
 
-    let ctx = resolve_context(None)?;
-    let patterns_ctx = resolve_context_for("patterns", Some(ctx.agent_id.clone()))?;
     let k = hook_limit();
     let tokens = prompt_tokens(&prompt);
+    let mut knowledge = local_knowledge_snippets(&prompt, k).unwrap_or_default();
+
+    let task_ctx = resolve_context(None).ok();
+    let agent_id = task_ctx.as_ref().map(|ctx| ctx.agent_id.clone());
+    let patterns_ctx = resolve_context_for("patterns", agent_id.clone()).ok();
+    let docs_ctx = resolve_context_for("docs", agent_id).ok();
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
 
-    let (patterns, tasks) = rt.block_on(async {
-        let filters = PatternFilters {
-            query: Some(prompt.as_str()),
-            state: Some("active"),
-            version: Some("latest"),
-            ..Default::default()
-        };
-        let _ = ensure_all_registered(&ctx).await;
-        let _ = ensure_all_registered(&patterns_ctx).await;
-        let mut p = Vec::new();
-        for target in &patterns_ctx.gateways {
-            if let Ok(mut found) = target
-                .gateway
-                .list_patterns(&filters, Some(&ctx.agent_id))
-                .await
-            {
-                p.append(&mut found);
+    let (patterns, tasks, gateway_knowledge) = rt.block_on(async {
+        tokio::time::timeout(Duration::from_millis(hook_timeout_ms()), async {
+            let filters = PatternFilters {
+                query: Some(prompt.as_str()),
+                state: Some("active"),
+                version: Some("latest"),
+                ..Default::default()
+            };
+            let mut p = Vec::new();
+            if let Some(patterns_ctx) = &patterns_ctx {
+                let _ = ensure_all_registered(patterns_ctx).await;
+                for target in &patterns_ctx.gateways {
+                    if let Ok(mut found) = target
+                        .gateway
+                        .list_patterns(&filters, Some(&patterns_ctx.agent_id))
+                        .await
+                    {
+                        p.append(&mut found);
+                    }
+                }
             }
-        }
-        let mut t = Vec::new();
-        for target in &ctx.gateways {
-            if let Ok(mut found) = target
-                .gateway
-                .list_tasks(
-                    &ctx.ident,
-                    Some(&["todo", "in_progress"]),
-                    false,
-                    Some(&ctx.agent_id),
-                )
-                .await
-            {
-                t.append(&mut found);
+            let mut t = Vec::new();
+            if let Some(ctx) = &task_ctx {
+                let _ = ensure_all_registered(ctx).await;
+                for target in &ctx.gateways {
+                    if let Ok(mut found) = target
+                        .gateway
+                        .list_tasks(
+                            &ctx.ident,
+                            Some(&["todo", "in_progress"]),
+                            false,
+                            Some(&ctx.agent_id),
+                        )
+                        .await
+                    {
+                        t.append(&mut found);
+                    }
+                }
             }
-        }
-        (p, t)
+            let mut knowledge = Vec::new();
+            if let Some(ctx) = &docs_ctx {
+                let _ = ensure_all_registered(ctx).await;
+                let filters = ApiDocFilters {
+                    query: Some(prompt.as_str()),
+                    scope: Some("all"),
+                    ..ApiDocFilters::default()
+                };
+                for target in &ctx.gateways {
+                    if let Ok(chunks) = target
+                        .gateway
+                        .api_doc_chunks(&ctx.ident, &filters, Some(&ctx.agent_id))
+                        .await
+                    {
+                        knowledge.extend(chunks.into_iter().take(k).map(|chunk| {
+                            KnowledgeSnippet {
+                                identity: chunk
+                                    .doc_id
+                                    .clone()
+                                    .or(chunk.id.clone())
+                                    .unwrap_or_else(|| "unknown".to_owned()),
+                                title: chunk
+                                    .title
+                                    .unwrap_or_else(|| "Gateway knowledge".to_owned()),
+                                text: compact_text(
+                                    chunk.text.as_deref().unwrap_or(""),
+                                    KNOWLEDGE_SEGMENT_CHARS,
+                                ),
+                                origin: format!("gateway:{}", target.profile),
+                                authority: "gateway".to_owned(),
+                                lifecycle: chunk.freshness.unwrap_or_else(|| "current".to_owned()),
+                                trust: if chunk.accepted_version_id.is_some() {
+                                    "accepted"
+                                } else {
+                                    "unverified"
+                                }
+                                .to_owned(),
+                                read_command: format!(
+                                    "agent-tools docs get {}",
+                                    chunk
+                                        .doc_id
+                                        .or(chunk.id)
+                                        .unwrap_or_else(|| "<id>".to_owned())
+                                ),
+                            }
+                        }));
+                    }
+                }
+            }
+            (p, t, knowledge)
+        })
+        .await
+        .unwrap_or_default()
     });
+    knowledge.extend(gateway_knowledge);
+    knowledge.sort_by(|left, right| {
+        left.origin
+            .cmp(&right.origin)
+            .then_with(|| left.identity.cmp(&right.identity))
+    });
+    knowledge
+        .dedup_by(|left, right| left.identity == right.identity && left.origin == right.origin);
+    knowledge.truncate(k);
 
     let patterns: Vec<_> = patterns.into_iter().take(k).collect();
 
@@ -287,7 +496,7 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
     scored_tasks.sort_by_key(|b| std::cmp::Reverse(b.0));
     let top_tasks: Vec<_> = scored_tasks.into_iter().take(3).map(|(_, t)| t).collect();
 
-    if patterns.is_empty() && top_tasks.is_empty() {
+    if patterns.is_empty() && top_tasks.is_empty() && knowledge.is_empty() {
         return Ok(());
     }
 
@@ -314,6 +523,10 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
             lines.push(format!("  agent-tools tasks get {}", t.id));
         }
         sections.push(lines.join("\n"));
+    }
+
+    if !knowledge.is_empty() {
+        sections.push(render_knowledge_section(&knowledge));
     }
 
     let additional_context = sections.join("\n\n");
@@ -362,6 +575,36 @@ mod tests {
             Some(v) => std::env::set_var("AGENT_TOOLS_HOOK_LIMIT", v),
             None => std::env::remove_var("AGENT_TOOLS_HOOK_LIMIT"),
         }
+    }
+
+    #[test]
+    fn knowledge_rendering_is_deterministic_labelled_and_bounded() {
+        let snippets = vec![KnowledgeSnippet {
+            identity: "okf://fixture/runbook".to_owned(),
+            title: "Recovery".to_owned(),
+            text: "x".repeat(5_000),
+            origin: "repository:.agents/knowledge".to_owned(),
+            authority: "repository".to_owned(),
+            lifecycle: "draft stale_after=2020-01-01".to_owned(),
+            trust: "unverified".to_owned(),
+            read_command: "agent-tools get okf://fixture/runbook".to_owned(),
+        }];
+        let first = render_knowledge_section(&snippets);
+        let second = render_knowledge_section(&snippets);
+        assert_eq!(first, second);
+        assert!(first.len() <= KNOWLEDGE_CONTEXT_CHARS);
+        assert!(first.contains("authority=repository"));
+        assert!(first.contains("lifecycle=draft stale_after=2020-01-01"));
+        assert!(first.contains("trust=unverified"));
+        assert!(first.contains("read: agent-tools get"));
+    }
+
+    #[test]
+    fn compact_text_never_includes_unbounded_hostile_input() {
+        let hostile = "<script>run()</script> ".repeat(10_000);
+        let compact = compact_text(&hostile, 80);
+        assert_eq!(compact.chars().count(), 80);
+        assert!(compact.ends_with('…'));
     }
 
     // -- event mapping -------------------------------------------------------

@@ -1,0 +1,198 @@
+spec_version: 1
+source_doc: ../knowledge-graph-okf.md
+generated_at: 2026-08-15T14:09:51Z
+generated_from_revision: 7201491
+metadata:
+  title: "Unified Project Knowledge Graph And OKF Integration"
+  scope: "Unify agent-tools resource, content, symbol, relationship, and gateway knowledge storage; integrate OKF as a lossless interchange contract; validate the complete local and federated workflow."
+phases:
+  - id: phase-0
+    name: "Phase 0 - Conformance And Storage Foundation"
+    description: "Lock executable expectations and establish the versioned shared resource model."
+    tasks:
+      - id: T001
+        team: qa
+        title: "Create unified graph and OKF conformance matrix and fixtures"
+        depends_on: []
+        spec_file: qa/T001-conformance.md
+        acceptance_criteria:
+          - "A checked-in matrix covers every end-to-end scenario in the source specification with stable row IDs and automated, platform, or explicitly deferred status."
+          - "Fixtures include multi-language code, Markdown, OKF 0.2, OKF 0.1 compatibility, malformed and hostile inputs, and multiple simulated gateways."
+          - "Tests can be added incrementally without weakening or duplicating the canonical scenario inventory."
+        touch_surface:
+          - docs/knowledge-graph-okf-conformance.md
+          - crates/agent-cli/tests/knowledge_graph_conformance.rs
+          - crates/agent-cli/tests/fixtures/knowledge_graph/
+        status: todo
+      - id: T002
+        team: backend
+        title: "Implement versioned unified project resource database and migrations"
+        depends_on: [T001]
+        spec_file: architecture/T002-resource-database.md
+        acceptance_criteria:
+          - "The project index implements resources, immutable versions, content segments, generic edges, tags, provenance, verification, aliases, and specialized file/symbol tables with schema versioning."
+          - "Canonical URI, authority, origin, uniqueness, producer ownership, and transaction contracts match the source specification."
+          - "Migrations are transactional, restartable, tested from old file/symbol schemas, and preserve or rebuild existing behavior without creating an OKF-specific database."
+        touch_surface:
+          - crates/agent-core/
+          - crates/agent-search/
+          - crates/agent-symbols/
+          - Cargo.toml
+        status: todo
+  - id: phase-1
+    name: "Phase 1 - Code Structure Graph"
+    description: "Make Tree-sitter definitions and relationships first-class producers for the shared graph."
+    tasks:
+      - id: T003
+        team: backend
+        title: "Port and validate Tree-sitter relationship queries across supported languages"
+        depends_on: [T001]
+        spec_file: backend/T003-relationship-queries.md
+        acceptance_criteria:
+          - "Calls, imports, inheritance, and implements queries are assessed and implemented for C/C++, Rust, Python, TypeScript/JavaScript, C#, and Go."
+          - "Fixtures identify extracted, unsupported, and language-specific ambiguous forms with source spans."
+          - "Reusable query sources include required attribution and match the repository's Tree-sitter grammar versions."
+        touch_surface:
+          - crates/agent-symbols/src/languages.rs
+          - crates/agent-symbols/src/parser.rs
+          - crates/agent-symbols/tests/
+        status: todo
+      - id: T004
+        team: backend
+        title: "Persist Tree-sitter resources and generic producer-owned edges incrementally"
+        depends_on: [T002, T003]
+        spec_file: backend/T004-tree-sitter-graph.md
+        acceptance_criteria:
+          - "File and symbol resources use canonical shared identities and relationship extraction writes typed generic edges with provenance and source spans."
+          - "Incremental re-indexing transactionally replaces only rows owned by the changed producer/source version and leaves unrelated edges intact."
+          - "Existing symbol and file query behavior remains compatible through the migration."
+        touch_surface:
+          - crates/agent-symbols/
+          - crates/agent-search/
+          - crates/agent-cli/src/main.rs
+        status: todo
+      - id: T005
+        team: backend
+        title: "Implement deterministic cross-file resolution and code graph queries"
+        depends_on: [T004]
+        spec_file: backend/T005-resolution.md
+        acceptance_criteria:
+          - "Cross-file name and module resolution links resolvable call/import/inheritance/implements edges without discarding original references."
+          - "Unresolved and ambiguous relationships remain queryable with deterministic candidates and confidence."
+          - "Callers, callees, imports, implementors, and bounded graph traversal are covered by CLI-level tests."
+        touch_surface:
+          - crates/agent-symbols/
+          - crates/agent-cli/src/main.rs
+          - crates/agent-mcp/
+        status: todo
+  - id: phase-2
+    name: "Phase 2 - OKF And Markdown Knowledge"
+    description: "Add a lossless OKF codec and feed authored knowledge into the shared content and graph model."
+    tasks:
+      - id: T006
+        team: backend
+        title: "Implement lossless OKF 0.2 codec, validation, and deterministic export"
+        depends_on: [T001, T002]
+        spec_file: backend/T006-okf-codec.md
+        acceptance_criteria:
+          - "OKF 0.2 bundles parse and validate permissively, preserving unknown types/fields, raw frontmatter, path IDs, links, provenance, verification, lifecycle, and Markdown bodies."
+          - "OKF 0.1 timestamp and citation fallbacks normalize with diagnostics; unsafe paths and invalid required structures fail safely."
+          - "Import/export/re-import is graph-equivalent and deterministic, and Attested Computation is retained but never executed."
+        touch_surface:
+          - crates/agent-core/
+          - crates/agent-fs/
+          - crates/agent-cli/src/main.rs
+          - crates/agent-cli/tests/fixtures/knowledge_graph/okf/
+        status: todo
+      - id: T007
+        team: backend
+        title: "Index Markdown and OKF concepts into shared versions, segments, and edges"
+        depends_on: [T002, T006]
+        spec_file: backend/T007-knowledge-indexing.md
+        acceptance_criteria:
+          - "Markdown and OKF producers populate resources, versions, existing full-text segments, tags, provenance, verification, and typed/unresolved edges without duplicating the text corpus."
+          - "Heading segmentation and link extraction are fence-aware, source-spanned, incremental, and bounded."
+          - "Repository-authoritative content and derived index state are distinguished and rebuildable."
+        touch_surface:
+          - crates/agent-fs/src/markdown.rs
+          - crates/agent-search/
+          - crates/agent-core/
+        status: todo
+  - id: phase-3
+    name: "Phase 3 - Unified Consumers And Federation"
+    description: "Expose graph-aware local and gateway knowledge through CLI, MCP, and prompt hooks."
+    tasks:
+      - id: T008
+        team: backend
+        title: "Add unified full-text and graph retrieval to CLI and MCP"
+        depends_on: [T005, T007]
+        spec_file: backend/T008-retrieval.md
+        acceptance_criteria:
+          - "Search can return file, symbol, and knowledge resources from the shared segment index with namespace, kind, status, origin, path, language, and relation filters."
+          - "Bounded graph expansion and get/graph/refs operations report canonical identity, version, authority, origin, lifecycle, trust, and unresolved relationships."
+          - "CLI and MCP behavior is deterministic, bounded, compatible with existing search commands, and covered by equivalent tests."
+        touch_surface:
+          - crates/agent-search/
+          - crates/agent-cli/
+          - crates/agent-mcp/
+        status: todo
+      - id: T009
+        team: backend
+        title: "Implement idempotent OKF gateway projection and federated retrieval"
+        depends_on: [T006, T008]
+        spec_file: backend/T009-gateway-federation.md
+        acceptance_criteria:
+          - "OKF concepts project one-way into gateway Documentation with source_ref identity, source_format, structured lossless content, links, hashes, and dry-run support."
+          - "Reads merge local, default-gateway, and repository-configured additional gateways while preserving authorization, origin, authority, and partial failures."
+          - "Exact identities deduplicate and equal hashes group rather than erase distinct authoritative records; mocked multi-gateway tests are deterministic."
+        touch_surface:
+          - crates/agent-cli/src/cmd_docs.rs
+          - crates/agent-cli/src/cmd_gateway_context.rs
+          - crates/agent-core/
+          - crates/agent-sync/
+        status: todo
+      - id: T010
+        team: backend
+        title: "Add bounded graph-aware knowledge retrieval to prompt hooks"
+        depends_on: [T008, T009]
+        spec_file: backend/T010-prompt-hook.md
+        acceptance_criteria:
+          - "The user-prompt-submit hook ranks compact local and authorized gateway segments after task/pattern context and labels source, authority, lifecycle, trust, and deeper-read commands."
+          - "Token limits, graph depth, result counts, failures, and timeouts are bounded and deterministic."
+          - "Unavailable gateways or malformed knowledge never block the user prompt, and hooks never publish, fetch external resources, or execute OKF computations."
+        touch_surface:
+          - crates/agent-cli/src/cmd_hook.rs
+          - crates/agent-cli/tests/
+        status: todo
+  - id: phase-4
+    name: "Phase 4 - End-To-End Closure"
+    description: "Close migration, security, platform, documentation, and release-quality validation."
+    tasks:
+      - id: T011
+        team: qa
+        title: "Complete migration, security, federation, and cross-platform end-to-end validation"
+        depends_on: [T005, T006, T007, T008, T009, T010]
+        spec_file: qa/T011-end-to-end.md
+        acceptance_criteria:
+          - "Every automated row in the T001 matrix passes, including fresh and incremental indexing, migration compatibility, code graph resolution, OKF round-trip, unified retrieval, federation, and prompt-hook behavior."
+          - "Hostile YAML/Markdown/path/resource/computation fixtures prove bounded parsing and no unsafe fetch or execution."
+          - "Workspace fmt, clippy with warnings denied, tests, and build pass; platform-specific rows are automated or closed with exact checked-in evidence."
+        touch_surface:
+          - crates/agent-cli/tests/knowledge_graph_conformance.rs
+          - crates/agent-cli/tests/fixtures/knowledge_graph/
+          - .github/workflows/
+        status: todo
+      - id: T012
+        team: docs
+        title: "Publish unified graph and OKF authoring, query, federation, and recovery documentation"
+        depends_on: [T008, T009, T010, T011]
+        spec_file: docs/T012-user-docs.md
+        acceptance_criteria:
+          - "README and detailed docs cover bundle authoring, validation, indexing, querying, graph traversal, publishing, alternate gateways, trust/lifecycle labels, diagnostics, migration, rebuild, and recovery."
+          - "Examples match tested CLI output and clearly distinguish authoritative sources from rebuildable index state."
+          - "Deferred two-way synchronization and computation execution are explicitly documented."
+        touch_surface:
+          - README.md
+          - docs/knowledge-graph-okf.md
+          - docs/knowledge-graph-okf-conformance.md
+        status: todo

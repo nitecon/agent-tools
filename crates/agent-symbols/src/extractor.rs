@@ -51,6 +51,8 @@ pub struct Symbol {
     pub file: PathBuf,
     pub start_line: usize,
     pub end_line: usize,
+    pub start_byte: usize,
+    pub end_byte: usize,
     pub language: Language,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
@@ -148,12 +150,18 @@ fn make_symbol(
         file: file_path.to_path_buf(),
         start_line,
         end_line,
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
         language,
         parent: parent_name.map(|s| s.to_string()),
     })
 }
 
-fn find_name(node: tree_sitter::Node, source: &str, language: &Language) -> Option<String> {
+pub(crate) fn find_name(
+    node: tree_sitter::Node,
+    source: &str,
+    language: &Language,
+) -> Option<String> {
     let name_kinds = language.name_node_kinds();
 
     // For some node types, look for specific child field names first

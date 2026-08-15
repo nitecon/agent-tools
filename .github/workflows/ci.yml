@@ -13,6 +13,35 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  knowledge-graph:
+    name: knowledge-graph-${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            os: ubuntu-latest
+          - label: macos
+            os: macos-latest
+          - label: windows
+            os: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup component add rustfmt clippy
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: knowledge-graph-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: knowledge-graph-${{ runner.os }}-
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --workspace
+
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest

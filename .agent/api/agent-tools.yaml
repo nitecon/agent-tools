@@ -17,6 +17,21 @@ content:
     patterns, task tracking, and comms. Agents should use this context before
     changing the matching CLI or gateway client contracts.
   workflows:
+    - name: Author and retrieve unified OKF knowledge
+      steps:
+        - Put repository-authored OKF 0.2 Markdown under .agents/knowledge or pass an explicit in-repository bundle path.
+        - Validate with agent-tools okf validate PATH; missing required structures return status 2, while broken links remain warnings.
+        - Run agent-tools index for the conventional bundle or agent-tools okf import PATH for an explicit bundle.
+        - Search with agent-tools search QUERY --type knowledge and optional namespace, kind, status, origin, path, language, and relation filters.
+        - Use agent-tools get RESOURCE, graph, refs, imports, or impls for canonical metadata and bounded typed relationships.
+        - Treat repository and gateway records as authoritative at their source; project.db is a rebuildable projection.
+    - name: Project OKF into Documentation
+      steps:
+        - Preview without gateway access or side effects using agent-tools okf publish PATH --dry-run.
+        - Publish one-way using agent-tools okf publish PATH; canonical OKF identity is source_ref and content hash is version.
+        - Reuse identical source_ref and version pairs; changed hashes are updates.
+        - Preserve raw frontmatter, normalized metadata, body, links, authority, and inert Attested Computation metadata.
+        - Do not synchronize gateway edits back into repository files and never execute OKF computations.
     - name: Discover Documentation placement
       steps:
         - Run agent-tools docs hierarchy --scope all before publishing or reorganizing docs.
@@ -183,6 +198,34 @@ content:
     - Treat categories as routing metadata and labels as looser search tags.
     - Preserve slug stability for published pattern catalogs so repeat publishes update existing records.
   schemas:
+    unified_knowledge_resource:
+      fields:
+        - canonical_uri
+        - namespace
+        - kind
+        - title
+        - description
+        - origin_kind
+        - origin_id
+        - authority
+        - status
+        - stale_after
+        - current_version_id
+        - revision
+        - content_hash
+        - tags
+        - provenance_count
+        - verification_count
+    unified_knowledge_edge:
+      fields:
+        - source_uri
+        - target_uri
+        - unresolved_ref
+        - relation
+        - confidence
+        - extractor
+        - source_path
+        - start_line
     pattern:
       fields:
         - id

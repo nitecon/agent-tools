@@ -1,16 +1,16 @@
+use agent_knowledge::{FileMetadataInput, ProjectIndex};
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
-use rusqlite::{params, Connection, ErrorCode};
+use rusqlite::Connection;
 use serde::Serialize;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
-const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-
+#[cfg(test)]
+use std::time::Duration;
 /// File indexer that maintains a SQLite-backed file index with change detection.
 pub struct FileIndexer {
-    conn: Connection,
-    ephemeral: bool,
+    index: ProjectIndex,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,101 +28,69 @@ pub struct IndexStats {
     pub files_indexed: usize,
     pub files_skipped: usize,
     pub files_errored: usize,
+    pub files_removed: usize,
 }
 
 impl std::fmt::Display for IndexStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Indexed {} files, skipped {} unchanged, {} errors ({} total)",
-            self.files_indexed, self.files_skipped, self.files_errored, self.files_seen
+            "Indexed {} files, skipped {} unchanged, removed {}, {} errors ({} total)",
+            self.files_indexed,
+            self.files_skipped,
+            self.files_removed,
+            self.files_errored,
+            self.files_seen
         )
     }
 }
 
 impl FileIndexer {
     pub fn open(db_path: &Path) -> Result<Self> {
-        Self::open_with_busy_timeout(db_path, SQLITE_BUSY_TIMEOUT)
-    }
-
-    fn open_with_busy_timeout(db_path: &Path, busy_timeout: Duration) -> Result<Self> {
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let conn = Connection::open(db_path)
-            .with_context(|| format!("Failed to open file index at {}", db_path.display()))?;
-        conn.busy_timeout(busy_timeout)
-            .context("Failed to configure file index lock timeout")?;
-
-        Self::init_schema(&conn)
-            .with_context(|| format!("Failed to initialize file index at {}", db_path.display()))?;
-
         Ok(Self {
-            conn,
-            ephemeral: false,
+            index: ProjectIndex::open(db_path)
+                .with_context(|| format!("Failed to open file index at {}", db_path.display()))?,
         })
     }
 
+    #[cfg(test)]
     fn open_ephemeral() -> Result<Self> {
-        let conn = Connection::open_in_memory().context("Failed to open in-memory file index")?;
-        Self::init_schema(&conn)?;
         Ok(Self {
-            conn,
-            ephemeral: true,
+            index: ProjectIndex::open_ephemeral()?,
         })
-    }
-
-    fn init_schema(conn: &Connection) -> Result<()> {
-        conn.execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-
-            CREATE TABLE IF NOT EXISTS files (
-                id INTEGER PRIMARY KEY,
-                path TEXT UNIQUE NOT NULL,
-                extension TEXT NOT NULL DEFAULT '',
-                size INTEGER NOT NULL DEFAULT 0,
-                mtime_secs INTEGER NOT NULL,
-                content_hash TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
-            CREATE INDEX IF NOT EXISTS idx_files_ext ON files(extension);
-            CREATE INDEX IF NOT EXISTS idx_files_size ON files(size);
-            CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime_secs);
-            ",
-        )?;
-        Ok(())
     }
 
     /// Open the file index in the centralized storage directory for the given project.
     pub fn open_for_project(project_root: &Path) -> Result<Self> {
-        let db_path = agent_core::project_data_dir(project_root).join("files.db");
-        Self::open_persistent_or_ephemeral(&db_path, SQLITE_BUSY_TIMEOUT)
+        Ok(Self {
+            index: ProjectIndex::open_for_project(project_root)?,
+        })
     }
 
     pub fn is_ephemeral(&self) -> bool {
-        self.ephemeral
+        self.index.is_ephemeral()
     }
 
+    #[cfg(test)]
     fn open_persistent_or_ephemeral(db_path: &Path, busy_timeout: Duration) -> Result<Self> {
-        match Self::open_with_busy_timeout(db_path, busy_timeout) {
-            Ok(indexer) => Ok(indexer),
-            Err(err) if is_sqlite_lock_error(&err) => Err(err.context(format!(
-                "Persistent file index at {} is busy or locked after waiting {}ms; \
-                 another agent-tools process may be indexing this project",
-                db_path.display(),
-                busy_timeout.as_millis()
-            ))),
-            Err(_) => Self::open_ephemeral(),
-        }
+        Ok(Self {
+            index: ProjectIndex::open_persistent_or_ephemeral(db_path, busy_timeout)?,
+        })
     }
 
     /// Build or incrementally update the file index.
     pub fn build(&self, root: &Path, compute_hashes: bool) -> Result<IndexStats> {
         let mut stats = IndexStats::default();
+        let project_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let project_id = agent_core::project_ident(&project_root);
+        let scan_id = format!(
+            "{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
 
         let walker = WalkBuilder::new(root)
             .hidden(true)
@@ -159,7 +127,7 @@ impl FileIndexer {
             let mtime_secs = duration.as_secs() as i64;
             let size = metadata.len();
 
-            let path_str = path.to_string_lossy();
+            let path_str = relative_path_string(&project_root, path)?;
             let extension = path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -168,18 +136,14 @@ impl FileIndexer {
 
             // Check if already indexed and unchanged
             let needs_update: bool = {
-                let mut stmt = self
-                    .conn
-                    .prepare_cached("SELECT mtime_secs, size FROM files WHERE path = ?1")?;
-                match stmt.query_row(params![path_str.as_ref()], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-                }) {
-                    Ok((s, sz)) => s != mtime_secs || sz != size as i64,
-                    Err(_) => true,
+                match self.index.file_state(&path_str)? {
+                    Some(state) => state.mtime_secs != mtime_secs || state.size != size,
+                    None => true,
                 }
             };
 
             if !needs_update {
+                self.index.mark_file_seen(&path_str, &scan_id)?;
                 stats.files_skipped += 1;
                 continue;
             }
@@ -193,51 +157,47 @@ impl FileIndexer {
                 None
             };
 
-            self.conn.execute(
-                "INSERT INTO files (path, extension, size, mtime_secs, content_hash)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(path) DO UPDATE SET
-                   extension = ?2, size = ?3, mtime_secs = ?4, content_hash = ?5",
-                params![
-                    path_str.as_ref(),
-                    extension,
-                    size as i64,
-                    mtime_secs,
-                    content_hash,
-                ],
-            )?;
+            self.index.upsert_file_metadata(&FileMetadataInput {
+                project_id: &project_id,
+                project_root: &project_root,
+                path,
+                language: None,
+                extension: &extension,
+                size,
+                mtime_secs,
+                mtime_nanos: duration.subsec_nanos() as i64,
+                content_hash: content_hash.as_deref(),
+                scan_id: Some(&scan_id),
+            })?;
 
             stats.files_indexed += 1;
         }
 
+        stats.files_removed = self.index.complete_file_scan(&project_id, &scan_id)?;
         Ok(stats)
     }
 
     /// Get the underlying connection for queries.
     pub fn connection(&self) -> &Connection {
-        &self.conn
+        self.index.connection()
     }
 
     /// Get total file count.
     pub fn file_count(&self) -> Result<usize> {
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
+        let count: i64 =
+            self.index
+                .connection()
+                .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 }
 
-fn is_sqlite_lock_error(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        cause
-            .downcast_ref::<rusqlite::Error>()
-            .is_some_and(|sqlite_err| {
-                matches!(
-                    sqlite_err.sqlite_error_code(),
-                    Some(ErrorCode::DatabaseBusy) | Some(ErrorCode::DatabaseLocked)
-                )
-            })
-    })
+fn relative_path_string(root: &Path, path: &Path) -> Result<String> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let relative = path
+        .strip_prefix(root)
+        .with_context(|| format!("{} is outside {}", path.display(), root.display()))?;
+    Ok(relative.to_string_lossy().replace('\\', "/"))
 }
 
 #[cfg(test)]
@@ -281,6 +241,26 @@ mod tests {
         let stats2 = indexer.build(root, false).unwrap();
         assert_eq!(stats2.files_indexed, 0);
         assert_eq!(stats2.files_skipped, 1);
+    }
+
+    #[test]
+    fn test_deleted_files_are_pruned_after_complete_scan() {
+        let project_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let root = project_dir.path();
+        let first = root.join("first.txt");
+        let second = root.join("second.txt");
+        std::fs::write(&first, "first").unwrap();
+        std::fs::write(&second, "second").unwrap();
+
+        let indexer = FileIndexer::open(&db_dir.path().join("project.db")).unwrap();
+        indexer.build(root, true).unwrap();
+        assert_eq!(indexer.file_count().unwrap(), 2);
+
+        std::fs::remove_file(second).unwrap();
+        let stats = indexer.build(root, true).unwrap();
+        assert_eq!(stats.files_removed, 1);
+        assert_eq!(indexer.file_count().unwrap(), 1);
     }
 
     #[test]

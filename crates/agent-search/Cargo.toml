@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 agent-core = { path = "../agent-core" }
+agent-knowledge = { path = "../agent-knowledge" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

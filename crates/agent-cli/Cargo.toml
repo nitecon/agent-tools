@@ -12,6 +12,7 @@ agent-core = { path = "../agent-core" }
 agent-fs = { path = "../agent-fs" }
 agent-symbols = { path = "../agent-symbols" }
 agent-search = { path = "../agent-search" }
+agent-knowledge = { path = "../agent-knowledge" }
 agent-comms = { path = "../agent-comms" }
 agent-updater = { path = "../agent-updater" }
 clap = { workspace = true }
@@ -26,4 +27,5 @@ gethostname = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+blake3 = { workspace = true }
 toml_edit = "0.22"

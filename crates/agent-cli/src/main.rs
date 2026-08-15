@@ -3,6 +3,7 @@ mod cmd_docs;
 mod cmd_docs_artifacts;
 mod cmd_gateway_context;
 mod cmd_hook;
+mod cmd_okf;
 mod cmd_patterns;
 mod cmd_read;
 mod cmd_setup_hooks;
@@ -17,7 +18,7 @@ mod memory_reminder;
 mod nudge;
 mod settings_json;
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
@@ -98,6 +99,78 @@ enum Commands {
         #[arg(short, long)]
         file: Option<String>,
         /// Maximum results (default: 20)
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+        /// Resource namespace filter for knowledge/all search
+        #[arg(long)]
+        namespace: Option<String>,
+        /// Resource kind filter for knowledge/all search
+        #[arg(long)]
+        kind: Option<String>,
+        /// Lifecycle status filter for knowledge/all search
+        #[arg(long)]
+        status: Option<String>,
+        /// Origin identifier or origin kind filter
+        #[arg(long)]
+        origin: Option<String>,
+        /// Programming language filter
+        #[arg(long)]
+        language: Option<String>,
+        /// Require a relationship type
+        #[arg(long)]
+        relation: Option<String>,
+    },
+
+    /// Get a resource and its current version, authority, lifecycle, and trust metadata
+    Get {
+        /// Resource URI, title, or external identifier
+        resource: String,
+    },
+
+    /// Validate, import, or deterministically export an OKF bundle
+    Okf {
+        #[command(subcommand)]
+        command: OkfCommands,
+    },
+
+    /// Traverse the project knowledge graph from a resource URI, title, or symbol
+    Graph {
+        /// Resource URI, title, or external identifier
+        resource: String,
+        /// Relationship type to follow (calls, imports, inherits, implements, ...)
+        #[arg(short, long)]
+        relation: Option<String>,
+        /// Traversal direction: in, out, or both
+        #[arg(short, long, default_value = "both")]
+        direction: String,
+        /// Maximum traversal depth
+        #[arg(short = 'D', long, default_value = "1")]
+        depth: usize,
+        /// Maximum edges to return
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
+
+    /// Show callers and callees for a symbol
+    Refs {
+        /// Symbol URI or name
+        symbol: String,
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
+
+    /// Show imports to and from a file or symbol
+    Imports {
+        /// Resource URI, path, title, or symbol
+        resource: String,
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
+
+    /// Show inheritance and implementation relationships
+    Impls {
+        /// Symbol URI or name
+        symbol: String,
         #[arg(short, long, default_value = "20")]
         limit: usize,
     },
@@ -367,6 +440,31 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+enum OkfCommands {
+    /// Validate and summarize a bundle without changing the index
+    Validate { path: PathBuf },
+    /// Import a bundle into the shared project index
+    Import { path: PathBuf },
+    /// Normalize a bundle into a deterministic destination directory
+    Export {
+        path: PathBuf,
+        #[arg(short, long)]
+        destination: PathBuf,
+    },
+    /// Project a bundle one-way into gateway Documentation
+    Publish {
+        path: PathBuf,
+        /// Print deterministic publish decisions without contacting a gateway
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        agent_id: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum SetupCommands {
     /// Configure the default gateway or project-based upstream gateways
     Gateway {
@@ -513,7 +611,44 @@ fn main_inner() -> Result<()> {
             search_type,
             file,
             limit,
-        } => cmd_search(&query, &search_type, file, limit),
+            namespace,
+            kind,
+            status,
+            origin,
+            language,
+            relation,
+        } => cmd_search(
+            &query,
+            &search_type,
+            file,
+            limit,
+            namespace,
+            kind,
+            status,
+            origin,
+            language,
+            relation,
+        ),
+
+        Commands::Get { resource } => cmd_get(&resource),
+
+        Commands::Okf { command } => cmd_okf(command),
+
+        Commands::Graph {
+            resource,
+            relation,
+            direction,
+            depth,
+            limit,
+        } => cmd_graph(&resource, relation.as_deref(), &direction, depth, limit),
+
+        Commands::Refs { symbol, limit } => cmd_graph(&symbol, Some("calls"), "both", 1, limit),
+
+        Commands::Imports { resource, limit } => {
+            cmd_graph(&resource, Some("imports"), "both", 1, limit)
+        }
+
+        Commands::Impls { symbol, limit } => cmd_impls(&symbol, limit),
 
         Commands::Index { path, rebuild } => cmd_index(path, rebuild),
 
@@ -790,7 +925,7 @@ fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result
     } else {
         // Search index
         let root = std::env::current_dir()?;
-        let index = agent_symbols::SymbolIndex::open_for_project(&root)?;
+        let mut index = agent_symbols::SymbolIndex::open_for_project(&root)?;
         if index.is_ephemeral() {
             index.build(&root)?;
         }
@@ -855,12 +990,24 @@ fn cmd_symbols(file: &Path, kind: Option<String>) -> Result<()> {
 }
 
 /// Search the project-wide index by symbol name or file pattern.
-fn cmd_search(query: &str, search_type: &str, file: Option<String>, limit: usize) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn cmd_search(
+    query: &str,
+    search_type: &str,
+    file: Option<String>,
+    limit: usize,
+    namespace: Option<String>,
+    kind: Option<String>,
+    status: Option<String>,
+    origin: Option<String>,
+    language: Option<String>,
+    relation: Option<String>,
+) -> Result<()> {
     let root = std::env::current_dir()?;
 
     match search_type {
         "symbol" => {
-            let index = agent_symbols::SymbolIndex::open_for_project(&root)?;
+            let mut index = agent_symbols::SymbolIndex::open_for_project(&root)?;
             if index.is_ephemeral() {
                 index.build(&root)?;
             }
@@ -899,13 +1046,272 @@ fn cmd_search(query: &str, search_type: &str, file: Option<String>, limit: usize
                 println!("{}", r.path);
             }
         }
+        "knowledge" | "all" => {
+            let project_id = agent_core::project_ident(&root);
+            let index = agent_knowledge::ProjectIndex::open_for_project(&root)?;
+            let filters = agent_knowledge::SearchFilter {
+                namespace: namespace.as_deref(),
+                kind: kind.as_deref(),
+                status: status.as_deref(),
+                origin: origin.as_deref(),
+                path: file.as_deref(),
+                language: language.as_deref(),
+                relation: relation.as_deref(),
+            };
+            let results = index.search_segments_filtered(&project_id, query, &filters, limit)?;
+            for result in &results {
+                println!(
+                    "{:<10} {:<18} {} [{}:{}] {}",
+                    result.resource.namespace,
+                    result.resource.kind,
+                    result.resource.canonical_uri,
+                    result.resource.status,
+                    result.resource.authority,
+                    result.heading_path.as_deref().unwrap_or("")
+                );
+            }
+            if search_type == "all" && namespace.is_none() {
+                let mut symbols = agent_symbols::SymbolIndex::open_for_project(&root)?;
+                if symbols.is_ephemeral() {
+                    symbols.build(&root)?;
+                }
+                for result in symbols.search(query, kind.as_deref(), file.as_deref(), limit)? {
+                    println!(
+                        "symbol     {:<18} {}:{} {}",
+                        result.kind,
+                        result.file.display(),
+                        result.start_line,
+                        result.name
+                    );
+                }
+                let files = agent_search::indexer::FileIndexer::open_for_project(&root)?;
+                for result in
+                    agent_search::query::find_files(&files, Some(query), None, None, None, limit)?
+                {
+                    println!("file       file               {}", result.path);
+                }
+            }
+            if results.is_empty() && search_type == "knowledge" {
+                eprintln!("No knowledge resources found matching '{query}'");
+            }
+        }
         _ => {
-            eprintln!("Unknown search type: {search_type}. Use 'symbol' or 'file'.");
+            eprintln!(
+                "Unknown search type: {search_type}. Use 'symbol', 'file', 'knowledge', or 'all'."
+            );
             std::process::exit(1);
         }
     }
     maybe_print_api_context_hint(query);
     Ok(())
+}
+
+fn cmd_get(query: &str) -> Result<()> {
+    let root = std::env::current_dir()?;
+    let index = agent_knowledge::ProjectIndex::open_for_project(&root)?;
+    let project_id = agent_core::project_ident(&root);
+    let matches = index.find_resources(&project_id, query, None, 20)?;
+    let resource = match matches.as_slice() {
+        [] => bail!("No resource found matching '{query}'"),
+        [resource] => resource,
+        resources => {
+            let candidates = resources
+                .iter()
+                .map(|resource| format!("  {} ({})", resource.canonical_uri, resource.kind))
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!("Resource '{query}' is ambiguous:\n{candidates}")
+        }
+    };
+    let detail = index
+        .resource_detail(resource.id)?
+        .context("resolved resource disappeared")?;
+    let relationships = index.traverse(resource.id, None, "both", 1, 100)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "resource": detail,
+            "relationships": relationships,
+        }))?
+    );
+    Ok(())
+}
+
+fn cmd_okf(command: OkfCommands) -> Result<()> {
+    let root = std::env::current_dir()?;
+    match command {
+        OkfCommands::Validate { path } => {
+            let bundle = match agent_knowledge::okf::parse_bundle(
+                &path,
+                agent_knowledge::okf::OkfLimits::default(),
+            ) {
+                Ok(bundle) => bundle,
+                Err(error) => {
+                    eprintln!("invalid OKF bundle: {error:#}");
+                    std::process::exit(2);
+                }
+            };
+            println!(
+                "OKF {}: {} concepts, {} diagnostics",
+                bundle.version,
+                bundle.concepts.len(),
+                bundle.diagnostics.len()
+            );
+            for diagnostic in bundle.diagnostics {
+                println!(
+                    "{} {} {}: {}",
+                    diagnostic.level, diagnostic.code, diagnostic.path, diagnostic.message
+                );
+            }
+        }
+        OkfCommands::Import { path } => {
+            let project_id = agent_core::project_ident(&root);
+            let mut index = agent_knowledge::ProjectIndex::open_for_project(&root)?;
+            let stats = agent_knowledge::knowledge::index_okf_bundle(
+                &mut index,
+                &project_id,
+                &root,
+                &path,
+                agent_knowledge::okf::OkfLimits::default(),
+            )?;
+            println!(
+                "Imported {} concepts ({} changed, {} unchanged, {} removed), {} segments, {} edges, {} unresolved, {} diagnostics",
+                stats.resources_seen,
+                stats.resources_indexed,
+                stats.resources_unchanged,
+                stats.resources_removed,
+                stats.segments_indexed,
+                stats.edges_indexed,
+                stats.unresolved_edges,
+                stats.diagnostics
+            );
+        }
+        OkfCommands::Export { path, destination } => {
+            let bundle = agent_knowledge::okf::parse_bundle(
+                &path,
+                agent_knowledge::okf::OkfLimits::default(),
+            )?;
+            agent_knowledge::okf::export_bundle(&bundle, &destination)?;
+            println!(
+                "Exported {} concepts to {}",
+                bundle.concepts.len(),
+                destination.display()
+            );
+        }
+        OkfCommands::Publish {
+            path,
+            dry_run,
+            project,
+            agent_id,
+        } => return cmd_okf::publish(path, dry_run, project, agent_id),
+    }
+    Ok(())
+}
+
+fn open_graph_index(root: &Path) -> Result<agent_symbols::SymbolIndex> {
+    let mut index = agent_symbols::SymbolIndex::open_for_project(root)?;
+    let (files, symbols) = index.stats()?;
+    if index.is_ephemeral() || (files == 0 && symbols == 0) {
+        index.build(root)?;
+    }
+    Ok(index)
+}
+
+fn resolve_graph_resource(
+    index: &agent_symbols::SymbolIndex,
+    root: &Path,
+    query: &str,
+) -> Result<agent_symbols::ResourceMatch> {
+    let matches = index.find_graph_resources(root, query, None, 20)?;
+    match matches.as_slice() {
+        [] => bail!("No graph resource found matching '{query}'. Run `agent-tools index` first."),
+        [resource] => Ok(resource.clone()),
+        resources => {
+            let candidates = resources
+                .iter()
+                .map(|resource| format!("  {} ({})", resource.canonical_uri, resource.kind))
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!("Graph resource '{query}' is ambiguous:\n{candidates}")
+        }
+    }
+}
+
+fn cmd_graph(
+    query: &str,
+    relation: Option<&str>,
+    direction: &str,
+    depth: usize,
+    limit: usize,
+) -> Result<()> {
+    let root = std::env::current_dir()?;
+    let index = open_graph_index(&root)?;
+    let resource = resolve_graph_resource(&index, &root, query)?;
+    let edges = index.traverse_graph(resource.id, relation, direction, depth, limit)?;
+    if edges.is_empty() {
+        println!("No matching relationships from {}", resource.canonical_uri);
+        return Ok(());
+    }
+    render_graph_edges(&edges);
+    Ok(())
+}
+
+fn cmd_impls(query: &str, limit: usize) -> Result<()> {
+    let root = std::env::current_dir()?;
+    let index = open_graph_index(&root)?;
+    let resource = resolve_graph_resource(&index, &root, query)?;
+    let mut edges = index.traverse_graph(resource.id, Some("implements"), "both", 1, limit)?;
+    if edges.len() < limit {
+        edges.extend(index.traverse_graph(
+            resource.id,
+            Some("inherits"),
+            "both",
+            1,
+            limit - edges.len(),
+        )?);
+    }
+    edges.sort_by(|left, right| {
+        left.relation
+            .cmp(&right.relation)
+            .then_with(|| left.source_uri.cmp(&right.source_uri))
+            .then_with(|| left.target_uri.cmp(&right.target_uri))
+    });
+    if edges.is_empty() {
+        println!(
+            "No inheritance or implementation relationships from {}",
+            resource.canonical_uri
+        );
+    } else {
+        render_graph_edges(&edges);
+    }
+    Ok(())
+}
+
+fn render_graph_edges(edges: &[agent_symbols::TraversedEdge]) {
+    for edge in edges {
+        let target = edge
+            .target_uri
+            .as_deref()
+            .or(edge.unresolved_ref.as_deref())
+            .unwrap_or("?");
+        let unresolved = if edge.target_uri.is_none() { "?" } else { "" };
+        let location = match (&edge.source_path, edge.start_line) {
+            (Some(path), Some(line)) => format!(" {path}:{line}"),
+            (Some(path), None) => format!(" {path}"),
+            _ => String::new(),
+        };
+        println!(
+            "d{} {} {} {} -> {}{} [{}]{}",
+            edge.depth,
+            edge.direction,
+            edge.relation,
+            edge.source_uri,
+            unresolved,
+            target,
+            edge.confidence,
+            location
+        );
+    }
 }
 
 fn maybe_print_api_context_hint(query: &str) {
@@ -969,9 +1375,30 @@ fn cmd_index(path: Option<PathBuf>, rebuild: bool) -> Result<()> {
 
     // Build symbol index
     print!("Indexing symbols... ");
-    let symbol_index = agent_symbols::SymbolIndex::open_for_project(&root)?;
+    let mut symbol_index = agent_symbols::SymbolIndex::open_for_project(&root)?;
     let symbol_stats = symbol_index.build(&root)?;
     println!("{symbol_stats}");
+
+    let conventional_okf = root.join(".agents/knowledge");
+    if conventional_okf.is_dir() {
+        print!("Indexing OKF knowledge... ");
+        let project_id = agent_core::project_ident(&root);
+        let mut knowledge_index = agent_knowledge::ProjectIndex::open_for_project(&root)?;
+        let stats = agent_knowledge::knowledge::index_okf_bundle(
+            &mut knowledge_index,
+            &project_id,
+            &root,
+            &conventional_okf,
+            agent_knowledge::okf::OkfLimits::default(),
+        )?;
+        println!(
+            "{} concepts, {} segments, {} edges ({} unresolved)",
+            stats.resources_seen,
+            stats.segments_indexed,
+            stats.edges_indexed,
+            stats.unresolved_edges
+        );
+    }
 
     let (file_count, symbol_count) = symbol_index.stats()?;
     println!("\nTotal: {file_count} files, {symbol_count} symbols");

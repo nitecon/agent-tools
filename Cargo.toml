@@ -9,6 +9,7 @@ members = [
     "crates/agent-comms",
     "crates/agent-updater",
     "crates/agent-sync",
+    "crates/agent-knowledge",
 ]
 resolver = "2"
 
@@ -40,6 +41,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rpassword = "7"
 time = { version = "0.3", default-features = false, features = ["parsing", "formatting"] }
 gethostname = "0.5"
+streaming-iterator = "0.1"
 
 [profile.release]
 lto = true
