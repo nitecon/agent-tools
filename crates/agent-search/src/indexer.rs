@@ -92,7 +92,7 @@ impl FileIndexer {
                 .as_nanos()
         );
 
-        let walker = WalkBuilder::new(root)
+        let walker = WalkBuilder::new(&project_root)
             .hidden(true)
             .git_ignore(true)
             .git_global(false)
@@ -274,6 +274,24 @@ mod tests {
         assert!(indexer.is_ephemeral());
 
         let stats = indexer.build(root, false).unwrap();
+        assert_eq!(stats.files_indexed, 1);
+        assert_eq!(indexer.file_count().unwrap(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_build_index_through_symlinked_root() {
+        let project_dir = TempDir::new().unwrap();
+        let link_dir = TempDir::new().unwrap();
+        let root = project_dir.path();
+        let linked_root = link_dir.path().join("project-link");
+
+        std::fs::write(root.join("file.rs"), "fn main() {}").unwrap();
+        std::os::unix::fs::symlink(root, &linked_root).unwrap();
+
+        let indexer = FileIndexer::open_ephemeral().unwrap();
+        let stats = indexer.build(&linked_root, false).unwrap();
+
         assert_eq!(stats.files_indexed, 1);
         assert_eq!(indexer.file_count().unwrap(), 1);
     }
