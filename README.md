@@ -911,8 +911,11 @@ agent-tools setup gateway --remove-upstream prod-sre --credentials-only
 Profile credentials are stored at
 `~/.agentic/agent-tools/gateways/<profile>.conf`. Read commands fan out to the
 default and eligible project upstreams. Results show their gateway when more
-than one source contributes; updates and deletes are sent back to the gateway
-where the object was found. Creates continue to use the default gateway.
+than one source contributes. A task shown as `profile/<uuid>` can be passed
+back to `tasks get`, `claim`, `release`, `done`, `comment`, or `rank` to target
+that gateway explicitly; this is required when the same UUID exists on more
+than one gateway. Bare UUIDs remain supported and resolve in configured
+gateway order. Creates continue to use the default gateway.
 
 3. **Verify the connection** — once configured, the MCP comms tools will connect automatically. Without configuration, they return a helpful error message instead of failing.
 

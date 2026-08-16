@@ -24,6 +24,12 @@ use time::OffsetDateTime;
 type SourcedTaskSummary = (String, TaskSummary);
 type TaskGroup<'a> = (&'a str, &'a str, Vec<&'a SourcedTaskSummary>);
 
+#[derive(Debug, PartialEq, Eq)]
+struct TaskSelector {
+    profile: Option<String>,
+    task_id: String,
+}
+
 #[derive(Subcommand)]
 pub enum TasksCommands {
     /// List tasks on the current project (default: TODO + IN PROGRESS).
@@ -301,7 +307,18 @@ fn require_nonempty_flag(flag: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn require_full_task_id(task_id: &str) -> Result<()> {
+fn parse_task_selector(raw: &str) -> Result<TaskSelector> {
+    let (profile, task_id) = match raw.split_once('/') {
+        Some((profile, task_id)) => {
+            if profile.is_empty() || task_id.contains('/') {
+                anyhow::bail!(
+                    "invalid task selector; use a full UUID or profile/full-UUID from `agent-tools tasks list`"
+                );
+            }
+            (Some(profile.to_string()), task_id)
+        }
+        None => (None, raw),
+    };
     let bytes = task_id.as_bytes();
     let looks_like_uuid = bytes.len() == 36
         && bytes[8] == b'-'
@@ -315,11 +332,14 @@ fn require_full_task_id(task_id: &str) -> Result<()> {
 
     if !looks_like_uuid {
         anyhow::bail!(
-            "short task IDs are no longer supported; run `agent-tools tasks list` and use the full task ID"
+            "short task IDs are no longer supported; run `agent-tools tasks list` and use the full task ID or profile/full-task-ID"
         );
     }
 
-    Ok(())
+    Ok(TaskSelector {
+        profile,
+        task_id: task_id.to_string(),
+    })
 }
 
 // -- list --------------------------------------------------------------------
@@ -413,12 +433,12 @@ fn print_summary_row(t: &TaskSummary, profile: Option<&str>) {
 // -- get ---------------------------------------------------------------------
 
 async fn cmd_get(task_id: String, agent_id: Option<String>) -> Result<()> {
-    require_full_task_id(&task_id)?;
+    let selector = parse_task_selector(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
     print_gateway_warnings(&ctx);
     ensure_all_registered(&ctx).await?;
-    let (target, detail) = find_task(&ctx, &task_id).await?;
+    let (target, detail) = find_task(&ctx, &selector).await?;
 
     if ctx.gateways.len() > 1 {
         println!("gateway:  {}", target.profile);
@@ -616,11 +636,11 @@ async fn cmd_status_transition(
     agent_id: Option<String>,
     verb: &str,
 ) -> Result<()> {
-    require_full_task_id(&task_id)?;
+    let selector = parse_task_selector(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
     ensure_all_registered(&ctx).await?;
-    let (target, _) = find_task(&ctx, &task_id).await?;
+    let (target, _) = find_task(&ctx, &selector).await?;
 
     let patch = UpdateTaskRequest {
         status: Some(new_status),
@@ -629,7 +649,7 @@ async fn cmd_status_transition(
 
     let task: Task = target
         .gateway
-        .update_task(&ctx.ident, &task_id, &patch, Some(&ctx.agent_id))
+        .update_task(&ctx.ident, &selector.task_id, &patch, Some(&ctx.agent_id))
         .await
         .with_context(|| format!("transition task to {new_status}"))?;
 
@@ -659,11 +679,11 @@ async fn cmd_comment(
     author_type: Option<String>,
     agent_id: Option<String>,
 ) -> Result<()> {
-    require_full_task_id(&task_id)?;
+    let selector = parse_task_selector(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
     ensure_all_registered(&ctx).await?;
-    let (target, _) = find_task(&ctx, &task_id).await?;
+    let (target, _) = find_task(&ctx, &selector).await?;
 
     // Default author_type: agent — we always send X-Agent-Id below, so the
     // server-side default would also be `agent`. We pass it explicitly so the
@@ -677,7 +697,7 @@ async fn cmd_comment(
 
     let comment: TaskComment = target
         .gateway
-        .add_task_comment(&ctx.ident, &task_id, &req, Some(&ctx.agent_id))
+        .add_task_comment(&ctx.ident, &selector.task_id, &req, Some(&ctx.agent_id))
         .await
         .context("add comment")?;
 
@@ -691,11 +711,11 @@ async fn cmd_comment(
 // -- rank --------------------------------------------------------------------
 
 async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>) -> Result<()> {
-    require_full_task_id(&task_id)?;
+    let selector = parse_task_selector(&task_id)?;
 
     let ctx = resolve_context(agent_id)?;
     ensure_all_registered(&ctx).await?;
-    let (target, _) = find_task(&ctx, &task_id).await?;
+    let (target, _) = find_task(&ctx, &selector).await?;
 
     let patch = UpdateTaskRequest {
         rank: Some(rank),
@@ -703,7 +723,7 @@ async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>) -> Resul
     };
     let task: Task = target
         .gateway
-        .update_task(&ctx.ident, &task_id, &patch, Some(&ctx.agent_id))
+        .update_task(&ctx.ident, &selector.task_id, &patch, Some(&ctx.agent_id))
         .await
         .context("set rank")?;
 
@@ -713,13 +733,40 @@ async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>) -> Resul
 
 async fn find_task<'a>(
     ctx: &'a GatewayContext,
-    task_id: &str,
+    selector: &TaskSelector,
 ) -> Result<(&'a GatewayTarget, TaskDetail)> {
+    if let Some(profile) = selector.profile.as_deref() {
+        let target = ctx
+            .gateways
+            .iter()
+            .find(|target| target.profile == profile)
+            .with_context(|| {
+                let configured = ctx
+                    .gateways
+                    .iter()
+                    .map(|target| target.profile.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("unknown gateway profile {profile:?}; configured profiles: {configured}")
+            })?;
+        let detail = target
+            .gateway
+            .get_task(&ctx.ident, &selector.task_id, Some(&ctx.agent_id))
+            .await
+            .with_context(|| {
+                format!(
+                    "task {} was not found on gateway profile {profile}",
+                    selector.task_id
+                )
+            })?;
+        return Ok((target, detail));
+    }
+
     let mut errors = Vec::new();
     for target in &ctx.gateways {
         match target
             .gateway
-            .get_task(&ctx.ident, task_id, Some(&ctx.agent_id))
+            .get_task(&ctx.ident, &selector.task_id, Some(&ctx.agent_id))
             .await
         {
             Ok(detail) => return Ok((target, detail)),
@@ -727,7 +774,8 @@ async fn find_task<'a>(
         }
     }
     anyhow::bail!(
-        "task {task_id} was not found on configured gateways ({})",
+        "task {} was not found on configured gateways ({})",
+        selector.task_id,
         errors.join("; ")
     )
 }
@@ -1048,14 +1096,41 @@ mod tests {
     }
 
     #[test]
-    fn require_full_task_id_accepts_uuid() {
-        assert!(require_full_task_id("019dbaf9-2527-7782-9b19-a7a2289bdb4e").is_ok());
+    fn parse_task_selector_accepts_uuid() {
+        assert_eq!(
+            parse_task_selector("019dbaf9-2527-7782-9b19-a7a2289bdb4e").unwrap(),
+            TaskSelector {
+                profile: None,
+                task_id: "019dbaf9-2527-7782-9b19-a7a2289bdb4e".into(),
+            }
+        );
     }
 
     #[test]
-    fn require_full_task_id_rejects_short_prefix() {
-        let err = require_full_task_id("019d").unwrap_err().to_string();
+    fn parse_task_selector_accepts_gateway_qualified_uuid() {
+        assert_eq!(
+            parse_task_selector("legacy-org/019dbaf9-2527-7782-9b19-a7a2289bdb4e").unwrap(),
+            TaskSelector {
+                profile: Some("legacy-org".into()),
+                task_id: "019dbaf9-2527-7782-9b19-a7a2289bdb4e".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_task_selector_rejects_short_prefix() {
+        let err = parse_task_selector("legacy-org/019d")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("short task IDs are no longer supported"));
+    }
+
+    #[test]
+    fn parse_task_selector_rejects_malformed_profile() {
+        let err = parse_task_selector("legacy-org/nested/019dbaf9-2527-7782-9b19-a7a2289bdb4e")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid task selector"));
     }
 
     #[test]
