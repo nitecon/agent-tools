@@ -589,7 +589,7 @@ mod tests {
         fs::create_dir_all(&bundle_root).unwrap();
         fs::write(
             bundle_root.join("a.md"),
-            "---\ntype: Note\ntitle: A\n---\n# A\n\nSee [B](b.md).\n",
+            "---\ntype: Note\ntitle: A\n---\n# A\n\nSee [B](b.md) and [missing](missing.md).\n",
         )
         .unwrap();
         fs::write(
@@ -610,10 +610,9 @@ mod tests {
 
         fs::write(
             bundle_root.join("a.md"),
-            "---\ntype: Note\ntitle: A\n---\n# A\n\nEdited.\n",
+            "---\ntype: Note\ntitle: A\n---\n# A\n\nEdited. See [B](b.md) and [missing](missing.md).\n",
         )
         .unwrap();
-        fs::remove_file(bundle_root.join("b.md")).unwrap();
         let second = index_okf_bundle(
             &mut index,
             "fixture",
@@ -623,10 +622,57 @@ mod tests {
         )
         .unwrap();
         assert_eq!(second.resources_indexed, 1);
-        assert_eq!(second.resources_removed, 1);
+        assert_eq!(second.resources_unchanged, 1);
+
+        let a = index
+            .find_resources("fixture", "A", Some("okf"), 5)
+            .unwrap();
+        assert_eq!(a.len(), 1);
+        let edited_edges = index.edges_from(a[0].id, Some("links_to")).unwrap();
+        assert_eq!(edited_edges.len(), 2, "historical edges must not leak");
+
+        fs::remove_file(bundle_root.join("b.md")).unwrap();
+        let third = index_okf_bundle(
+            &mut index,
+            "fixture",
+            project.path(),
+            &bundle_root,
+            OkfLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(third.resources_unchanged, 1);
+        assert_eq!(third.resources_removed, 1);
         assert!(index
             .find_resources("fixture", "B", Some("okf"), 5)
             .unwrap()
             .is_empty());
+
+        let current_edges = index.edges_from(a[0].id, Some("links_to")).unwrap();
+        assert_eq!(current_edges.len(), 2, "current links appear exactly once");
+        assert!(current_edges
+            .iter()
+            .all(|edge| edge.dst_resource_id.is_none() && edge.confidence == "extracted"));
+        assert_eq!(
+            current_edges
+                .iter()
+                .filter(|edge| edge.dst_ref.as_deref() == Some("b.md"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            current_edges
+                .iter()
+                .filter(|edge| edge.dst_ref.as_deref() == Some("missing.md"))
+                .count(),
+            1
+        );
+
+        let traversed = index
+            .traverse(a[0].id, Some("links_to"), "out", 1, 20)
+            .unwrap();
+        assert_eq!(traversed.len(), 2);
+        assert!(traversed
+            .iter()
+            .all(|edge| edge.target_uri.is_none() && edge.confidence == "extracted"));
     }
 }

@@ -855,7 +855,10 @@ impl ProjectIndex {
                                WHERE ps.resource_id = r.id AND pf.path LIKE ?7))
                AND (?8 IS NULL OR f.language = ?8 OR sy.language = ?8)
                AND (?9 IS NULL OR EXISTS (
-                    SELECT 1 FROM edges e WHERE (e.src_resource_id = r.id OR e.dst_resource_id = r.id)
+                    SELECT 1 FROM edges e
+                    JOIN resources producer ON producer.id = e.source_resource_id
+                    WHERE producer.current_version_id = e.source_version_id
+                    AND (e.src_resource_id = r.id OR e.dst_resource_id = r.id)
                     AND e.relation = ?9))
              ORDER BY bm25(content_segments_fts), r.canonical_uri, s.ordinal
              LIMIT ?10",
@@ -956,11 +959,13 @@ impl ProjectIndex {
 
     pub fn edges_from(&self, resource_id: i64, relation: Option<&str>) -> Result<Vec<EdgeMatch>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, src_resource_id, dst_resource_id, dst_ref, relation, confidence,
-                    extractor, source_version_id
-             FROM edges
-             WHERE src_resource_id = ?1 AND (?2 IS NULL OR relation = ?2)
-             ORDER BY relation, COALESCE(dst_resource_id, 0), COALESCE(dst_ref, ''), id",
+            "SELECT e.id, e.src_resource_id, e.dst_resource_id, e.dst_ref, e.relation,
+                    e.confidence, e.extractor, e.source_version_id
+             FROM edges e
+             JOIN resources producer ON producer.id = e.source_resource_id
+                AND producer.current_version_id = e.source_version_id
+             WHERE e.src_resource_id = ?1 AND (?2 IS NULL OR e.relation = ?2)
+             ORDER BY e.relation, COALESCE(e.dst_resource_id, 0), COALESCE(e.dst_ref, ''), e.id",
         )?;
         let rows = statement.query_map(params![resource_id, relation], |row| {
             Ok(EdgeMatch {
@@ -1237,7 +1242,8 @@ fn resolve_code_edges_tx(
          FROM edges e
          JOIN files f ON f.resource_id = e.source_resource_id
          JOIN resources r ON r.id = f.resource_id
-         WHERE r.project_id = ?1 AND e.extractor = ?2 AND e.dst_ref IS NOT NULL
+         WHERE r.project_id = ?1 AND r.current_version_id = e.source_version_id
+           AND e.extractor = ?2 AND e.dst_ref IS NOT NULL
          ORDER BY f.path, e.start_byte, e.id",
     )?;
     let edges = statement
@@ -1494,6 +1500,8 @@ fn graph_edges_for_resource(
                 f.path, e.start_line
          FROM edges e
          JOIN resources sr ON sr.id = e.src_resource_id
+         JOIN resources producer ON producer.id = e.source_resource_id
+            AND producer.current_version_id = e.source_version_id
          LEFT JOIN resources dr ON dr.id = e.dst_resource_id
          LEFT JOIN files f ON f.resource_id = e.source_resource_id
          WHERE (?2 IS NULL OR e.relation = ?2)

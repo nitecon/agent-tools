@@ -189,6 +189,64 @@ fn okf_import_search_and_get_share_canonical_resource_metadata() {
 }
 
 #[test]
+fn okf_incremental_edit_and_removal_expose_only_current_edges() {
+    let project = isolated_state_dir("okf-incremental-project");
+    let state = isolated_state_dir("okf-incremental-state");
+    let bundle = project.join("knowledge");
+    fs::create_dir_all(&bundle).unwrap();
+    fs::write(
+        bundle.join("a.md"),
+        "---\ntype: Note\ntitle: A\n---\n# A\n\nSee [B](b.md) and [missing](missing.md).\n",
+    )
+    .unwrap();
+    fs::write(
+        bundle.join("b.md"),
+        "---\ntype: Note\ntitle: B\n---\n# B\n\nOriginal.\n",
+    )
+    .unwrap();
+
+    let first = run_agent_tools(&project, &state, &["okf", "import", "knowledge"]);
+    assert!(first.status.success(), "{}", stderr(&first));
+
+    fs::write(
+        bundle.join("a.md"),
+        "---\ntype: Note\ntitle: A\n---\n# A\n\nEdited. See [B](b.md) and [missing](missing.md).\n",
+    )
+    .unwrap();
+    let edited = run_agent_tools(&project, &state, &["okf", "import", "knowledge"]);
+    assert!(edited.status.success(), "{}", stderr(&edited));
+    assert!(stdout(&edited).contains("1 changed, 1 unchanged"));
+
+    fs::remove_file(bundle.join("b.md")).unwrap();
+    let removed = run_agent_tools(&project, &state, &["okf", "import", "knowledge"]);
+    assert!(removed.status.success(), "{}", stderr(&removed));
+    assert!(stdout(&removed).contains("1 removed"));
+
+    let graph = run_agent_tools(
+        &project,
+        &state,
+        &["graph", "A", "--relation", "links_to", "--direction", "out"],
+    );
+    assert!(graph.status.success(), "{}", stderr(&graph));
+    let output = stdout(&graph);
+    assert_eq!(output.lines().count(), 2, "{output}");
+    assert_eq!(
+        output.matches(" -> ?b.md [extracted]").count(),
+        1,
+        "{output}"
+    );
+    assert_eq!(
+        output.matches(" -> ?missing.md [extracted]").count(),
+        1,
+        "{output}"
+    );
+    assert!(!output.contains("[resolved]"), "{output}");
+
+    fs::remove_dir_all(state).unwrap();
+    fs::remove_dir_all(project).unwrap();
+}
+
+#[test]
 fn okf_publish_dry_run_is_gateway_free_and_deterministic() {
     let state = isolated_state_dir("okf-publish-dry-run");
     let project = fixture_root().join("knowledge_graph");

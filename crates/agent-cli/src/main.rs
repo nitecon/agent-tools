@@ -25,7 +25,8 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(
     name = "agent-tools",
-    about = "Token-efficient tools for AI coding agents"
+    about = "Token-efficient tools for AI coding agents",
+    version = env!("AGENT_TOOLS_VERSION")
 )]
 struct Cli {
     #[command(subcommand)]
@@ -92,8 +93,13 @@ enum Commands {
     Search {
         /// Search query
         query: String,
-        /// Search type: "symbol" or "file"
-        #[arg(short = 't', long = "type", default_value = "symbol")]
+        /// Search type
+        #[arg(
+            short = 't',
+            long = "type",
+            default_value = "symbol",
+            value_parser = ["symbol", "file", "knowledge", "all"]
+        )]
         search_type: String,
         /// File pattern filter
         #[arg(short, long)]
@@ -1426,6 +1432,7 @@ fn cmd_summary(path: Option<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::error::ErrorKind;
 
     #[test]
     fn api_hint_detects_api_search_terms() {
@@ -1440,5 +1447,47 @@ mod tests {
         assert!(!looks_api_related("capitalization"));
         assert!(!looks_api_related("happier path"));
         assert!(!looks_api_related("config loader"));
+    }
+
+    #[test]
+    fn search_parser_advertises_and_enforces_every_supported_type() {
+        let help = Cli::try_parse_from(["agent-tools", "search", "--help"])
+            .err()
+            .expect("help exits through clap");
+        assert_eq!(help.kind(), ErrorKind::DisplayHelp);
+        let rendered = help.to_string();
+        assert!(rendered.contains("symbol"));
+        assert!(rendered.contains("file"));
+        assert!(rendered.contains("knowledge"));
+        assert!(rendered.contains("all"));
+
+        for search_type in ["symbol", "file", "knowledge", "all"] {
+            assert!(Cli::try_parse_from(
+                ["agent-tools", "search", "query", "--type", search_type,]
+            )
+            .is_ok());
+        }
+
+        let invalid =
+            Cli::try_parse_from(["agent-tools", "search", "query", "--type", "unsupported"])
+                .err()
+                .expect("invalid search type must fail in clap");
+        assert_eq!(invalid.kind(), ErrorKind::InvalidValue);
+        let rendered = invalid.to_string();
+        assert!(rendered.contains("possible values"));
+        assert!(rendered.contains("knowledge"));
+        assert!(rendered.contains("all"));
+    }
+
+    #[test]
+    fn conventional_version_flag_matches_version_subcommand_value() {
+        let version = Cli::try_parse_from(["agent-tools", "--version"])
+            .err()
+            .expect("version exits through clap");
+        assert_eq!(version.kind(), ErrorKind::DisplayVersion);
+        assert_eq!(
+            version.to_string().trim(),
+            format!("agent-tools {}", env!("AGENT_TOOLS_VERSION"))
+        );
     }
 }
