@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+pub const CURRENT_SCHEMA_VERSION: i64 = 2;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct ProjectIndex {
@@ -320,14 +320,23 @@ impl ProjectIndex {
 
         conn.execute_batch("BEGIN IMMEDIATE")?;
         let migration = (|| -> Result<()> {
-            if version == 0 {
+            // Steps are additive and applied in order, so an index at any
+            // earlier version upgrades in place without a rebuild.
+            if version < 1 {
                 conn.execute_batch(SCHEMA_V1)?;
                 conn.execute(
                     "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-                    params![CURRENT_SCHEMA_VERSION, now_epoch_seconds()],
+                    params![1, now_epoch_seconds()],
                 )?;
-                conn.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
             }
+            if version < 2 {
+                conn.execute_batch(SCHEMA_V2)?;
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![2, now_epoch_seconds()],
+                )?;
+            }
+            conn.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
             Ok(())
         })();
         match migration {
@@ -834,10 +843,29 @@ impl ProjectIndex {
             return Ok(Vec::new());
         }
         let path_pattern = filter.path.map(|path| format!("%{path}%"));
+        // Two shaping rules on top of relevance:
+        //
+        // 1. One row per resource — its best-matching segment. Without this a
+        //    single document floods the page with its own sections.
+        // 2. Authority before relevance. Derived concepts synthesized from code
+        //    outnumber authored knowledge by orders of magnitude, so a purely
+        //    relevance-ordered page buries what the repository actually asserts.
+        //    Callers that want only derived rows filter with `origin`.
         let mut statement = self.conn.prepare(
-            "SELECT r.id, r.canonical_uri, r.namespace, r.kind, r.title, r.authority,
-                    r.origin_kind, r.origin_id, r.status, r.current_version_id,
-                    s.id, s.heading_path, s.text, bm25(content_segments_fts)
+            "SELECT id, canonical_uri, namespace, kind, title, authority,
+                    origin_kind, origin_id, status, current_version_id,
+                    segment_id, heading_path, text, rank
+             FROM (
+             SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY id ORDER BY rank, ordinal, segment_id
+                    ) AS segment_rank
+             FROM (
+             SELECT r.id AS id, r.canonical_uri AS canonical_uri, r.namespace AS namespace,
+                    r.kind AS kind, r.title AS title, r.authority AS authority,
+                    r.origin_kind AS origin_kind, r.origin_id AS origin_id, r.status AS status,
+                    r.current_version_id AS current_version_id,
+                    s.id AS segment_id, s.heading_path AS heading_path, s.text AS text,
+                    s.ordinal AS ordinal, bm25(content_segments_fts) AS rank
              FROM content_segments_fts
              JOIN content_segments s ON s.id = content_segments_fts.rowid
              JOIN resource_versions v ON v.id = s.resource_version_id
@@ -860,7 +888,11 @@ impl ProjectIndex {
                     WHERE producer.current_version_id = e.source_version_id
                     AND (e.src_resource_id = r.id OR e.dst_resource_id = r.id)
                     AND e.relation = ?9))
-             ORDER BY bm25(content_segments_fts), r.canonical_uri, s.ordinal
+             ))
+             WHERE segment_rank = 1
+             ORDER BY CASE authority WHEN 'repository' THEN 0 WHEN 'gateway' THEN 1 ELSE 2 END,
+                      CASE status WHEN 'stable' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+                      rank, canonical_uri
              LIMIT ?10",
         )?;
         let rows = statement.query_map(
@@ -957,6 +989,194 @@ impl ProjectIndex {
         Ok(Some(detail))
     }
 
+    /// Record that a tool touched a resource.
+    ///
+    /// Counts accumulate per (resource, tool) pair. Callers treat failure as
+    /// nothing happened — an access signal is never worth failing a read over.
+    pub fn record_access(&self, resource_id: i64, tool: &str) -> Result<()> {
+        if tool.is_empty() {
+            bail!("tool must be non-empty");
+        }
+        let now = now_epoch_seconds();
+        self.conn.execute(
+            "INSERT INTO resource_access (resource_id, tool, access_count, first_access, last_access)
+             VALUES (?1, ?2, 1, ?3, ?3)
+             ON CONFLICT(resource_id, tool) DO UPDATE SET
+                access_count = resource_access.access_count + 1,
+                last_access = excluded.last_access",
+            params![resource_id, tool, now],
+        )?;
+        Ok(())
+    }
+
+    /// Record an access against a repository path, if that path is indexed.
+    ///
+    /// Returns whether a resource was found; unindexed paths are not an error.
+    pub fn record_path_access(&self, path: &str, tool: &str) -> Result<bool> {
+        let resource_id: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT resource_id FROM files WHERE path = ?1",
+                params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match resource_id {
+            Some(id) => {
+                self.record_access(id, tool)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Resources touched since `since`, most-used first.
+    ///
+    /// This is what gives an outcome concept its edges: the work that produced
+    /// it is described by what it read.
+    pub fn recent_accesses(
+        &self,
+        project_id: &str,
+        since: i64,
+        limit: usize,
+    ) -> Result<Vec<(ResourceMatch, i64)>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT r.id, r.canonical_uri, r.namespace, r.kind, r.title, r.authority,
+                    r.origin_kind, r.origin_id, r.status, r.current_version_id,
+                    SUM(a.access_count) AS total
+             FROM resource_access a JOIN resources r ON r.id = a.resource_id
+             WHERE r.project_id = ?1 AND a.last_access >= ?2
+             GROUP BY r.id
+             ORDER BY total DESC, r.canonical_uri
+             LIMIT ?3",
+        )?;
+        let rows = statement
+            .query_map(params![project_id, since, i64::try_from(limit)?], |row| {
+                Ok((row_to_resource(row)?, row.get::<_, i64>(10)?))
+            })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Total accesses recorded against a resource, across tools.
+    pub fn access_count(&self, resource_id: i64) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(access_count), 0) FROM resource_access WHERE resource_id = ?1",
+                params![resource_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
+    }
+
+    /// Look up a resource id by its namespace-scoped external identity.
+    pub fn resource_id_by_external_id(
+        &self,
+        project_id: &str,
+        namespace: &str,
+        external_id: &str,
+    ) -> Result<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT id FROM resources
+                 WHERE project_id = ?1 AND namespace = ?2 AND external_id = ?3",
+                params![project_id, namespace, external_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Drop all but the `keep` most recent resources of one namespace/origin.
+    ///
+    /// Observations accumulate with use, so they need a ceiling; authored and
+    /// synthesized origins are untouched because pruning is origin-scoped.
+    pub fn prune_origin_to_recent(
+        &mut self,
+        project_id: &str,
+        namespace: &str,
+        origin_id: &str,
+        keep: usize,
+    ) -> Result<usize> {
+        let retained: BTreeSet<String> = {
+            let mut statement = self.conn.prepare(
+                "SELECT external_id FROM resources
+                 WHERE project_id = ?1 AND namespace = ?2 AND origin_id = ?3
+                 ORDER BY updated_at DESC, id DESC
+                 LIMIT ?4",
+            )?;
+            let rows = statement.query_map(
+                params![project_id, namespace, origin_id, i64::try_from(keep)?],
+                |row| row.get::<_, String>(0),
+            )?;
+            rows.collect::<rusqlite::Result<BTreeSet<_>>>()?
+        };
+        self.prune_origin_resources(project_id, namespace, origin_id, &retained)
+    }
+
+    /// Every current document stored for one namespace/origin pair, by identity.
+    ///
+    /// This is what materializes a stored bundle back onto disk.
+    pub fn origin_documents(
+        &self,
+        project_id: &str,
+        namespace: &str,
+        origin_id: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let ids: Vec<(i64, String)> = {
+            let mut statement = self.conn.prepare(
+                "SELECT id, external_id FROM resources
+                 WHERE project_id = ?1 AND namespace = ?2 AND origin_id = ?3
+                 ORDER BY external_id",
+            )?;
+            let rows = statement.query_map(params![project_id, namespace, origin_id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let mut documents = Vec::with_capacity(ids.len());
+        for (id, external_id) in ids {
+            if let Some(document) = self.resource_document(id)? {
+                documents.push((external_id, document));
+            }
+        }
+        Ok(documents)
+    }
+
+    /// Reassemble a resource's current version as a Markdown document.
+    ///
+    /// Concepts are stored as frontmatter plus body, so this returns exactly
+    /// what `okf export` would write for the same resource — the index is the
+    /// document, not a cache of one.
+    pub fn resource_document(&self, resource_id: i64) -> Result<Option<String>> {
+        let stored: Option<(Option<String>, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT v.raw_metadata, v.body
+                 FROM resources r JOIN resource_versions v ON v.id = r.current_version_id
+                 WHERE r.id = ?1",
+                params![resource_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((raw_metadata, body)) = stored else {
+            return Ok(None);
+        };
+        let body = body.unwrap_or_default();
+        Ok(Some(match raw_metadata {
+            Some(frontmatter) => {
+                let frontmatter = frontmatter.trim_end_matches('\n');
+                format!("---\n{frontmatter}\n---\n{body}")
+            }
+            None => body,
+        }))
+    }
+
     pub fn edges_from(&self, resource_id: i64, relation: Option<&str>) -> Result<Vec<EdgeMatch>> {
         let mut statement = self.conn.prepare(
             "SELECT e.id, e.src_resource_id, e.dst_resource_id, e.dst_ref, e.relation,
@@ -1025,6 +1245,57 @@ impl ProjectIndex {
                 |row| row.get(0),
             )
             .optional()
+            .map_err(Into::into)
+    }
+
+    /// Record that a producer has processed a file at a given input hash.
+    ///
+    /// `replace_code_snapshot` does this for the extractor that owns the
+    /// snapshot; producers that derive further state from the same file (such
+    /// as concept synthesis) record their own progress here so they can be
+    /// gated independently of the extractor.
+    pub fn mark_producer_state(&self, path: &str, producer: &str, input_hash: &str) -> Result<()> {
+        if path.is_empty() || producer.is_empty() || input_hash.is_empty() {
+            bail!("path, producer, and input_hash must be non-empty");
+        }
+        let file_id: i64 = self
+            .conn
+            .query_row(
+                "SELECT resource_id FROM files WHERE path = ?1",
+                params![path],
+                |row| row.get(0),
+            )
+            .optional()?
+            .with_context(|| format!("no indexed file at {path}"))?;
+        self.conn.execute(
+            "INSERT INTO producer_state (source_resource_id, producer, input_hash, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(source_resource_id, producer) DO UPDATE SET
+                input_hash = excluded.input_hash, updated_at = excluded.updated_at",
+            params![file_id, producer, input_hash, now_epoch_seconds()],
+        )?;
+        Ok(())
+    }
+
+    /// List every external id currently stored for one namespace/origin pair.
+    ///
+    /// Incremental producers skip unchanged inputs, so they cannot rebuild the
+    /// retained set from what they just wrote; they reconcile against this.
+    pub fn origin_external_ids(
+        &self,
+        project_id: &str,
+        namespace: &str,
+        origin_id: &str,
+    ) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT external_id FROM resources
+             WHERE project_id = ?1 AND namespace = ?2 AND origin_id = ?3
+             ORDER BY external_id",
+        )?;
+        let rows = statement.query_map(params![project_id, namespace, origin_id], |row| {
+            row.get::<_, String>(0)
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
 
@@ -1161,6 +1432,7 @@ impl ProjectIndex {
             "provenance",
             "verifications",
             "resource_aliases",
+            "resource_access",
         ];
         if !allowed.contains(&table) {
             bail!("unsupported count table");
@@ -2350,6 +2622,24 @@ CREATE UNIQUE INDEX idx_verification_identity
     );
 "#;
 
+/// Access accounting for the self-enhancing loop.
+///
+/// One row per (resource, tool) rather than one per access: the table is
+/// bounded by the resource count no matter how much the tools are used, so
+/// tracking can never grow without limit.
+const SCHEMA_V2: &str = r#"
+CREATE TABLE resource_access (
+    resource_id INTEGER NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    tool TEXT NOT NULL,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    first_access INTEGER NOT NULL,
+    last_access INTEGER NOT NULL,
+    PRIMARY KEY(resource_id, tool)
+);
+
+CREATE INDEX idx_resource_access_recent ON resource_access(last_access);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2384,6 +2674,26 @@ mod tests {
             content_hash: hash,
             generated_by: None,
             generated_at: None,
+        }
+    }
+
+    fn segment(
+        ordinal: usize,
+        heading: &'static str,
+        text: &'static str,
+    ) -> ContentSegmentInput<'static> {
+        ContentSegmentInput {
+            ordinal,
+            title: heading,
+            heading_path: Some(heading),
+            text,
+            start_line: Some(1),
+            end_line: Some(3),
+            start_byte: Some(0),
+            end_byte: Some(text.len()),
+            token_count: Some(3),
+            content_hash: text,
+            metadata: &serde_json::Value::Null,
         }
     }
 
@@ -2444,6 +2754,136 @@ mod tests {
         assert_eq!(matches[0].resource.id, id);
         assert_eq!(index.count("resource_versions").unwrap(), 1);
         assert_eq!(index.count("content_segments").unwrap(), 1);
+    }
+
+    #[test]
+    fn search_ranks_authority_first_and_returns_one_row_per_resource() {
+        let metadata = serde_json::json!({});
+        let mut index = ProjectIndex::open_ephemeral().unwrap();
+
+        // One authored runbook against many derived code concepts, all matching.
+        let authored = index
+            .ensure_resource(&resource(&metadata, "okf://fixture/runbook", "Runbook"))
+            .unwrap();
+        let authored_version = index.put_version(&version(authored, "authored")).unwrap();
+        index
+            .replace_segments(
+                authored_version,
+                &[
+                    segment(0, "Recovery", "Restart checkout safely."),
+                    segment(1, "Detail", "Checkout stalls need a restart."),
+                ],
+            )
+            .unwrap();
+
+        for ordinal in 0..20 {
+            let uri = format!("okf://fixture/derived-{ordinal}");
+            let derived = index
+                .ensure_resource(&ResourceInput {
+                    origin_kind: "local-derived",
+                    authority: "derived",
+                    ..resource(&metadata, &uri, "Derived")
+                })
+                .unwrap();
+            let hash = format!("derived-{ordinal}");
+            let derived_version = index.put_version(&version(derived, &hash)).unwrap();
+            index
+                .replace_segments(
+                    derived_version,
+                    &[segment(0, "Checkout", "checkout checkout checkout")],
+                )
+                .unwrap();
+        }
+
+        let matches = index
+            .search_segments_filtered("fixture", "checkout", &SearchFilter::default(), 5)
+            .unwrap();
+        // Derived rows are far more relevant by bm25 alone; authority wins anyway.
+        assert_eq!(matches[0].resource.id, authored);
+        assert_eq!(matches[0].resource.authority, "repository");
+        // The authored resource matched on two segments but occupies one row.
+        assert_eq!(
+            matches
+                .iter()
+                .filter(|item| item.resource.id == authored)
+                .count(),
+            1
+        );
+        let uris: Vec<_> = matches
+            .iter()
+            .map(|item| item.resource.canonical_uri.clone())
+            .collect();
+        let repeated = index
+            .search_segments_filtered("fixture", "checkout", &SearchFilter::default(), 5)
+            .unwrap();
+        let repeated_uris: Vec<_> = repeated
+            .iter()
+            .map(|item| item.resource.canonical_uri.clone())
+            .collect();
+        assert_eq!(uris, repeated_uris, "ordering is deterministic");
+    }
+
+    #[test]
+    fn access_tracking_is_bounded_accumulating_and_ordered_by_use() {
+        let metadata = serde_json::json!({});
+        let index = ProjectIndex::open_ephemeral().unwrap();
+        let hot = index
+            .ensure_resource(&resource(&metadata, "okf://fixture/hot", "Hot"))
+            .unwrap();
+        let cold = index
+            .ensure_resource(&resource(&metadata, "okf://fixture/cold", "Cold"))
+            .unwrap();
+
+        for _ in 0..5 {
+            index.record_access(hot, "read").unwrap();
+        }
+        index.record_access(hot, "grep").unwrap();
+        index.record_access(cold, "read").unwrap();
+
+        // One row per (resource, tool) no matter how many accesses.
+        assert_eq!(index.count("resource_access").unwrap(), 3);
+        assert_eq!(index.access_count(hot).unwrap(), 6);
+        assert_eq!(index.access_count(cold).unwrap(), 1);
+
+        let recent = index.recent_accesses("fixture", 0, 10).unwrap();
+        assert_eq!(recent[0].0.id, hot);
+        assert_eq!(recent[0].1, 6);
+        assert_eq!(recent[1].0.id, cold);
+
+        // A window that excludes everything yields nothing.
+        assert!(index
+            .recent_accesses("fixture", now_epoch_seconds() + 60, 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn recent_origin_pruning_caps_one_origin_without_touching_others() {
+        let metadata = serde_json::json!({});
+        let mut index = ProjectIndex::open_ephemeral().unwrap();
+        index
+            .ensure_resource(&resource(&metadata, "okf://fixture/kept", "Authored"))
+            .unwrap();
+        for ordinal in 0..5 {
+            let uri = format!("okf://fixture/observation-{ordinal}");
+            let external = format!("observations/{ordinal}.md");
+            index
+                .ensure_resource(&ResourceInput {
+                    external_id: &external,
+                    origin_id: "okf-observe",
+                    origin_kind: "local-derived",
+                    authority: "derived",
+                    ..resource(&metadata, &uri, "Observation")
+                })
+                .unwrap();
+        }
+
+        let removed = index
+            .prune_origin_to_recent("fixture", "okf", "okf-observe", 2)
+            .unwrap();
+        assert_eq!(removed, 3);
+        // The authored resource lives in a different origin and is untouched.
+        assert_eq!(index.count("resources").unwrap(), 3);
     }
 
     #[test]
@@ -2629,6 +3069,39 @@ mod tests {
 
         assert!(canonical_repo_uri("fixture", Path::new("/repo"), Path::new("../escape")).is_err());
         assert!(canonical_symbol_uri("fixture", "src/lib.rs", "bad#key").is_err());
+    }
+
+    #[test]
+    fn a_version_one_index_upgrades_in_place_without_losing_data() {
+        let databases = TempDir::new().unwrap();
+        let path = databases.path().join("v1.db");
+
+        // Stand up a v1 index exactly as the previous release left it.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        conn.execute(
+            "INSERT INTO resources (project_id, namespace, external_id, canonical_uri, kind,
+                                    title, origin_kind, origin_id, authority, status,
+                                    created_at, updated_at, metadata_json)
+             VALUES ('fixture', 'okf', 'kept.md', 'okf://fixture/kept', 'Runbook', 'Kept',
+                     'repository', 'bundle', 'repository', 'stable', 1, 1, '{}')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        drop(conn);
+
+        let index = ProjectIndex::open(&path).unwrap();
+        assert_eq!(index.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+        // Pre-existing rows survive the upgrade, and the new table is usable.
+        assert_eq!(index.count("resources").unwrap(), 1);
+        assert_eq!(index.count("resource_access").unwrap(), 0);
+        let resource_id = index
+            .resource_id_by_external_id("fixture", "okf", "kept.md")
+            .unwrap()
+            .expect("migrated resource");
+        index.record_access(resource_id, "read").unwrap();
+        assert_eq!(index.access_count(resource_id).unwrap(), 1);
     }
 
     #[test]

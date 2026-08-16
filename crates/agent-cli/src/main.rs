@@ -16,7 +16,9 @@ mod cmd_text;
 mod codex_hooks_toml;
 mod memory_reminder;
 mod nudge;
+mod observe;
 mod settings_json;
+mod virtual_doc;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -451,11 +453,18 @@ enum OkfCommands {
     Validate { path: PathBuf },
     /// Import a bundle into the shared project index
     Import { path: PathBuf },
-    /// Normalize a bundle into a deterministic destination directory
+    /// Materialize a bundle into a deterministic destination directory
+    ///
+    /// With a path, normalizes that on-disk bundle. Without one, writes out the
+    /// concepts synthesized from the local code index — the database is the
+    /// canonical store, so exporting is interchange, not a prerequisite.
     Export {
-        path: PathBuf,
+        path: Option<PathBuf>,
         #[arg(short, long)]
         destination: PathBuf,
+        /// Also write the generated index.md projection
+        #[arg(long)]
+        with_index: bool,
     },
     /// Project a bundle one-way into gateway Documentation
     Publish {
@@ -796,7 +805,10 @@ fn main_inner() -> Result<()> {
 
         Commands::Doc { command } => match command {
             DocCommands::Outline { file } => {
-                let headings = agent_fs::markdown::extract_headings(&file)?;
+                let text = virtual_doc::read_file_or_resource(&file)?.with_context(|| {
+                    format!("no file or knowledge resource at {}", file.display())
+                })?;
+                let headings = agent_fs::markdown::extract_headings_str(&text);
                 if headings.is_empty() {
                     eprintln!("No headings found in {}", file.display());
                 } else {
@@ -805,7 +817,11 @@ fn main_inner() -> Result<()> {
                 Ok(())
             }
             DocCommands::Section { file, section } => {
-                let body = agent_fs::markdown::extract_section(&file, &section)?;
+                let text = virtual_doc::read_file_or_resource(&file)?.with_context(|| {
+                    format!("no file or knowledge resource at {}", file.display())
+                })?;
+                let body = agent_fs::markdown::extract_section_str(&text, &section)
+                    .with_context(|| format!("in {}", file.display()))?;
                 print!("{body}");
                 Ok(())
             }
@@ -922,6 +938,7 @@ fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result
         match parser.extract_symbol(&file_path, name)? {
             Some(source) => {
                 println!("{source}");
+                observe::path("symbol", &file_path);
             }
             None => {
                 eprintln!("Symbol '{name}' not found in {}", file_path.display());
@@ -946,7 +963,10 @@ fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result
         let first = &results[0];
         let mut parser = agent_symbols::SymbolParser::new();
         match parser.extract_symbol(&first.file, name)? {
-            Some(source) => println!("{source}"),
+            Some(source) => {
+                println!("{source}");
+                observe::path("symbol", &first.file);
+            }
             None => {
                 // Fallback: just show location
                 for r in &results {
@@ -969,6 +989,7 @@ fn cmd_symbol(name: &str, file: Option<PathBuf>, kind: Option<String>) -> Result
 fn cmd_symbols(file: &Path, kind: Option<String>) -> Result<()> {
     let mut parser = agent_symbols::SymbolParser::new();
     let symbols = parser.parse_file(file)?;
+    observe::path("symbols", file);
 
     for s in &symbols {
         if let Some(ref k) = kind {
@@ -1116,7 +1137,7 @@ fn cmd_get(query: &str) -> Result<()> {
     let root = std::env::current_dir()?;
     let index = agent_knowledge::ProjectIndex::open_for_project(&root)?;
     let project_id = agent_core::project_ident(&root);
-    let matches = index.find_resources(&project_id, query, None, 20)?;
+    let matches = most_authoritative(index.find_resources(&project_id, query, None, 20)?);
     let resource = match matches.as_slice() {
         [] => bail!("No resource found matching '{query}'"),
         [resource] => resource,
@@ -1133,11 +1154,14 @@ fn cmd_get(query: &str) -> Result<()> {
         .resource_detail(resource.id)?
         .context("resolved resource disappeared")?;
     let relationships = index.traverse(resource.id, None, "both", 1, 100)?;
+    let accesses = index.access_count(resource.id)?;
+    observe::resource("get", resource.id);
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "resource": detail,
             "relationships": relationships,
+            "accesses": accesses,
         }))?
     );
     Ok(())
@@ -1192,12 +1216,23 @@ fn cmd_okf(command: OkfCommands) -> Result<()> {
                 stats.diagnostics
             );
         }
-        OkfCommands::Export { path, destination } => {
-            let bundle = agent_knowledge::okf::parse_bundle(
-                &path,
-                agent_knowledge::okf::OkfLimits::default(),
-            )?;
+        OkfCommands::Export {
+            path,
+            destination,
+            with_index,
+        } => {
+            let limits = agent_knowledge::okf::OkfLimits::default();
+            let bundle = match path {
+                Some(path) => agent_knowledge::okf::parse_bundle(&path, limits)?,
+                None => stored_synthesized_bundle(&root, limits)?,
+            };
             agent_knowledge::okf::export_bundle(&bundle, &destination)?;
+            if with_index {
+                std::fs::write(
+                    destination.join("index.md"),
+                    agent_knowledge::okf::render_bundle_index(&bundle),
+                )?;
+            }
             println!(
                 "Exported {} concepts to {}",
                 bundle.concepts.len(),
@@ -1214,6 +1249,29 @@ fn cmd_okf(command: OkfCommands) -> Result<()> {
     Ok(())
 }
 
+/// Rebuild the synthesized bundle from what the index has stored.
+///
+/// Concepts are parsed back through the codec rather than trusted verbatim, so a
+/// materialized bundle carries the same validation and link resolution as one
+/// read off disk.
+fn stored_synthesized_bundle(
+    root: &Path,
+    limits: agent_knowledge::okf::OkfLimits,
+) -> Result<agent_knowledge::okf::OkfBundle> {
+    let project_id = agent_core::project_ident(root);
+    let index = agent_knowledge::ProjectIndex::open_for_project(root)?;
+    let documents =
+        index.origin_documents(&project_id, "okf", agent_knowledge::knowledge::SYNTH_ORIGIN)?;
+    if documents.is_empty() {
+        bail!("No synthesized concepts stored yet. Run `agent-tools index` first.");
+    }
+    let mut concepts = Vec::with_capacity(documents.len());
+    for (id, document) in &documents {
+        concepts.push(agent_knowledge::okf::parse_document(id, document, limits)?);
+    }
+    Ok(agent_knowledge::okf::bundle_from_concepts(concepts))
+}
+
 fn open_graph_index(root: &Path) -> Result<agent_symbols::SymbolIndex> {
     let mut index = agent_symbols::SymbolIndex::open_for_project(root)?;
     let (files, symbols) = index.stats()?;
@@ -1223,12 +1281,35 @@ fn open_graph_index(root: &Path) -> Result<agent_symbols::SymbolIndex> {
     Ok(index)
 }
 
+/// Keep only the matches from the most authoritative tier present.
+///
+/// A file and the concepts synthesized about it share a name, so without this
+/// every code query looks ambiguous. Narrowing by authority resolves that in
+/// favour of what the repository asserts, while leaving genuine same-tier
+/// ambiguity (two files called `worker`) for the caller to reject.
+fn most_authoritative(
+    matches: Vec<agent_knowledge::ResourceMatch>,
+) -> Vec<agent_knowledge::ResourceMatch> {
+    let rank = |authority: &str| match authority {
+        "repository" => 0,
+        "gateway" => 1,
+        _ => 2,
+    };
+    let Some(best) = matches.iter().map(|item| rank(&item.authority)).min() else {
+        return matches;
+    };
+    matches
+        .into_iter()
+        .filter(|item| rank(&item.authority) == best)
+        .collect()
+}
+
 fn resolve_graph_resource(
     index: &agent_symbols::SymbolIndex,
     root: &Path,
     query: &str,
 ) -> Result<agent_symbols::ResourceMatch> {
-    let matches = index.find_graph_resources(root, query, None, 20)?;
+    let matches = most_authoritative(index.find_graph_resources(root, query, None, 20)?);
     match matches.as_slice() {
         [] => bail!("No graph resource found matching '{query}'. Run `agent-tools index` first."),
         [resource] => Ok(resource.clone()),
@@ -1254,6 +1335,7 @@ fn cmd_graph(
     let index = open_graph_index(&root)?;
     let resource = resolve_graph_resource(&index, &root, query)?;
     let edges = index.traverse_graph(resource.id, relation, direction, depth, limit)?;
+    observe::resource("graph", resource.id);
     if edges.is_empty() {
         println!("No matching relationships from {}", resource.canonical_uri);
         return Ok(());

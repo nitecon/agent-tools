@@ -665,6 +665,11 @@ async fn cmd_status_transition(
     // persist durable learnings + update WorkingContext. Only on `done`, never
     // on `claim`/`release`, and only after the transition actually succeeded.
     if new_status == "done" {
+        // Record what the work touched, so the graph learns from the session
+        // without anyone having to author anything.
+        if let Some(linked) = crate::observe::completed_work(&task.id, &task.title, "completed") {
+            println!("[knowledge] recorded an observation linked to {linked} resources");
+        }
         crate::memory_reminder::emit_done_reminder();
     }
 

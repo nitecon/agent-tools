@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize)]
@@ -21,15 +21,23 @@ pub struct DocHeading {
 /// are handled correctly.
 pub fn extract_headings(path: &Path) -> Result<Vec<DocHeading>> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let reader = BufReader::new(file);
+    let mut text = String::new();
+    BufReader::new(file)
+        .read_to_string(&mut text)
+        .with_context(|| format!("reading {}", path.display()))?;
+    Ok(extract_headings_str(&text))
+}
 
+/// Same as [`extract_headings`], over text that is already in memory.
+///
+/// Documents served from the knowledge index have no file behind them, so the
+/// parsing rules live here and the path-based entry point delegates.
+pub fn extract_headings_str(text: &str) -> Vec<DocHeading> {
     let mut headings = Vec::new();
     let mut fence: Option<Fence> = None;
 
-    for (idx, line) in reader.lines().enumerate() {
+    for (idx, line) in text.lines().enumerate() {
         let line_num = idx + 1;
-        let line =
-            line.with_context(|| format!("reading line {line_num} of {}", path.display()))?;
         let trimmed = line.trim_start();
 
         if let Some(f) = detect_fence(trimmed) {
@@ -50,7 +58,7 @@ pub fn extract_headings(path: &Path) -> Result<Vec<DocHeading>> {
         }
     }
 
-    Ok(headings)
+    headings
 }
 
 /// Extract the body of the section whose heading text matches `section`
@@ -59,21 +67,28 @@ pub fn extract_headings(path: &Path) -> Result<Vec<DocHeading>> {
 /// (i.e. equal or smaller `#` count), or end-of-file.
 pub fn extract_section(path: &Path, section: &str) -> Result<String> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let reader = BufReader::new(file);
+    let mut text = String::new();
+    BufReader::new(file)
+        .read_to_string(&mut text)
+        .with_context(|| format!("reading {}", path.display()))?;
+    extract_section_str(&text, section)
+        .with_context(|| format!("section '{section}' not found in {}", path.display()))
+}
 
+/// Same as [`extract_section`], over text that is already in memory.
+pub fn extract_section_str(text: &str, section: &str) -> Result<String> {
     let mut output = String::new();
     let mut fence: Option<Fence> = None;
     let mut capturing = false;
     let mut capture_level = 0usize;
 
-    for line in reader.lines() {
-        let line = line.with_context(|| format!("reading {}", path.display()))?;
+    for line in text.lines() {
         let trimmed = line.trim_start();
 
         if let Some(f) = detect_fence(trimmed) {
             update_fence(&mut fence, f);
             if capturing {
-                output.push_str(&line);
+                output.push_str(line);
                 output.push('\n');
             }
             continue;
@@ -82,13 +97,13 @@ pub fn extract_section(path: &Path, section: &str) -> Result<String> {
         if fence.is_none() {
             let level = heading_level(trimmed);
             if level > 0 {
-                let text = heading_text(trimmed, level);
+                let heading = heading_text(trimmed, level);
 
                 if capturing && level <= capture_level {
                     break;
                 }
 
-                if !capturing && text.eq_ignore_ascii_case(section) {
+                if !capturing && heading.eq_ignore_ascii_case(section) {
                     capturing = true;
                     capture_level = level;
                 }
@@ -96,13 +111,13 @@ pub fn extract_section(path: &Path, section: &str) -> Result<String> {
         }
 
         if capturing {
-            output.push_str(&line);
+            output.push_str(line);
             output.push('\n');
         }
     }
 
     if output.is_empty() {
-        anyhow::bail!("section '{}' not found in {}", section, path.display());
+        anyhow::bail!("section '{section}' not found");
     }
 
     Ok(output)

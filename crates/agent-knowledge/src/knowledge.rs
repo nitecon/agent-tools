@@ -53,9 +53,148 @@ pub fn index_okf_bundle(
         diagnostics: bundle.diagnostics.len(),
         ..KnowledgeIndexStats::default()
     };
-    let mut resource_ids = BTreeMap::new();
-    for concept in &bundle.concepts {
-        let uri = okf_uri(project_id, &origin_id, &concept.id);
+    index_concepts(
+        index,
+        project_id,
+        &origin_id,
+        "repository",
+        "repository",
+        &bundle.concepts,
+        &mut stats,
+    )?;
+    let retained: BTreeSet<String> = bundle
+        .concepts
+        .iter()
+        .map(|concept| concept.id.clone())
+        .collect();
+    stats.resources_removed =
+        index.prune_origin_resources(project_id, "okf", &origin_id, &retained)?;
+    Ok(stats)
+}
+
+/// Origin id for concepts synthesized from the local code index.
+pub const SYNTH_ORIGIN: &str = "okf-synth";
+
+/// Index concepts that were synthesized in memory rather than authored in the
+/// repository.
+///
+/// These are labelled `local-derived`/`derived` so retrieval can rank them
+/// below anything the repository or a gateway actually asserts. Pruning is left
+/// to the caller: incremental producers skip unchanged inputs and must
+/// reconcile the retained set across a whole run, not one call.
+pub fn index_synthesized_concepts(
+    index: &mut ProjectIndex,
+    project_id: &str,
+    concepts: &[OkfConcept],
+) -> Result<KnowledgeIndexStats> {
+    let mut stats = KnowledgeIndexStats {
+        resources_seen: concepts.len(),
+        diagnostics: concepts
+            .iter()
+            .map(|concept| concept.diagnostics.len())
+            .sum(),
+        ..KnowledgeIndexStats::default()
+    };
+    index_concepts(
+        index,
+        project_id,
+        SYNTH_ORIGIN,
+        "local-derived",
+        "derived",
+        concepts,
+        &mut stats,
+    )?;
+    Ok(stats)
+}
+
+/// Origin id for concepts recorded from agent activity.
+pub const OBSERVE_ORIGIN: &str = "okf-observe";
+
+/// How many observations are kept before the oldest are pruned.
+pub const OBSERVATION_LIMIT: usize = 200;
+
+/// Index a concept that records what an agent did, linking it to the resources
+/// the work touched.
+///
+/// Links are resolved against the whole `okf` namespace rather than a bundle,
+/// because an observation points at concepts owned by other origins (the
+/// synthesized code concepts it read). The result is capped: observations
+/// accumulate with use and must not grow without bound.
+pub fn index_observation(
+    index: &mut ProjectIndex,
+    project_id: &str,
+    concept: &OkfConcept,
+) -> Result<KnowledgeIndexStats> {
+    let mut stats = KnowledgeIndexStats {
+        resources_seen: 1,
+        diagnostics: concept.diagnostics.len(),
+        ..KnowledgeIndexStats::default()
+    };
+    // Bind links to whatever the index already holds. `bundle_from_concepts`
+    // only resolves within a concept set, which an observation is not part of,
+    // so resolution happens against stored identities instead.
+    let mut concept = concept.clone();
+    let mut seeded = BTreeMap::new();
+    for link in &mut concept.links {
+        if link.external {
+            continue;
+        }
+        let target = link.target.trim_start_matches('/').to_owned();
+        if let Some(id) = index.resource_id_by_external_id(project_id, "okf", &target)? {
+            seeded.insert(target.clone(), id);
+            link.resolved_id = Some(target);
+        }
+    }
+    index_concepts_with(
+        index,
+        project_id,
+        OBSERVE_ORIGIN,
+        "local-derived",
+        "derived",
+        std::slice::from_ref(&concept),
+        seeded,
+        &mut stats,
+    )?;
+    stats.resources_removed =
+        index.prune_origin_to_recent(project_id, "okf", OBSERVE_ORIGIN, OBSERVATION_LIMIT)?;
+    Ok(stats)
+}
+
+fn index_concepts(
+    index: &mut ProjectIndex,
+    project_id: &str,
+    origin_id: &str,
+    origin_kind: &str,
+    authority: &str,
+    concepts: &[OkfConcept],
+    stats: &mut KnowledgeIndexStats,
+) -> Result<()> {
+    index_concepts_with(
+        index,
+        project_id,
+        origin_id,
+        origin_kind,
+        authority,
+        concepts,
+        BTreeMap::new(),
+        stats,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn index_concepts_with(
+    index: &mut ProjectIndex,
+    project_id: &str,
+    origin_id: &str,
+    origin_kind: &str,
+    authority: &str,
+    concepts: &[OkfConcept],
+    seeded: BTreeMap<String, i64>,
+    stats: &mut KnowledgeIndexStats,
+) -> Result<()> {
+    let mut resource_ids = seeded;
+    for concept in concepts {
+        let uri = okf_uri(project_id, origin_id, &concept.id);
         let metadata = yaml_to_json(&concept.metadata)?;
         let id = index.ensure_resource(&ResourceInput {
             project_id,
@@ -65,9 +204,9 @@ pub fn index_okf_bundle(
             kind: &concept.kind,
             title: &concept.title,
             description: concept.description.as_deref(),
-            origin_kind: "repository",
-            origin_id: &origin_id,
-            authority: "repository",
+            origin_kind,
+            origin_id,
+            authority,
             status: Some(&concept.status),
             stale_after: concept.stale_after.as_deref(),
             metadata: &metadata,
@@ -75,24 +214,10 @@ pub fn index_okf_bundle(
         resource_ids.insert(concept.id.clone(), id);
     }
 
-    for concept in &bundle.concepts {
-        index_okf_concept(
-            index,
-            project_id,
-            &origin_id,
-            concept,
-            &resource_ids,
-            &mut stats,
-        )?;
+    for concept in concepts {
+        index_okf_concept(index, project_id, origin_id, concept, &resource_ids, stats)?;
     }
-    let retained: BTreeSet<String> = bundle
-        .concepts
-        .iter()
-        .map(|concept| concept.id.clone())
-        .collect();
-    stats.resources_removed =
-        index.prune_origin_resources(project_id, "okf", &origin_id, &retained)?;
-    Ok(stats)
+    Ok(())
 }
 
 pub fn index_markdown_file(

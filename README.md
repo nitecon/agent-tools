@@ -185,18 +185,43 @@ matrix live in [docs/grep-sed-contract.md](docs/grep-sed-contract.md) and
 is a vendor-neutral format for human- and agent-readable knowledge using
 Markdown with YAML frontmatter. Agent-tools targets the official
 [OKF v0.2 specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
-Repository-authored OKF lives conventionally in `.agents/knowledge/`; a normal
-`agent-tools index` discovers that bundle, while explicit bundles can be
-validated and imported directly:
+**The database is the canonical store.** `agent-tools index` synthesizes OKF
+concepts straight from the tree-sitter index — one `CodeModule` per file plus
+one `CodeSymbol` per exported symbol — and writes them into `project.db`.
+Nothing is written into the working tree, and there is no bundle to author
+before knowledge queries work:
+
+```bash
+agent-tools index                              # code -> concepts, automatically
+agent-tools search dispatch --type knowledge   # query what was synthesized
+agent-tools read okf://<project>/okf-synth/code/src/lib.rs.md
+```
+
+Synthesized concepts carry `local-derived` origin and `derived` authority, so
+they rank below anything the repository or a gateway actually asserts and never
+substitute for reading the source.
+
+Repository-authored OKF is still first-class: a bundle in `.agents/knowledge/`
+is discovered by `agent-tools index`, and explicit bundles can be validated,
+imported, materialized, or published:
 
 ```bash
 agent-tools okf validate .agents/knowledge
-agent-tools index
 agent-tools okf import path/to/bundle
 agent-tools okf export path/to/bundle --destination /tmp/normalized-okf
+agent-tools okf export --destination /tmp/synth --with-index   # materialize the stored bundle
 agent-tools okf publish path/to/bundle --dry-run
 agent-tools okf publish path/to/bundle
 ```
+
+Files on disk and documents in the index are read the same way: `read`,
+`doc outline`, and `doc section` accept a concept URI wherever they accept a
+path. A real path always reads from disk.
+
+Normal tool use then feeds the graph back: reads and greps record bounded access
+signals, and `agent-tools tasks done` writes a draft `Observation` concept linked
+to the code concepts the work touched. Observations are `draft`/`derived`, capped
+at the 200 most recent, and `AGENT_TOOLS_OBSERVE=off` disables recording.
 
 Files, symbols, Markdown, OKF concepts, and typed relationships share one local
 `project.db`. Repository and gateway content remain authoritative at their

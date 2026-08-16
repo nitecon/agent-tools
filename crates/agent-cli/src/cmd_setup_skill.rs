@@ -106,6 +106,28 @@ agent-tools summary [path]                     # compact project overview
 agent-tools index --rebuild                    # refresh after large changes
 ```
 
+## Knowledge Graph
+
+`agent-tools index` synthesizes OKF concepts from the code index straight into
+the project database — one per file plus one per exported symbol. Nothing is
+written to the repository and there are no knowledge files to author. Concepts
+carry `derived` authority, so they rank below repository- and gateway-authored
+knowledge and never substitute for reading the source.
+
+Normal tool use feeds the graph without any extra step: reads and greps record
+access signals, and `agent-tools tasks done` writes a draft `Observation`
+concept linked to the resources the work touched. Set `AGENT_TOOLS_OBSERVE=off`
+to disable.
+
+```bash
+agent-tools search <query> --type knowledge    # concepts (--type all adds symbols/files)
+agent-tools get <uri-or-title>                 # resource, authority, lifecycle, trust
+agent-tools graph <uri> --relation <r> --depth <n>   # bounded typed traversal
+agent-tools refs|imports|impls <symbol>        # callers/callees, imports, inheritance
+agent-tools read <okf-uri>                     # render a stored concept as Markdown
+agent-tools okf export --destination <dir>     # optional: materialize the stored bundle
+```
+
 ## Task Board (replaces native Task tools)
 
 Gateway-backed with three statuses, server-enforced ownership, 1h stale-claim
@@ -210,6 +232,28 @@ agent-tools symbol <name> --file <path>        # extract a symbol's source
 agent-tools search <query> --type symbol|file  # project-wide index search
 agent-tools summary [path]                     # compact project overview
 agent-tools index --rebuild                    # refresh after large changes
+```
+
+## Knowledge Graph
+
+`agent-tools index` synthesizes OKF concepts from the code index straight into
+the project database — one per file plus one per exported symbol. Nothing is
+written to the repository and there are no knowledge files to author. Concepts
+carry `derived` authority, so they rank below repository- and gateway-authored
+knowledge and never substitute for reading the source.
+
+Normal tool use feeds the graph without any extra step: reads and greps record
+access signals, and `agent-tools tasks done` writes a draft `Observation`
+concept linked to the resources the work touched. Set `AGENT_TOOLS_OBSERVE=off`
+to disable.
+
+```bash
+agent-tools search <query> --type knowledge    # concepts (--type all adds symbols/files)
+agent-tools get <uri-or-title>                 # resource, authority, lifecycle, trust
+agent-tools graph <uri> --relation <r> --depth <n>   # bounded typed traversal
+agent-tools refs|imports|impls <symbol>        # callers/callees, imports, inheritance
+agent-tools read <okf-uri>                     # render a stored concept as Markdown
+agent-tools okf export --destination <dir>     # optional: materialize the stored bundle
 ```
 
 ## Task Board (persistent across sessions)

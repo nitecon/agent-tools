@@ -3,6 +3,7 @@ pub mod index;
 pub mod languages;
 pub mod parser;
 pub mod relationships;
+pub mod synth;
 
 pub use agent_knowledge::{ResolutionStats, ResourceMatch, TraversedEdge};
 pub use extractor::{Symbol, SymbolKind};

@@ -1,8 +1,75 @@
 # OKF And Unified Knowledge Workflows
 
 Agent-tools stores files, symbols, Markdown documents, Open Knowledge Format
-(OKF) concepts, and their relationships in one project knowledge graph. OKF is
-the portable authoring and interchange format; it is not a second database.
+(OKF) concepts, and their relationships in one project knowledge graph. The
+database is the canonical store; OKF is the portable rendering and interchange
+format, not a second database.
+
+## Knowledge synthesized from code
+
+`agent-tools index` is the primary producer. After indexing symbols it
+synthesizes concepts directly into `project.db`:
+
+- one `CodeModule` concept per source file, and
+- one `CodeSymbol` concept per *exported* symbol (visibility is read from the
+  declaration per language; test scaffolding is excluded).
+
+Identities are virtual bundle paths — `code/<path>.md` for a file and
+`code/<path>/<symbol>-<digest>.md` for a symbol — so concepts are portable
+without existing on disk. Containment links resolve inside each file's own
+concept set; call and import relationships travel as portable edges under the
+namespaced `x-agent-tools` frontmatter key.
+
+```bash
+agent-tools index
+agent-tools search dispatch --type knowledge
+agent-tools read okf://<project>/okf-synth/code/src/lib.rs.md
+agent-tools doc outline okf://<project>/okf-synth/code/src/lib.rs.md
+```
+
+Synthesis is content-hash gated by its own producer (`okf-synth/1`), so an
+existing index picks it up without a rebuild, unchanged files cost nothing, and
+deleting a file prunes only that file's concepts. Concepts are recorded as
+`local-derived` origin with `derived` authority: retrieval ranks them below
+repository- and gateway-authored knowledge, and they never substitute for
+reading the source.
+
+Nothing is written to the working tree. To materialize the stored bundle as
+files — for review, diffing, or sharing — export it explicitly:
+
+```bash
+agent-tools okf export --destination /tmp/synth --with-index
+```
+
+## Knowledge from tool use
+
+Normal operation feeds the graph. Two grains, deliberately different:
+
+**Access signals.** `read`, `symbol`, `symbols`, `grep`, `get`, and `graph`
+record that they touched a resource. A read is evidence of interest, not
+knowledge, so it produces no concept — one row per (resource, tool) keeps
+`resource_access` bounded by the resource count however heavily the tools are
+used. `grep` records only the files that actually matched, deduplicated, so a
+repository-wide sweep does not flatten the signal. Counts are reported by
+`agent-tools get`.
+
+**Observations.** Completing a task *is* knowledge, so `agent-tools tasks done`
+writes a draft `Observation` concept linked to the resources the session
+touched (the twelve-hour window, top eight by use). Those links resolve into the
+synthesized code concepts, which is what connects work to code:
+
+```bash
+agent-tools graph "okf://<project>/okf-observe/observations/<task>.md" --direction out
+```
+
+Observations are `draft` status and `derived` authority — an unreviewed trace of
+what an agent did, never something the repository asserts — and are capped at the
+200 most recent, pruned within their own origin so authored and synthesized
+concepts are untouched.
+
+All of this is best-effort bookkeeping alongside the command you actually ran: it
+happens after that command produces its output and a failure is dropped rather
+than surfaced. Set `AGENT_TOOLS_OBSERVE=off` to disable recording entirely.
 
 ## Author a repository bundle
 

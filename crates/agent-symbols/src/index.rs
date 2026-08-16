@@ -2,6 +2,8 @@ use crate::extractor::{Symbol, SymbolKind};
 use crate::languages::Language;
 use crate::parser::SymbolParser;
 use crate::relationships::ExtractedRelationship;
+use crate::synth::{self, FileSynthesis, SYNTH_PRODUCER};
+use agent_knowledge::okf::OkfLimits;
 use agent_knowledge::{
     CodeSnapshotInput, FileMetadataInput, ProjectIndex, RelationshipSnapshotInput, ResolutionStats,
     ResourceMatch, SymbolSnapshotInput, TraversedEdge,
@@ -13,7 +15,7 @@ use rusqlite::params;
 use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::time::Duration;
@@ -90,6 +92,7 @@ impl SymbolIndex {
         let mut stats = IndexStats::default();
         let project_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let project_id = agent_core::project_ident(&project_root);
+        let mut indexed_paths = BTreeSet::new();
 
         let walker = WalkBuilder::new(&project_root)
             .hidden(true)
@@ -138,10 +141,17 @@ impl SymbolIndex {
             };
             let input_hash = blake3::hash(source.as_bytes()).to_hex().to_string();
 
-            if self
-                .index
-                .producer_is_current(&path_str, "tree-sitter/1", &input_hash)?
-            {
+            indexed_paths.insert(path_str.clone());
+
+            // The extractor and the concept synthesizer are gated separately so
+            // an existing index picks up synthesis without a full rebuild.
+            let code_current =
+                self.index
+                    .producer_is_current(&path_str, "tree-sitter/1", &input_hash)?;
+            let synth_current =
+                self.index
+                    .producer_is_current(&path_str, SYNTH_PRODUCER, &input_hash)?;
+            if code_current && synth_current {
                 stats.files_skipped += 1;
                 continue;
             }
@@ -150,23 +160,36 @@ impl SymbolIndex {
             match parser.parse_source_with_relationships(&source, Language::from_path(path)?, path)
             {
                 Ok(parsed) => {
-                    self.index_code_file(
+                    if !code_current {
+                        self.index_code_file(
+                            &project_id,
+                            &project_root,
+                            path,
+                            &source,
+                            &parsed.symbols,
+                            &parsed.relationships,
+                            mtime_secs,
+                            mtime_nanos,
+                        )?;
+                        stats.files_indexed += 1;
+                        stats.symbols_indexed += parsed.symbols.len();
+                        stats.edges_indexed += parsed.relationships.len();
+                    }
+                    stats.concepts_indexed += self.synthesize_concepts(
                         &project_id,
-                        &project_root,
-                        path,
+                        &path_str,
+                        Language::from_path(path)?,
                         &source,
+                        &input_hash,
                         &parsed.symbols,
                         &parsed.relationships,
-                        mtime_secs,
-                        mtime_nanos,
                     )?;
-                    stats.files_indexed += 1;
-                    stats.symbols_indexed += parsed.symbols.len();
-                    stats.edges_indexed += parsed.relationships.len();
                 }
                 Err(_) => stats.files_errored += 1,
             }
         }
+
+        stats.concepts_removed = self.prune_concepts(&project_id, &indexed_paths)?;
 
         let resolution = self
             .index
@@ -176,6 +199,71 @@ impl SymbolIndex {
         stats.edges_ambiguous = resolution.ambiguous;
 
         Ok(stats)
+    }
+
+    /// Build OKF concepts for one file and write them into the shared graph.
+    ///
+    /// Returns the number of concepts written. Synthesis failures are recorded
+    /// as zero rather than aborting the build: a file the codec rejects must
+    /// not cost the user their symbol index.
+    #[allow(clippy::too_many_arguments)]
+    fn synthesize_concepts(
+        &mut self,
+        project_id: &str,
+        relative_path: &str,
+        language: Language,
+        source: &str,
+        content_hash: &str,
+        symbols: &[Symbol],
+        relationships: &[ExtractedRelationship],
+    ) -> Result<usize> {
+        let stable_keys = stable_symbol_keys(symbols);
+        let concepts = match synth::synthesize_file(
+            &FileSynthesis {
+                relative_path,
+                language,
+                source,
+                content_hash,
+                symbols,
+                stable_keys: &stable_keys,
+                relationships,
+            },
+            OkfLimits::default(),
+        ) {
+            Ok(concepts) => concepts,
+            Err(_) => return Ok(0),
+        };
+        agent_knowledge::knowledge::index_synthesized_concepts(
+            &mut self.index,
+            project_id,
+            &concepts,
+        )?;
+        self.index
+            .mark_producer_state(relative_path, SYNTH_PRODUCER, content_hash)?;
+        Ok(concepts.len())
+    }
+
+    /// Drop synthesized concepts whose backing file is no longer indexed.
+    ///
+    /// Reconciled against what is stored rather than what this run wrote, since
+    /// unchanged files are skipped and never re-synthesized.
+    fn prune_concepts(
+        &mut self,
+        project_id: &str,
+        indexed_paths: &BTreeSet<String>,
+    ) -> Result<usize> {
+        let stored = self.index.origin_external_ids(
+            project_id,
+            "okf",
+            agent_knowledge::knowledge::SYNTH_ORIGIN,
+        )?;
+        let retained = synth::retained_identities(stored.iter(), indexed_paths);
+        self.index.prune_origin_resources(
+            project_id,
+            "okf",
+            agent_knowledge::knowledge::SYNTH_ORIGIN,
+            &retained,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -543,19 +631,23 @@ pub struct IndexStats {
     pub edges_resolved: usize,
     pub edges_unresolved: usize,
     pub edges_ambiguous: usize,
+    pub concepts_indexed: usize,
+    pub concepts_removed: usize,
 }
 
 impl std::fmt::Display for IndexStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Indexed {} files ({} symbols, {} edges; {} resolved, {} unresolved, {} ambiguous), skipped {} unchanged, {} errors",
+            "Indexed {} files ({} symbols, {} edges; {} resolved, {} unresolved, {} ambiguous), {} concepts ({} removed), skipped {} unchanged, {} errors",
             self.files_indexed,
             self.symbols_indexed,
             self.edges_indexed,
             self.edges_resolved,
             self.edges_unresolved,
             self.edges_ambiguous,
+            self.concepts_indexed,
+            self.concepts_removed,
             self.files_skipped,
             self.files_errored
         )
@@ -604,6 +696,92 @@ class DataProcessor:
 "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn synthesized_concepts_land_in_the_graph_as_derived_and_are_idempotent() {
+        let project_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        std::fs::write(
+            project_dir.path().join("lib.rs"),
+            "/// Exported entry point.\npub fn run() {}\nfn hidden() {}\n",
+        )
+        .unwrap();
+
+        let mut index = SymbolIndex::open(&db_dir.path().join("project.db")).unwrap();
+        let first = index.build(project_dir.path()).unwrap();
+        // One CodeModule for the file plus one CodeSymbol for the exported fn.
+        assert_eq!(first.concepts_indexed, 2);
+
+        let rows: Vec<(String, String, String, String)> = index
+            .index
+            .connection()
+            .prepare(
+                "SELECT external_id, kind, origin_kind, authority FROM resources
+                 WHERE namespace = 'okf' ORDER BY external_id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "code/lib.rs.md");
+        assert_eq!(rows[0].1, "CodeModule");
+        // Synthesized knowledge must never claim repository authority.
+        for row in &rows {
+            assert_eq!(row.2, "local-derived");
+            assert_eq!(row.3, "derived");
+        }
+        assert!(rows[1].0.starts_with("code/lib.rs/"));
+        assert_eq!(rows[1].1, "CodeSymbol");
+
+        // Unchanged input is skipped and produces no new concepts or rows.
+        let second = index.build(project_dir.path()).unwrap();
+        assert_eq!(second.concepts_indexed, 0);
+        assert_eq!(second.files_skipped, 1);
+        let count: i64 = index
+            .index
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM resources WHERE namespace = 'okf'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn deleting_a_file_prunes_only_its_own_synthesized_concepts() {
+        let project_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        std::fs::write(project_dir.path().join("kept.rs"), "pub fn kept() {}\n").unwrap();
+        let removed_path = project_dir.path().join("removed.rs");
+        std::fs::write(&removed_path, "pub fn gone() {}\n").unwrap();
+
+        let mut index = SymbolIndex::open(&db_dir.path().join("project.db")).unwrap();
+        assert_eq!(index.build(project_dir.path()).unwrap().concepts_indexed, 4);
+
+        std::fs::remove_file(&removed_path).unwrap();
+        let after = index.build(project_dir.path()).unwrap();
+        assert_eq!(after.concepts_removed, 2);
+
+        let remaining: Vec<String> = index
+            .index
+            .connection()
+            .prepare(
+                "SELECT external_id FROM resources WHERE namespace = 'okf' ORDER BY external_id",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert!(remaining.iter().all(|id| id.starts_with("code/kept.rs")));
     }
 
     #[test]
@@ -676,13 +854,28 @@ class DataProcessor:
             .connection()
             .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
             .unwrap();
-        let producer_count: i64 = index
+        // One row per (file, producer): the extractor and the concept
+        // synthesizer each track the file, and re-indexing replaces rather than
+        // accumulates.
+        let producer_rows: Vec<(String, i64)> = index
             .index
             .connection()
-            .query_row("SELECT COUNT(*) FROM producer_state", [], |row| row.get(0))
+            .prepare(
+                "SELECT producer, COUNT(*) FROM producer_state GROUP BY producer ORDER BY producer",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
         assert_eq!(edge_count, 0);
-        assert_eq!(producer_count, 1);
+        assert_eq!(
+            producer_rows,
+            vec![
+                ("okf-synth/1".to_owned(), 1),
+                ("tree-sitter/1".to_owned(), 1)
+            ]
+        );
     }
 
     #[test]

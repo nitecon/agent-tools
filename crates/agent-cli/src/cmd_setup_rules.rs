@@ -54,6 +54,22 @@ agent-tools search <query> --type symbol|file  # project-wide index search
 agent-tools summary [path]                     # compact project overview
 agent-tools index --rebuild                    # refresh after large changes
 ```
+
+### Knowledge Graph (populated automatically by `index`)
+
+- `agent-tools index` synthesizes OKF concepts from the code index into the project database. Nothing is written to the repository; there are no knowledge files to author.
+- Concepts are `derived` authority — they rank below repository- and gateway-authored knowledge and never replace reading the source.
+- Read a concept URI with `read`/`doc` exactly like a path; a real path always reads from disk.
+- Tool use feeds the graph: reads/greps record access signals, and `tasks done` writes a draft Observation linked to what the work touched. `AGENT_TOOLS_OBSERVE=off` disables.
+
+```bash
+agent-tools search <query> --type knowledge    # concepts (add --type all to include symbols/files)
+agent-tools get <uri-or-title>                 # resource, authority, lifecycle, trust
+agent-tools graph <uri> --relation <r> --depth <n>   # bounded typed traversal
+agent-tools refs|imports|impls <symbol>        # callers/callees, imports, inheritance
+agent-tools read <okf-uri>                     # render a stored concept as Markdown
+agent-tools okf export --destination <dir>     # optional: materialize the stored bundle
+```
 "#;
 
 const COMMS_SECTION: &str = r#"

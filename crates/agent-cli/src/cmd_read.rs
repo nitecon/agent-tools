@@ -7,8 +7,18 @@ pub(crate) fn run(file: &Path, lines: Option<&str>) -> Result<()> {
 }
 
 pub(crate) fn read_lines_to_string(file: &Path, lines: Option<&str>) -> Result<String> {
-    let text = std::fs::read_to_string(file)
-        .with_context(|| format!("failed to read UTF-8 file {}", file.display()))?;
+    // Real paths always read from disk; only a target with no file behind it is
+    // resolved against the knowledge index.
+    let text = match crate::virtual_doc::read_file_or_resource(file)? {
+        Some(text) => text,
+        None => {
+            return Err(anyhow::anyhow!(
+                "failed to read UTF-8 file {}",
+                file.display()
+            ))
+            .context("no such file, and no knowledge resource matches that name")
+        }
+    };
     Ok(match lines {
         Some(raw) => select_lines(&text, parse_lines(raw)?),
         None => text,

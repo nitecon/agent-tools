@@ -4,6 +4,10 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 use std::collections::BTreeSet;
+
+// Producers build `x-agent-tools` payloads in the codec's own YAML types, so
+// they never have to pin a matching serde_yaml themselves.
+pub use serde_yaml::{Mapping as OkfMapping, Value as OkfValue};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -83,6 +87,24 @@ pub struct OkfSource {
     pub title: Option<String>,
 }
 
+/// Inputs for building a concept in memory instead of parsing one from disk.
+#[derive(Debug, Clone, Default)]
+pub struct ConceptSynthesis<'a> {
+    /// Bundle-relative Markdown path; the portable OKF identity.
+    pub id: &'a str,
+    pub kind: &'a str,
+    pub title: &'a str,
+    pub status: &'a str,
+    pub description: Option<&'a str>,
+    pub tags: Vec<String>,
+    pub body: String,
+    /// Producer facts retained under the namespaced `x-agent-tools` key.
+    pub extension: Mapping,
+    /// Typed relationships stored beside `extension` under `relationships`,
+    /// matching the layout written by [`OkfConcept::set_portable_edges`].
+    pub relationships: Vec<OkfPortableEdge>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OkfPortableEdge {
     pub relation: String,
@@ -159,6 +181,99 @@ impl OkfConcept {
         (by, at)
     }
 
+    /// Build a concept in memory, without a backing file.
+    ///
+    /// Producers that derive knowledge from an index (rather than reading an
+    /// authored Markdown document) go through here so synthesized concepts are
+    /// byte-identical to what `parse_bundle` would have produced for the same
+    /// document. `raw_frontmatter` is the deterministic rendering of the
+    /// metadata mapping, which keeps content hashing — and therefore
+    /// incremental re-indexing — stable across runs.
+    pub fn synthesize(input: ConceptSynthesis<'_>, limits: OkfLimits) -> Result<Self> {
+        validate_relative_path(input.id)?;
+        if !input.id.ends_with(".md") {
+            bail!(
+                "synthesized OKF identity must be a Markdown path: {}",
+                input.id
+            );
+        }
+        let mut mapping = Mapping::new();
+        mapping.insert(
+            Value::String("okf_version".to_owned()),
+            Value::String("0.2".to_owned()),
+        );
+        mapping.insert(
+            Value::String("type".to_owned()),
+            Value::String(input.kind.to_owned()),
+        );
+        mapping.insert(
+            Value::String("title".to_owned()),
+            Value::String(input.title.to_owned()),
+        );
+        mapping.insert(
+            Value::String("status".to_owned()),
+            Value::String(input.status.to_owned()),
+        );
+        if let Some(description) = input.description {
+            mapping.insert(
+                Value::String("description".to_owned()),
+                Value::String(description.to_owned()),
+            );
+        }
+        if !input.tags.is_empty() {
+            mapping.insert(
+                Value::String("tags".to_owned()),
+                Value::Sequence(
+                    input
+                        .tags
+                        .iter()
+                        .map(|tag| Value::String(tag.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        let mut extension = input.extension.clone();
+        if !input.relationships.is_empty() {
+            extension.insert(
+                Value::String("relationships".to_owned()),
+                serde_yaml::to_value(&input.relationships)?,
+            );
+        }
+        if !extension.is_empty() {
+            mapping.insert(
+                Value::String("x-agent-tools".to_owned()),
+                Value::Mapping(extension),
+            );
+        }
+        let metadata = Value::Mapping(mapping);
+        // Match `split_frontmatter`, which yields the YAML without its trailing
+        // newline, so a synthesized concept and the same concept re-parsed from
+        // an export hash identically.
+        let rendered = deterministic_frontmatter(&metadata)?;
+        let raw_frontmatter = rendered.strip_suffix('\n').unwrap_or(&rendered).to_owned();
+        if raw_frontmatter.len() > limits.max_frontmatter_bytes {
+            bail!(
+                "synthesized OKF frontmatter exceeds byte limit: {}",
+                input.id
+            );
+        }
+        let links = extract_markdown_links(&input.body, limits.max_links_per_concept)?;
+        Ok(Self {
+            id: input.id.to_owned(),
+            kind: input.kind.to_owned(),
+            title: input.title.to_owned(),
+            description: input.description.map(ToOwned::to_owned),
+            tags: input.tags,
+            status: input.status.to_owned(),
+            stale_after: None,
+            body: input.body,
+            raw_frontmatter,
+            metadata,
+            links,
+            diagnostics: Vec::new(),
+        })
+    }
+
     /// Store internal typed relationships in OKF's namespaced extension surface.
     pub fn set_portable_edges(&mut self, edges: &[OkfPortableEdge]) -> Result<()> {
         let mapping = self
@@ -200,6 +315,15 @@ pub fn parse_bundle(root: &Path, limits: OkfLimits) -> Result<OkfBundle> {
     for path in paths {
         concepts.push(parse_concept(&canonical_root, &path, limits)?);
     }
+    Ok(bundle_from_concepts(concepts))
+}
+
+/// Resolve intra-bundle links and assemble a bundle from concepts that are
+/// already in memory.
+///
+/// Disk parsing and in-memory synthesis share this so a synthesized bundle
+/// resolves, diagnoses, and versions exactly like a parsed one.
+pub fn bundle_from_concepts(mut concepts: Vec<OkfConcept>) -> OkfBundle {
     let known_ids: BTreeSet<String> = concepts.iter().map(|item| item.id.clone()).collect();
     for concept in &mut concepts {
         for link in &mut concept.links {
@@ -231,11 +355,49 @@ pub fn parse_bundle(root: &Path, limits: OkfLimits) -> Result<OkfBundle> {
         .iter()
         .flat_map(|concept| concept.diagnostics.clone())
         .collect();
-    Ok(OkfBundle {
+    OkfBundle {
         version,
         concepts,
         diagnostics,
-    })
+    }
+}
+
+/// Render a concept as its canonical OKF Markdown document.
+///
+/// This is the single rendering path: `export_bundle` writes it to disk and
+/// virtual-document reads serve it straight from the index, so a stored concept
+/// and an exported file can never diverge.
+pub fn render_concept(concept: &OkfConcept) -> Result<String> {
+    let yaml = deterministic_frontmatter(&concept.metadata)?;
+    Ok(format!("---\n{}---\n{}", yaml, concept.body))
+}
+
+/// Render the bundle's `index.md` projection from the concept set.
+///
+/// Generated on demand rather than stored, so it can never drift from the
+/// concepts it lists.
+pub fn render_bundle_index(bundle: &OkfBundle) -> String {
+    let mut concepts: Vec<&OkfConcept> = bundle.concepts.iter().collect();
+    concepts.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let mut output = format!(
+        "---\nokf_version: \"{}\"\ntype: Index\ntitle: Knowledge Index\n---\n# Knowledge Index\n\n{} concepts.\n",
+        bundle.version,
+        concepts.len()
+    );
+    let mut current_kind = "";
+    for concept in concepts {
+        if concept.kind != current_kind {
+            current_kind = &concept.kind;
+            output.push_str(&format!("\n## {current_kind}\n\n"));
+        }
+        // Bundle-root-relative so the projection resolves from any location.
+        output.push_str(&format!("- [{}](/{})\n", concept.title, concept.id));
+    }
+    output
 }
 
 pub fn export_bundle(bundle: &OkfBundle, destination: &Path) -> Result<()> {
@@ -254,9 +416,7 @@ pub fn export_bundle(bundle: &OkfBundle, destination: &Path) -> Result<()> {
                 bail!("OKF export path escapes destination: {}", concept.id);
             }
         }
-        let yaml = deterministic_frontmatter(concept)?;
-        let document = format!("---\n{}---\n{}", yaml, concept.body);
-        fs::write(&target, document)
+        fs::write(&target, render_concept(concept)?)
             .with_context(|| format!("write OKF concept {}", target.display()))?;
     }
     Ok(())
@@ -282,7 +442,7 @@ pub fn graph_fingerprint(bundle: &OkfBundle) -> String {
                 &concept.status,
                 &concept.stale_after,
                 &concept.body,
-                deterministic_frontmatter(concept).expect("valid OKF metadata"),
+                deterministic_frontmatter(&concept.metadata).expect("valid OKF metadata"),
                 links,
             )
         })
@@ -303,14 +463,26 @@ fn parse_concept(root: &Path, path: &Path, limits: OkfLimits) -> Result<OkfConce
         .strip_prefix(root)?
         .to_string_lossy()
         .replace('\\', "/");
-    validate_relative_path(&id)?;
     let bytes = fs::read(&canonical)?;
     if bytes.len() > limits.max_file_bytes {
         bail!("OKF concept exceeds byte limit: {id}");
     }
     let document =
         String::from_utf8(bytes).with_context(|| format!("OKF concept is not UTF-8: {id}"))?;
-    let (raw_frontmatter, body) = split_frontmatter(&document)?;
+    parse_document(&id, &document, limits)
+}
+
+/// Parse one concept document that is already in memory.
+///
+/// Used when reading concepts back out of the index, where there is no file to
+/// open but the same validation and diagnostics must apply.
+pub fn parse_document(id: &str, document: &str, limits: OkfLimits) -> Result<OkfConcept> {
+    let id = id.to_owned();
+    validate_relative_path(&id)?;
+    if document.len() > limits.max_file_bytes {
+        bail!("OKF concept exceeds byte limit: {id}");
+    }
+    let (raw_frontmatter, body) = split_frontmatter(document)?;
     if raw_frontmatter.len() > limits.max_frontmatter_bytes {
         bail!("OKF frontmatter exceeds byte limit: {id}");
     }
@@ -403,11 +575,8 @@ fn split_frontmatter(document: &str) -> Result<(&str, &str)> {
     Ok((frontmatter, body))
 }
 
-fn deterministic_frontmatter(concept: &OkfConcept) -> Result<String> {
-    let mapping = concept
-        .metadata
-        .as_mapping()
-        .context("OKF metadata mapping")?;
+fn deterministic_frontmatter(metadata: &Value) -> Result<String> {
+    let mapping = metadata.as_mapping().context("OKF metadata mapping")?;
     let mut sorted = Mapping::new();
     let mut entries: Vec<_> = mapping.iter().collect();
     entries.sort_by_key(|(key, _)| serde_yaml::to_string(key).unwrap_or_default());
@@ -703,7 +872,7 @@ mod tests {
                 extensions: Mapping::new(),
             }])
             .unwrap();
-        let serialized = deterministic_frontmatter(concept).unwrap();
+        let serialized = deterministic_frontmatter(&concept.metadata).unwrap();
         assert!(serialized.contains("x-agent-tools:"));
         assert!(serialized.contains("relationships:"));
         assert!(serialized.contains("relation: documents"));
@@ -730,5 +899,110 @@ mod tests {
         assert!(bundle.concepts[0].links[0].external);
         let error = listener.accept().expect_err("codec never opens the URL");
         assert_eq!(error.kind(), ErrorKind::WouldBlock);
+    }
+
+    fn synthesized_pair() -> Vec<OkfConcept> {
+        let mut extension = Mapping::new();
+        extension.insert(
+            Value::String("language".to_owned()),
+            Value::String("Rust".to_owned()),
+        );
+        let module = OkfConcept::synthesize(
+            ConceptSynthesis {
+                id: "code/src/lib.rs.md",
+                kind: "CodeModule",
+                title: "src/lib.rs",
+                status: "stable",
+                tags: vec!["rust".to_owned()],
+                body: "# src/lib.rs\n\n- [run](/code/src/lib.rs/run.md)\n".to_owned(),
+                extension: extension.clone(),
+                relationships: vec![OkfPortableEdge {
+                    relation: "contains".to_owned(),
+                    target: "/code/src/lib.rs/run.md".to_owned(),
+                    confidence: Some("resolved".to_owned()),
+                    extensions: Mapping::new(),
+                }],
+                ..ConceptSynthesis::default()
+            },
+            OkfLimits::default(),
+        )
+        .unwrap();
+        let symbol = OkfConcept::synthesize(
+            ConceptSynthesis {
+                id: "code/src/lib.rs/run.md",
+                kind: "CodeSymbol",
+                title: "run",
+                status: "stable",
+                body: "# run\n\n- [src/lib.rs](/code/src/lib.rs.md)\n".to_owned(),
+                extension,
+                ..ConceptSynthesis::default()
+            },
+            OkfLimits::default(),
+        )
+        .unwrap();
+        vec![module, symbol]
+    }
+
+    #[test]
+    fn synthesized_bundles_are_deterministic_and_survive_export_reparse() {
+        let first = bundle_from_concepts(synthesized_pair());
+        let second = bundle_from_concepts(synthesized_pair());
+        assert_eq!(graph_fingerprint(&first), graph_fingerprint(&second));
+
+        // Links resolve through the same path parsed bundles use.
+        assert_eq!(
+            first.concepts[0].links[0].resolved_id.as_deref(),
+            Some("code/src/lib.rs/run.md")
+        );
+        assert!(first.diagnostics.is_empty());
+
+        let destination = TempDir::new().unwrap();
+        export_bundle(&first, destination.path()).unwrap();
+        let reparsed = parse_bundle(destination.path(), OkfLimits::default()).unwrap();
+        assert_eq!(graph_fingerprint(&first), graph_fingerprint(&reparsed));
+    }
+
+    #[test]
+    fn synthesized_frontmatter_matches_its_rendered_document() {
+        let concept = synthesized_pair().remove(0);
+        let document = render_concept(&concept).unwrap();
+        // raw_frontmatter is what index_okf_concept hashes; it must equal what a
+        // reader of the rendered document would parse back.
+        let (frontmatter, body) = split_frontmatter(&document).unwrap();
+        assert_eq!(frontmatter, concept.raw_frontmatter);
+        assert_eq!(body, concept.body);
+        assert!(
+            document.contains("okf_version: '0.2'") || document.contains("okf_version: \"0.2\"")
+        );
+        assert!(document.contains("relationships:"));
+    }
+
+    #[test]
+    fn synthesis_rejects_identities_that_escape_the_bundle() {
+        for id in ["../outside.md", "/abs.md", "code/plain.txt"] {
+            assert!(OkfConcept::synthesize(
+                ConceptSynthesis {
+                    id,
+                    kind: "CodeModule",
+                    title: "x",
+                    status: "stable",
+                    body: "# x\n".to_owned(),
+                    ..ConceptSynthesis::default()
+                },
+                OkfLimits::default(),
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn bundle_index_projection_is_deterministic_and_grouped() {
+        let bundle = bundle_from_concepts(synthesized_pair());
+        let rendered = render_bundle_index(&bundle);
+        assert_eq!(rendered, render_bundle_index(&bundle));
+        let module_at = rendered.find("## CodeModule").unwrap();
+        let symbol_at = rendered.find("## CodeSymbol").unwrap();
+        assert!(module_at < symbol_at);
+        assert!(rendered.contains("- [run](/code/src/lib.rs/run.md)"));
     }
 }

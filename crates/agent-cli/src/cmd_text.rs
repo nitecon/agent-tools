@@ -348,9 +348,17 @@ fn run_grep(args: GrepArgs) -> Result<TextCommandResult> {
 
     let before = args.before_context.unwrap_or(args.context);
     let after = args.after_context.unwrap_or(args.context);
+    // Only files that actually matched are recorded. A repo-wide sweep touches
+    // everything, so counting scanned files would make the signal meaningless.
+    let matched_paths: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
     let collected = collect_text_command_outcomes(TextOperationKind::Grep, &files, |context| {
         let matches = grep_line_matches(context.text(), &matcher);
         let matched = !matches.is_empty();
+        if matched {
+            matched_paths
+                .borrow_mut()
+                .push(context.path().as_str().to_owned());
+        }
         let mut records = Vec::new();
         push_grep_records_for_matches(
             &mut records,
@@ -363,6 +371,14 @@ fn run_grep(args: GrepArgs) -> Result<TextCommandResult> {
         );
         Ok(TextCommandOutcome::grep(records, matched))
     })?;
+
+    let matched_paths = matched_paths.into_inner();
+    crate::observe::paths(
+        "grep",
+        matched_paths
+            .iter()
+            .map(|path| std::path::Path::new(path.as_str())),
+    );
 
     Ok(finalize_text_command_output(
         collected,

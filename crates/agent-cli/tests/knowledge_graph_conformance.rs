@@ -378,6 +378,123 @@ fn isolated_state_dir(label: &str) -> PathBuf {
     path
 }
 
+#[test]
+fn synthesized_concepts_are_searchable_and_readable_without_files_on_disk() {
+    let state = isolated_state_dir("synth-virtual");
+    let project = fixture_root().join("knowledge_graph/code");
+    let indexed = run_agent_tools(&project, &state, &["index"]);
+    assert!(indexed.status.success(), "{}", stderr(&indexed));
+    assert!(stdout(&indexed).contains("concepts"));
+
+    // Indexing writes nothing into the working tree.
+    assert!(!project.join(".agents").exists());
+
+    let search = run_agent_tools(
+        &project,
+        &state,
+        &[
+            "search",
+            "dispatch",
+            "--type",
+            "knowledge",
+            "--namespace",
+            "okf",
+        ],
+    );
+    assert!(search.status.success(), "{}", stderr(&search));
+    let listed = stdout(&search);
+    assert!(listed.contains("CodeSymbol"), "{listed}");
+    assert!(listed.contains("[stable:derived]"), "{listed}");
+
+    let uri = listed
+        .split_whitespace()
+        .find(|token| token.starts_with("okf://") && token.ends_with(".md"))
+        .expect("a synthesized concept URI")
+        .to_owned();
+
+    // The concept reads back as OKF Markdown though no such file exists.
+    let read = run_agent_tools(&project, &state, &["read", &uri]);
+    assert!(read.status.success(), "{}", stderr(&read));
+    let document = stdout(&read);
+    assert!(document.starts_with("---\n"), "{document}");
+    assert!(document.contains("okf_version: '0.2'"), "{document}");
+    assert!(document.contains("extractor: okf-synth/1"), "{document}");
+
+    let outline = run_agent_tools(&project, &state, &["doc", "outline", &uri]);
+    assert!(outline.status.success(), "{}", stderr(&outline));
+    assert!(!stdout(&outline).trim().is_empty());
+
+    // A real path is still served from disk, never from the index.
+    let source = run_agent_tools(&project, &state, &["read", "python/app.py"]);
+    assert!(source.status.success(), "{}", stderr(&source));
+    assert!(!stdout(&source).starts_with("---"));
+
+    // Materializing the stored bundle is opt-in interchange.
+    let destination = isolated_state_dir("synth-export");
+    let exported = run_agent_tools(
+        &project,
+        &state,
+        &[
+            "okf",
+            "export",
+            "--destination",
+            destination.to_str().expect("utf-8 destination"),
+            "--with-index",
+        ],
+    );
+    assert!(exported.status.success(), "{}", stderr(&exported));
+    assert!(destination.join("index.md").exists());
+    assert!(destination.join("code/python/app.py.md").exists());
+
+    fs::remove_dir_all(destination).expect("remove export");
+    fs::remove_dir_all(state).expect("remove isolated state");
+}
+
+#[test]
+fn tool_use_accumulates_bounded_access_signals_and_can_be_disabled() {
+    let state = isolated_state_dir("observe");
+    let project = fixture_root().join("knowledge_graph/code");
+    assert!(run_agent_tools(&project, &state, &["index"])
+        .status
+        .success());
+
+    // Reading through the tools accumulates a signal on the resource.
+    for _ in 0..3 {
+        let read = run_agent_tools(&project, &state, &["read", "python/app.py"]);
+        assert!(read.status.success(), "{}", stderr(&read));
+    }
+    let get = run_agent_tools(&project, &state, &["get", "python/app.py"]);
+    assert!(get.status.success(), "{}", stderr(&get));
+    let detail = stdout(&get);
+    let accesses = detail
+        .lines()
+        .find(|line| line.contains("\"accesses\""))
+        .expect("access count is reported");
+    // Three reads, plus this `get` recording itself after it read the value.
+    assert!(accesses.contains(": 3"), "{accesses}");
+
+    // Opting out records nothing further.
+    let opted_out = Command::new(env!("CARGO_BIN_EXE_agent-tools"))
+        .args(["read", "python/app.py"])
+        .current_dir(&project)
+        .env("AGENT_TOOLS_STATE_DIR", &state)
+        .env("AGENT_TOOLS_NUDGE", "off")
+        .env("AGENT_TOOLS_OBSERVE", "off")
+        .output()
+        .expect("run agent-tools");
+    assert!(opted_out.status.success(), "{}", stderr(&opted_out));
+    let after = run_agent_tools(&project, &state, &["get", "python/app.py"]);
+    let line = stdout(&after)
+        .lines()
+        .find(|line| line.contains("\"accesses\""))
+        .expect("access count is reported")
+        .to_owned();
+    // The opted-out read did not count; only the previous `get` did.
+    assert!(line.contains(": 4"), "{line}");
+
+    fs::remove_dir_all(state).expect("remove isolated state");
+}
+
 fn run_agent_tools(project: &Path, state: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_agent-tools"))
         .args(args)
