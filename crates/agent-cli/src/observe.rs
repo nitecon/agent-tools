@@ -66,7 +66,7 @@ fn record_path(tool: &str, target: &Path) -> Result<()> {
     if index.is_ephemeral() {
         return Ok(());
     }
-    let relative = relative_to(&root, target);
+    let relative = relative_to(&root, target)?;
     index.record_path_access(&relative, tool)?;
     Ok(())
 }
@@ -79,7 +79,9 @@ fn record_paths<'a>(tool: &str, targets: impl IntoIterator<Item = &'a Path>) -> 
     }
     let mut seen = std::collections::BTreeSet::new();
     for target in targets {
-        let relative = relative_to(&root, target);
+        let Ok(relative) = relative_to(&root, target) else {
+            continue;
+        };
         if seen.insert(relative.clone()) {
             index.record_path_access(&relative, tool)?;
         }
@@ -97,13 +99,21 @@ fn record_resource(tool: &str, resource_id: i64) -> Result<()> {
     Ok(())
 }
 
-fn relative_to(root: &Path, target: &Path) -> String {
-    let absolute = target.canonicalize().unwrap_or_else(|_| root.join(target));
-    absolute
-        .strip_prefix(root)
-        .unwrap_or(&absolute)
-        .to_string_lossy()
-        .replace('\\', "/")
+/// Resolve a target to the repository-relative form stored in the index.
+///
+/// Both sides are canonicalized before stripping. On Windows a canonicalized
+/// path carries a `\\?\` prefix that a bare `current_dir` does not, so
+/// comparing one against the other strips nothing and the lookup silently
+/// matches no file at all.
+fn relative_to(root: &Path, target: &Path) -> Result<String> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let absolute = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        root.join(target)
+    };
+    let absolute = absolute.canonicalize().unwrap_or(absolute);
+    agent_knowledge::repo_relative_path(&root, &absolute)
 }
 
 /// Record a completed unit of work as an `Observation` concept.
@@ -307,6 +317,32 @@ mod tests {
             "no link is better than a broken one"
         );
         assert!(concept.body.contains("repo://elsewhere/src/lib.rs"));
+    }
+
+    #[test]
+    fn relative_paths_and_absolute_paths_normalize_identically() {
+        let project = tempfile::TempDir::new().unwrap();
+        let nested = project.path().join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("lib.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+
+        let from_relative = relative_to(project.path(), Path::new("src/lib.rs")).unwrap();
+        let from_absolute = relative_to(project.path(), &file).unwrap();
+        // Both spellings must land on the exact string stored in files.path, or
+        // access lookups silently match nothing. On Windows an uncanonicalized
+        // root strips nothing off a canonicalized target.
+        assert_eq!(from_relative, "src/lib.rs");
+        assert_eq!(from_relative, from_absolute);
+    }
+
+    #[test]
+    fn paths_outside_the_project_are_rejected_rather_than_mismatched() {
+        let project = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let file = outside.path().join("stray.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        assert!(relative_to(project.path(), &file).is_err());
     }
 
     #[test]

@@ -2325,6 +2325,17 @@ fn ensure_resource_tx(tx: &rusqlite::Transaction<'_>, input: &ResourceInput<'_>)
     .map_err(Into::into)
 }
 
+/// Normalize a path to the repository-relative form stored in `files.path`.
+///
+/// Producers outside this crate must resolve paths through here rather than
+/// building their own relative string, or they will not match what was indexed.
+/// Both arguments must already be canonicalized to the same form: on Windows a
+/// canonicalized path carries a `\\?\` prefix that a bare `current_dir` does
+/// not, and mixing the two silently yields a path that matches nothing.
+pub fn repo_relative_path(project_root: &Path, path: &Path) -> Result<String> {
+    normalized_repo_path(project_root, path)
+}
+
 pub fn canonical_repo_uri(project_id: &str, project_root: &Path, path: &Path) -> Result<String> {
     if project_id.trim().is_empty() {
         bail!("project_id must be non-empty");
