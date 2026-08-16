@@ -671,14 +671,24 @@ fn normalize_relative_path(path: &Path) -> Result<String> {
 }
 
 fn validate_relative_path(path: &str) -> Result<()> {
-    if path.is_empty() || path.contains('\0') || path.contains('\\') {
+    // A colon is a drive separator on Windows and an ordinary character
+    // elsewhere. Identities are portable, so one minted on Linux must not
+    // become an escape when the bundle is materialized on Windows.
+    if path.is_empty() || path.contains('\0') || path.contains('\\') || path.contains(':') {
         bail!("invalid OKF relative path: {path:?}");
     }
     let parsed = Path::new(path);
+    // `is_absolute` is platform-dependent: on Windows a rooted path with no
+    // drive (`/abs.md`) is not "absolute", so the component check has to reject
+    // `RootDir` explicitly or such an identity passes validation there and is
+    // rejected everywhere else.
     if parsed.is_absolute()
-        || parsed
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+        || parsed.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::Prefix(_) | Component::RootDir
+            )
+        })
     {
         bail!("unsafe OKF relative path: {path}");
     }
@@ -979,7 +989,17 @@ mod tests {
 
     #[test]
     fn synthesis_rejects_identities_that_escape_the_bundle() {
-        for id in ["../outside.md", "/abs.md", "code/plain.txt"] {
+        // Rooted, drive-qualified, backslash-separated, and escaping spellings
+        // must all be rejected on every platform — `is_absolute` alone does not
+        // agree across them.
+        for id in [
+            "../outside.md",
+            "/abs.md",
+            "C:/abs.md",
+            "code\\evil.md",
+            "code/../../escape.md",
+            "code/plain.txt",
+        ] {
             assert!(OkfConcept::synthesize(
                 ConceptSynthesis {
                     id,
