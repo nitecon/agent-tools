@@ -423,6 +423,7 @@ fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
     result
 }
 
+#[cfg(unix)]
 fn validate_staged_cli(path: &Path) -> Result<()> {
     let output = std::process::Command::new(path)
         .arg("--version")
@@ -433,6 +434,11 @@ fn validate_staged_cli(path: &Path) -> Result<()> {
                 path.display()
             )
         })?;
+    validate_staged_cli_output(&output)
+}
+
+#[cfg(unix)]
+fn validate_staged_cli_output(output: &std::process::Output) -> Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
@@ -530,6 +536,8 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(unix)]
     use std::path::Path;
 
     #[test]
@@ -597,22 +605,23 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn staged_cli_preflight_accepts_version_output() {
-        let directory = tempfile::tempdir().unwrap();
-        let cli = directory.path().join("agent-tools");
-        write_executable(&cli, "#!/bin/sh\necho 'agent-tools 9.9.9'\n");
-        super::validate_staged_cli(&cli).unwrap();
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"agent-tools 9.9.9\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        super::validate_staged_cli_output(&output).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn staged_cli_preflight_rejects_loader_failure() {
-        let directory = tempfile::tempdir().unwrap();
-        let cli = directory.path().join("agent-tools");
-        write_executable(
-            &cli,
-            "#!/bin/sh\necho \"version 'GLIBC_2.39' not found\" >&2\nexit 127\n",
-        );
-        let error = super::validate_staged_cli(&cli).unwrap_err();
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(127 << 8),
+            stdout: Vec::new(),
+            stderr: b"version 'GLIBC_2.39' not found\n".to_vec(),
+        };
+        let error = super::validate_staged_cli_output(&output).unwrap_err();
         let rendered = format!("{error:#}");
         assert!(
             rendered.contains("existing installation was not changed"),
@@ -634,10 +643,7 @@ mod tests {
             &archive,
             &[
                 ("agent-sync", "#!/bin/sh\necho new-sync\n"),
-                (
-                    "agent-tools",
-                    "#!/bin/sh\necho \"version 'GLIBC_2.39' not found\" >&2\nexit 127\n",
-                ),
+                ("agent-tools", "not an executable\n"),
             ],
         );
 
