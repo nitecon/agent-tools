@@ -7,7 +7,8 @@
 //! 2. Fetch the latest GitHub release from `nitecon/agent-tools`.
 //! 3. Compare the remote version against the compile-time version.
 //! 4. Download the platform-specific archive to a temp directory.
-//! 5. Extract matching binaries and atomically replace them (write `.new`, chmod, rename).
+//! 5. Stage all matching binaries, execute the staged CLI as a compatibility
+//!    preflight, then atomically replace the installed files.
 //! 6. Clean up temp files.
 //!
 //! Updates are opt-in through the `update` subcommand. Automatic checks are
@@ -344,57 +345,108 @@ fn touch_marker(marker: &Path) {
 
 /// Extract matching binaries from a `.tar.gz` archive and atomically place them.
 ///
-/// Strategy: unpack each matching entry to `<name>.new`, set permissions to 0o755,
-/// then rename over the target path. Companion binaries shipped in the same archive
-/// (e.g. `agent-sync`) are installed even if they are not yet present on disk, so
-/// `agent-tools update` brings existing installs up to the current binary set.
+/// Strategy: unpack all matching entries into a same-filesystem staging directory,
+/// execute the staged CLI as a compatibility preflight, then rename each binary over
+/// its target. Companion binaries shipped in the same archive (e.g. `agent-sync`)
+/// are installed even if they are not yet present on disk, so `agent-tools update`
+/// brings existing installs up to the current binary set.
 #[cfg(unix)]
 fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
     use flate2::read::GzDecoder;
     use std::os::unix::fs::PermissionsExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tar::Archive;
 
     let file = std::fs::File::open(archive)?;
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let staging_dir = exe_dir.join(format!(
+        ".agent-tools-update-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&staging_dir)?;
 
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path = entry.path()?.to_path_buf();
-        let file_name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
-        };
+    let result = (|| -> Result<()> {
+        let mut staged = Vec::new();
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let path = entry.path()?.to_path_buf();
+            let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
 
-        if !BINARY_NAMES.contains(&file_name.as_str()) {
-            continue;
+            if !BINARY_NAMES.contains(&file_name.as_str()) {
+                continue;
+            }
+
+            let target = exe_dir.join(&file_name);
+            let is_new = !target.exists();
+            let staging = staging_dir.join(&file_name);
+            entry.unpack(&staging)?;
+
+            let mut perms = std::fs::metadata(&staging)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&staging, perms)?;
+            staged.push((file_name, staging, target, is_new));
         }
 
-        let target = exe_dir.join(&file_name);
-        let is_new = !target.exists();
+        let staged_cli = staged
+            .iter()
+            .find(|(name, _, _, _)| name == "agent-tools")
+            .map(|(_, path, _, _)| path)
+            .context("release archive does not contain agent-tools")?;
+        validate_staged_cli(staged_cli)?;
 
-        // Write to .new, then atomically rename.
-        let staging = exe_dir.join(format!("{file_name}.new"));
-        entry.unpack(&staging)?;
+        for (file_name, staging, target, is_new) in staged {
+            std::fs::rename(&staging, &target)
+                .with_context(|| format!("failed to replace {}", target.display()))?;
 
-        let mut perms = std::fs::metadata(&staging)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&staging, perms)?;
-
-        std::fs::rename(&staging, &target)
-            .with_context(|| format!("failed to replace {}", target.display()))?;
-
-        if is_new {
-            eprintln!(
-                "[agent-tools] installed new companion binary: {}",
-                target.display()
-            );
-            eprintln!(
-                "[agent-tools] re-run install.sh / install-macos.sh with sudo to create the /usr/local/bin symlink for `{file_name}`"
-            );
+            if is_new {
+                eprintln!(
+                    "[agent-tools] installed new companion binary: {}",
+                    target.display()
+                );
+                eprintln!(
+                    "[agent-tools] re-run install.sh / install-macos.sh with sudo to create the /usr/local/bin symlink for `{file_name}`"
+                );
+            }
         }
+        Ok(())
+    })();
+
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    result
+}
+
+fn validate_staged_cli(path: &Path) -> Result<()> {
+    let output = std::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .with_context(|| {
+            format!(
+                "downloaded agent-tools cannot run on this host; existing installation was not changed ({})",
+                path.display()
+            )
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "downloaded agent-tools failed compatibility preflight; existing installation was not changed: {}",
+            stderr.trim()
+        );
     }
-
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.trim().starts_with("agent-tools ") {
+        bail!(
+            "downloaded agent-tools returned unexpected version output; existing installation was not changed: {}",
+            stdout.trim()
+        );
+    }
     Ok(())
 }
 
@@ -475,6 +527,10 @@ fn extract_and_replace(archive: &Path, exe_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use semver::Version;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::path::Path;
 
     #[test]
     fn test_version_comparison() {
@@ -510,6 +566,90 @@ mod tests {
             v.is_ok(),
             "CURRENT_VERSION '{}' is not valid semver",
             super::CURRENT_VERSION
+        );
+    }
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path, body: &str) {
+        std::fs::write(path, body).unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn write_update_archive(path: &Path, entries: &[(&str, &str)]) {
+        let file = std::fs::File::create(path).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        for (name, body) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, format!("bundle/{name}"), body.as_bytes())
+                .unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_cli_preflight_accepts_version_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let cli = directory.path().join("agent-tools");
+        write_executable(&cli, "#!/bin/sh\necho 'agent-tools 9.9.9'\n");
+        super::validate_staged_cli(&cli).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_cli_preflight_rejects_loader_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let cli = directory.path().join("agent-tools");
+        write_executable(
+            &cli,
+            "#!/bin/sh\necho \"version 'GLIBC_2.39' not found\" >&2\nexit 127\n",
+        );
+        let error = super::validate_staged_cli(&cli).unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("existing installation was not changed"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("GLIBC_2.39"), "{rendered}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn incompatible_archive_preserves_every_installed_binary() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive = directory.path().join("update.tar.gz");
+        let install = directory.path().join("bin");
+        std::fs::create_dir(&install).unwrap();
+        write_executable(&install.join("agent-tools"), "#!/bin/sh\necho old-cli\n");
+        write_executable(&install.join("agent-sync"), "#!/bin/sh\necho old-sync\n");
+        write_update_archive(
+            &archive,
+            &[
+                ("agent-sync", "#!/bin/sh\necho new-sync\n"),
+                (
+                    "agent-tools",
+                    "#!/bin/sh\necho \"version 'GLIBC_2.39' not found\" >&2\nexit 127\n",
+                ),
+            ],
+        );
+
+        let error = super::extract_and_replace(&archive, &install).unwrap_err();
+        assert!(format!("{error:#}").contains("existing installation was not changed"));
+        assert_eq!(
+            std::fs::read_to_string(install.join("agent-tools")).unwrap(),
+            "#!/bin/sh\necho old-cli\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(install.join("agent-sync")).unwrap(),
+            "#!/bin/sh\necho old-sync\n"
         );
     }
 }

@@ -107,6 +107,18 @@ $DOWNLOAD_OUT "${TMPDIR}/${ARCHIVE_NAME}" "$DOWNLOAD_URL"
 info "Extracting..."
 tar xzf "${TMPDIR}/${ARCHIVE_NAME}" -C "$TMPDIR"
 
+# Refuse to replace a working installation with a binary that the host loader
+# cannot start (for example, one linked against a newer glibc).
+STAGED_CLI=$(find "$TMPDIR" -name agent-tools -type f | head -1)
+if [ -z "$STAGED_CLI" ]; then
+  error "Binary agent-tools not found in archive"
+fi
+chmod 755 "$STAGED_CLI"
+if ! STAGED_VERSION=$("$STAGED_CLI" --version 2>&1); then
+  error "Downloaded agent-tools cannot run on this host; existing installation was not changed: ${STAGED_VERSION}"
+fi
+info "Compatibility check passed: ${STAGED_VERSION}"
+
 # --- Install ----------------------------------------------------------------
 
 for BIN in "${BINARY_NAMES[@]}"; do

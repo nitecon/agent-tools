@@ -13,19 +13,80 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
-    name: Build (${{ matrix.target }})
+  build-linux:
+    name: Build (${{ matrix.target }}, glibc 2.31)
     runs-on: ${{ matrix.runner }}
+    # Official multi-arch Rust image on Debian 11 (glibc 2.31). Keep this
+    # manifest pinned so the release ABI cannot drift with runner updates.
+    container: rust:1-bullseye@sha256:02d78ca3f928195c2a907543de778adfd728ad7e2a24fdc6aef582b7c77842e0
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
-            archive: tar.gz
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
-            archive: tar.gz
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build and ABI inspection tools
+        run: apt-get update && apt-get install -y --no-install-recommends binutils ca-certificates
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+            target
+          key: release-bullseye-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: release-bullseye-${{ matrix.target }}-
+
+      - name: Build release binaries
+        run: cargo build --workspace --release --target ${{ matrix.target }}
+        env:
+          AGENT_TOOLS_VERSION: ${{ github.ref_name }}
+
+      - name: Verify Debian-compatible glibc baseline
+        run: |
+          GLIBC_BASELINE=2.31 scripts/check-glibc-baseline.sh \
+            "target/${{ matrix.target }}/release/agent-tools" \
+            "target/${{ matrix.target }}/release/agent-tools-mcp" \
+            "target/${{ matrix.target }}/release/agent-sync"
+
+      - name: Package
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          staging="agent-tools-${tag}-${{ matrix.target }}"
+          mkdir -p "$staging"
+          cp "target/${{ matrix.target }}/release/agent-tools" "$staging/"
+          cp "target/${{ matrix.target }}/release/agent-tools-mcp" "$staging/"
+          cp "target/${{ matrix.target }}/release/agent-sync" "$staging/"
+          cp LICENSE README.md "$staging/"
+          tar czf "${staging}.tar.gz" "$staging"
+          echo "ASSET=${staging}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+
+  build-platforms:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           - target: x86_64-apple-darwin
             runner: macos-latest
             archive: tar.gz
@@ -95,7 +156,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: build
+    needs: [build-linux, build-platforms]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

@@ -13,6 +13,30 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  linux-release-compatibility:
+    name: Linux release compatibility (glibc 2.31)
+    runs-on: ubuntu-latest
+    container: rust:1-bullseye@sha256:02d78ca3f928195c2a907543de778adfd728ad7e2a24fdc6aef582b7c77842e0
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install ABI inspection tools
+        run: apt-get update && apt-get install -y --no-install-recommends binutils ca-certificates
+      - uses: actions/cache@v5
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+            target
+          key: linux-release-bullseye-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-release-bullseye-
+      - run: cargo build --workspace --release --target x86_64-unknown-linux-gnu
+      - name: Enforce glibc baseline
+        run: |
+          GLIBC_BASELINE=2.31 scripts/check-glibc-baseline.sh \
+            target/x86_64-unknown-linux-gnu/release/agent-tools \
+            target/x86_64-unknown-linux-gnu/release/agent-tools-mcp \
+            target/x86_64-unknown-linux-gnu/release/agent-sync
+
   knowledge-graph:
     name: knowledge-graph-${{ matrix.label }}
     runs-on: ${{ matrix.os }}

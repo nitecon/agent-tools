@@ -184,6 +184,7 @@ dependencies = [
  "semver",
  "serde",
  "tar",
+ "tempfile",
  "tokio",
  "zip",
 ]

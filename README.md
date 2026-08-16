@@ -11,7 +11,8 @@ AI coding agents' built-in tools have gaps when working with large codebases:
 - **No symbol extraction** — reading a 500KB file to get one function destroys context
 - **No file indexing** — every search is a cold filesystem walk
 
-`agent-tools` fixes all of these with pure Rust, zero runtime dependencies.
+`agent-tools` fixes all of these with a self-contained Rust distribution and no
+separately installed application runtime.
 
 ## Installation
 
@@ -28,6 +29,11 @@ curl -fsSL https://raw.githubusercontent.com/nitecon/agent-tools/refs/heads/main
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nitecon/agent-tools/refs/heads/main/install.sh | sudo bash
 ```
+
+Published GNU/Linux binaries are built against a maximum glibc baseline of
+2.31 (Debian 11), and are release-gated for Debian 11/12 and newer compatible
+distributions. The installer executes the staged CLI before replacing an
+existing installation.
 
 **Windows (PowerShell):**
 
@@ -64,6 +70,17 @@ agent-tools version
 ```
 
 The update rate-limit marker is stored at `~/.agentic/.agent-tools-update-check` and persists across reboots.
+
+If an older update installed a binary that cannot start because of a glibc
+version error, recover without invoking that binary by rerunning the Linux
+installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nitecon/agent-tools/refs/heads/main/install.sh | sudo bash
+```
+
+The installer now refuses an incompatible download before changing the current
+installation.
 
 ## Usage — CLI (Primary)
 
