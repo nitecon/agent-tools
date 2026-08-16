@@ -39,6 +39,42 @@ fn is_conceptual(kind: SymbolKind) -> bool {
     )
 }
 
+/// Directory names whose contents are scaffolding rather than project knowledge.
+const TEST_DIRECTORIES: [&str; 8] = [
+    "tests",
+    "test",
+    "testdata",
+    "fixtures",
+    "__tests__",
+    "__fixtures__",
+    "__mocks__",
+    "node_modules",
+];
+
+/// Whether a file's contents are worth describing as knowledge.
+///
+/// Test scaffolding and fixtures are still symbol-indexed, so navigation into
+/// them is unaffected — they simply do not become concepts. A fixture that
+/// exists to exercise the parser is not something an agent should be told about
+/// when asking how the project works.
+pub fn is_project_knowledge(relative_path: &str) -> bool {
+    let path = relative_path.replace('\\', "/");
+    if path
+        .split('/')
+        .any(|segment| TEST_DIRECTORIES.contains(&segment))
+    {
+        return false;
+    }
+    let name = path.rsplit('/').next().unwrap_or(&path);
+    let stem = name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(name);
+    !(stem.ends_with("_test")
+        || stem.ends_with(".test")
+        || stem.ends_with(".spec")
+        || stem.ends_with("_spec")
+        || stem.starts_with("test_")
+        || stem == "conftest")
+}
+
 /// Everything one file contributes to the graph.
 pub struct FileSynthesis<'a> {
     pub relative_path: &'a str,
@@ -579,6 +615,33 @@ mod tests {
         assert!(first.starts_with("code/src/lib.rs/"));
         assert!(first.ends_with(".md"));
         assert!(!first.contains(':'));
+    }
+
+    #[test]
+    fn test_scaffolding_is_not_project_knowledge() {
+        for path in [
+            "crates/agent-cli/tests/fixtures/knowledge_graph/code/go/service.go",
+            "crates/agent-cli/tests/conformance.rs",
+            "pkg/service_test.go",
+            "src/parser.test.ts",
+            "src/parser.spec.ts",
+            "tests/helpers.py",
+            "app/testdata/sample.rs",
+            "web/node_modules/dep/index.js",
+            "api/test_client.py",
+            "api/conftest.py",
+        ] {
+            assert!(!is_project_knowledge(path), "{path} should be excluded");
+        }
+        for path in [
+            "crates/agent-symbols/src/synth.rs",
+            "src/latest.rs",
+            "src/contest.py",
+            "src/protest/handler.rs",
+            "src/attestation.go",
+        ] {
+            assert!(is_project_knowledge(path), "{path} should be kept");
+        }
     }
 
     #[test]

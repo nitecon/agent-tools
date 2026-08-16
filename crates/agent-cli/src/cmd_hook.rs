@@ -182,6 +182,52 @@ struct KnowledgeSnippet {
     read_command: String,
 }
 
+/// How many candidates to consider per injected snippet.
+const KNOWLEDGE_CANDIDATE_FACTOR: usize = 4;
+
+/// Reorder candidates so that, among equally authoritative matches, the ones
+/// this agent has actually been reading come first.
+///
+/// Authority and lifecycle still dominate — recorded use only breaks ties
+/// within a tier, so a heavily-read derived concept can never displace
+/// something the repository asserts. Relevance order is the final tiebreak, so
+/// a project with no recorded history keeps exactly the ordering it had before.
+fn rank_by_recorded_use(
+    index: &agent_knowledge::ProjectIndex,
+    matches: Vec<agent_knowledge::SearchMatch>,
+    limit: usize,
+) -> Result<Vec<agent_knowledge::SearchMatch>> {
+    let authority_rank = |authority: &str| match authority {
+        "repository" => 0,
+        "gateway" => 1,
+        _ => 2,
+    };
+    let status_rank = |status: &str| match status {
+        "stable" => 0,
+        "draft" => 1,
+        _ => 2,
+    };
+    let mut scored = Vec::with_capacity(matches.len());
+    for (position, item) in matches.into_iter().enumerate() {
+        let uses = index.access_count(item.resource.id).unwrap_or(0);
+        scored.push((
+            authority_rank(&item.resource.authority),
+            status_rank(&item.resource.status),
+            std::cmp::Reverse(uses),
+            position,
+            item,
+        ));
+    }
+    scored.sort_by(|left, right| {
+        (left.0, left.1, left.2, left.3).cmp(&(right.0, right.1, right.2, right.3))
+    });
+    Ok(scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, _, _, _, item)| item)
+        .collect())
+}
+
 fn local_knowledge_snippets(prompt: &str, limit: usize) -> Result<Vec<KnowledgeSnippet>> {
     let root = std::env::current_dir()?;
     let project_id = agent_core::project_ident(&root);
@@ -195,12 +241,17 @@ fn local_knowledge_snippets(prompt: &str, limit: usize) -> Result<Vec<KnowledgeS
         return Ok(Vec::new());
     }
     let index = agent_knowledge::ProjectIndex::open_for_project(&root)?;
+    // Over-fetch, then let recorded use break ties. Search itself stays
+    // history-free so results are reproducible; injection is session context by
+    // nature, so preferring what this agent has actually been working with is
+    // the whole point.
     let matches = index.search_segments_filtered(
         &project_id,
         &query,
         &agent_knowledge::SearchFilter::default(),
-        limit,
+        limit.saturating_mul(KNOWLEDGE_CANDIDATE_FACTOR),
     )?;
+    let matches = rank_by_recorded_use(&index, matches, limit)?;
     let mut snippets = Vec::new();
     for item in matches {
         if item.resource.status == "deprecated" {
@@ -597,6 +648,108 @@ mod tests {
         assert!(first.contains("lifecycle=draft stale_after=2020-01-01"));
         assert!(first.contains("trust=unverified"));
         assert!(first.contains("read: agent-tools get"));
+    }
+
+    #[test]
+    fn recorded_use_breaks_ties_without_outranking_authority() {
+        let index = agent_knowledge::ProjectIndex::open_ephemeral().unwrap();
+        let metadata = serde_json::json!({});
+        let make = |uri: &str, authority: &str, status: &str| {
+            index
+                .ensure_resource(&agent_knowledge::ResourceInput {
+                    project_id: "fixture",
+                    namespace: "okf",
+                    external_id: uri,
+                    canonical_uri: uri,
+                    kind: "CodeSymbol",
+                    title: uri,
+                    description: None,
+                    origin_kind: if authority == "repository" {
+                        "repository"
+                    } else {
+                        "local-derived"
+                    },
+                    origin_id: "fixture",
+                    authority,
+                    status: Some(status),
+                    stale_after: None,
+                    metadata: &metadata,
+                })
+                .unwrap()
+        };
+        let authored = make("okf://fixture/authored", "repository", "stable");
+        let cold = make("okf://fixture/cold", "derived", "stable");
+        let hot = make("okf://fixture/hot", "derived", "stable");
+        let draft_hot = make("okf://fixture/draft-hot", "derived", "draft");
+
+        for _ in 0..25 {
+            index.record_access(hot, "read").unwrap();
+            index.record_access(draft_hot, "read").unwrap();
+        }
+
+        // Relevance order deliberately puts the least-used first.
+        let candidates: Vec<_> = [cold, draft_hot, hot, authored]
+            .into_iter()
+            .map(|id| stub_match(id, &index))
+            .collect();
+        let ranked = rank_by_recorded_use(&index, candidates, 4).unwrap();
+        let order: Vec<i64> = ranked.iter().map(|item| item.resource.id).collect();
+
+        // Authority first, then lifecycle, and only then recorded use — a
+        // heavily-read derived concept never displaces what the repo asserts.
+        assert_eq!(order, vec![authored, hot, cold, draft_hot]);
+    }
+
+    #[test]
+    fn recorded_use_is_inert_without_history() {
+        let index = agent_knowledge::ProjectIndex::open_ephemeral().unwrap();
+        let metadata = serde_json::json!({});
+        let ids: Vec<i64> = ["a", "b", "c"]
+            .iter()
+            .map(|name| {
+                index
+                    .ensure_resource(&agent_knowledge::ResourceInput {
+                        project_id: "fixture",
+                        namespace: "okf",
+                        external_id: name,
+                        canonical_uri: name,
+                        kind: "CodeSymbol",
+                        title: name,
+                        description: None,
+                        origin_kind: "local-derived",
+                        origin_id: "fixture",
+                        authority: "derived",
+                        status: Some("stable"),
+                        stale_after: None,
+                        metadata: &metadata,
+                    })
+                    .unwrap()
+            })
+            .collect();
+        let candidates: Vec<_> = ids.iter().map(|id| stub_match(*id, &index)).collect();
+        let ranked = rank_by_recorded_use(&index, candidates, 3).unwrap();
+        // With nothing recorded, relevance order is preserved exactly.
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|item| item.resource.id)
+                .collect::<Vec<_>>(),
+            ids
+        );
+    }
+
+    fn stub_match(
+        resource_id: i64,
+        index: &agent_knowledge::ProjectIndex,
+    ) -> agent_knowledge::SearchMatch {
+        let detail = index.resource_detail(resource_id).unwrap().unwrap();
+        agent_knowledge::SearchMatch {
+            resource: detail.resource,
+            segment_id: resource_id,
+            heading_path: None,
+            text: String::new(),
+            rank_micros: 0,
+        }
     }
 
     #[test]

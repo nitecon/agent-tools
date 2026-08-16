@@ -141,7 +141,12 @@ impl SymbolIndex {
             };
             let input_hash = blake3::hash(source.as_bytes()).to_hex().to_string();
 
-            indexed_paths.insert(path_str.clone());
+            // Only files that can hold knowledge join the retained set; test
+            // scaffolding is left out so any concepts a previous build made for
+            // it are pruned rather than kept alive.
+            if synth::is_project_knowledge(&path_str) {
+                indexed_paths.insert(path_str.clone());
+            }
 
             // The extractor and the concept synthesizer are gated separately so
             // an existing index picks up synthesis without a full rebuild.
@@ -217,6 +222,13 @@ impl SymbolIndex {
         symbols: &[Symbol],
         relationships: &[ExtractedRelationship],
     ) -> Result<usize> {
+        if !synth::is_project_knowledge(relative_path) {
+            // Still mark the producer, so an excluded file is skipped next run
+            // instead of being re-parsed forever looking for concepts.
+            self.index
+                .mark_producer_state(relative_path, SYNTH_PRODUCER, content_hash)?;
+            return Ok(0);
+        }
         let stable_keys = stable_symbol_keys(symbols);
         let concepts = match synth::synthesize_file(
             &FileSynthesis {
