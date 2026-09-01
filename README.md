@@ -906,12 +906,15 @@ The MCP server includes 6 communication tools (`set_identity`, `send_message`, `
 
 ### Project upstream gateways
 
-A repository can declare additional read sources for tasks, patterns, and
-Documentation in `.agents/alternate-gateways.yml`. Credentials never belong in
-that file; each developer binds the declared profile locally through setup.
+A repository can declare read sources for tasks, patterns, and Documentation in
+`.agents/alternate-gateways.yml`. Credentials never belong in that file; each
+developer binds the declared profile locally through setup. Set
+`replace_default: true` when the repository's declared gateways must be used
+instead of the machine default.
 
 ```yaml
 version: 1
+replace_default: true
 gateways:
   - profile: prod-sre
     url: https://prod-gateway.example.com
@@ -935,8 +938,9 @@ agent-tools setup gateway --remove-upstream prod-sre --credentials-only
 
 Profile credentials are stored at
 `~/.agentic/agent-tools/gateways/<profile>.conf`. Read commands fan out to the
-default and eligible project upstreams. Results show their gateway when more
-than one source contributes. A task shown as `profile/<uuid>` can be passed
+default and eligible project upstreams unless `replace_default: true` selects
+only matching project gateways. Results show their gateway when more than one
+source contributes. A task shown as `profile/<uuid>` can be passed
 back to `tasks get`, `claim`, `release`, `done`, `comment`, or `rank` to target
 that gateway explicitly; this is required when the same UUID exists on more
 than one gateway. Bare UUIDs remain supported and resolve in configured

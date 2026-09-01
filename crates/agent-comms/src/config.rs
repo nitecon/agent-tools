@@ -29,7 +29,7 @@ pub struct GatewayConfig {
     pub default_project: Option<String>,
 }
 
-/// Non-secret repository declaration for an additional gateway.
+/// Non-secret repository declaration for a gateway.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectGateway {
     pub profile: String,
@@ -42,6 +42,10 @@ pub struct ProjectGateway {
 pub struct ProjectGatewaysFile {
     #[serde(default = "gateway_file_version")]
     pub version: u32,
+    /// When true, matching project gateways replace the machine default for
+    /// the requested capability instead of being queried alongside it.
+    #[serde(default)]
+    pub replace_default: bool,
     #[serde(default)]
     pub gateways: Vec<ProjectGateway>,
 }
@@ -141,12 +145,14 @@ pub fn load_project_gateways() -> Result<ProjectGatewaysFile> {
     let Some(path) = project_gateways_path_from(&cwd) else {
         return Ok(ProjectGatewaysFile {
             version: 1,
+            replace_default: false,
             gateways: Vec::new(),
         });
     };
     if !path.is_file() {
         return Ok(ProjectGatewaysFile {
             version: 1,
+            replace_default: false,
             gateways: Vec::new(),
         });
     }
@@ -205,27 +211,47 @@ pub fn project_gateway_statuses() -> Result<Vec<ProjectGatewayStatus>> {
         .collect())
 }
 
-/// Resolve the default gateway plus locally configured repository upstreams.
+fn gateways_for_capability(
+    project: &ProjectGatewaysFile,
+    capability: &str,
+) -> (bool, Vec<ProjectGateway>) {
+    let declarations: Vec<_> = project
+        .gateways
+        .iter()
+        .filter(|declaration| declaration.read.iter().any(|item| item == capability))
+        .cloned()
+        .collect();
+    let include_default = !project.replace_default || declarations.is_empty();
+    (include_default, declarations)
+}
+
+/// Resolve the gateways selected for a capability.
+///
+/// Repository gateways normally supplement the machine default. A repository
+/// can set `replace_default: true` to make matching declarations authoritative
+/// for that capability, preventing an unrelated machine-default board from
+/// leaking into the project.
 /// Missing upstream credentials are returned as warnings so read operations can
 /// remain useful while setup exposes the incomplete binding.
 pub fn resolve_gateways(capability: &str) -> Result<(Vec<ResolvedGateway>, Vec<String>)> {
     let cfg = load_config();
+    let project = load_project_gateways()?;
+    let (include_default, declarations) = gateways_for_capability(&project, capability);
     let mut gateways = Vec::new();
-    if let (Some(url), Some(api_key)) = (cfg.gateway.url, cfg.gateway.api_key) {
-        gateways.push(ResolvedGateway {
-            profile: "default".into(),
-            url,
-            api_key,
-            timeout_ms: cfg.gateway.timeout_ms.unwrap_or(5000),
-            primary: true,
-            read: default_read_capabilities(),
-        });
+    if include_default {
+        if let (Some(url), Some(api_key)) = (cfg.gateway.url, cfg.gateway.api_key) {
+            gateways.push(ResolvedGateway {
+                profile: "default".into(),
+                url,
+                api_key,
+                timeout_ms: cfg.gateway.timeout_ms.unwrap_or(5000),
+                primary: true,
+                read: default_read_capabilities(),
+            });
+        }
     }
     let mut warnings = Vec::new();
-    for declaration in load_project_gateways()?.gateways {
-        if !declaration.read.iter().any(|item| item == capability) {
-            continue;
-        }
+    for declaration in declarations {
         match load_profile(&declaration.profile) {
             Ok(profile) => {
                 let Some(url) = profile.get("GATEWAY_URL").cloned() else {
@@ -258,7 +284,7 @@ pub fn resolve_gateways(capability: &str) -> Result<(Vec<ResolvedGateway>, Vec<S
                     url,
                     api_key,
                     timeout_ms,
-                    primary: false,
+                    primary: gateways.is_empty(),
                     read: declaration.read,
                 });
             }
@@ -766,7 +792,24 @@ mod tests {
             "version: 1\ngateways:\n  - profile: prod-sre\n    url: https://gateway.example\n",
         )
         .unwrap();
+        assert!(!parsed.replace_default);
         assert_eq!(parsed.gateways[0].read, vec!["tasks", "patterns", "docs"]);
+    }
+
+    #[test]
+    fn project_gateway_yaml_can_replace_machine_default() {
+        let parsed: ProjectGatewaysFile = serde_yaml::from_str(
+            "version: 1\nreplace_default: true\ngateways:\n  - profile: prod\n    url: https://example.com\n",
+        )
+        .unwrap();
+        assert!(parsed.replace_default);
+        let (include_default, declarations) = gateways_for_capability(&parsed, "tasks");
+        assert!(!include_default);
+        assert_eq!(declarations.len(), 1);
+
+        let (include_default, declarations) = gateways_for_capability(&parsed, "comms");
+        assert!(include_default);
+        assert!(declarations.is_empty());
     }
 
     #[test]

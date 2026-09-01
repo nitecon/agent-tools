@@ -486,7 +486,7 @@ enum SetupCommands {
         /// Add or update a project upstream profile (prompts for URL and credentials).
         #[arg(long, value_name = "PROFILE", conflicts_with_all = ["list", "remove_upstream"])]
         add_upstream: Option<String>,
-        /// List the default gateway and current repository upstreams.
+        /// List the default gateway and current repository gateway overrides.
         #[arg(long, conflicts_with_all = ["add_upstream", "remove_upstream"])]
         list: bool,
         /// Remove an upstream declaration and its local credentials.
