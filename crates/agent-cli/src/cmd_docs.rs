@@ -1,4 +1,4 @@
-//! `agent-tools docs` subcommands for gateway-backed Documentation context.
+//! `agent-tools docs` subcommands for gateway-backed markdown context.
 
 use crate::cmd_gateway_context::{
     read_registration_marker, write_registration_marker, GatewayTarget,
@@ -26,7 +26,7 @@ const DEFAULT_SOURCE_FORMAT: &str = "agent_context";
 
 #[derive(Subcommand)]
 pub enum DocsCommands {
-    /// List published agent-facing Documentation entries.
+    /// List published agent-facing markdown context entries.
     List {
         #[arg(long)]
         app: Option<String>,
@@ -34,7 +34,7 @@ pub enum DocsCommands {
         label: Option<String>,
         #[arg(long)]
         kind: Option<String>,
-        /// Documentation visibility scope: local, global, or all.
+        /// markdown context visibility scope: local, global, or all.
         #[arg(long, value_parser = ["local", "global", "all"])]
         scope: Option<String>,
         #[arg(long = "query", alias = "q")]
@@ -46,7 +46,7 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Search published agent-facing Documentation entries.
+    /// Search published agent-facing markdown context entries.
     Search {
         query: String,
         #[arg(long)]
@@ -55,7 +55,7 @@ pub enum DocsCommands {
         label: Option<String>,
         #[arg(long)]
         kind: Option<String>,
-        /// Documentation visibility scope: local, global, or all.
+        /// markdown context visibility scope: local, global, or all.
         #[arg(long, value_parser = ["local", "global", "all"])]
         scope: Option<String>,
         /// Override the project ident derived from cwd.
@@ -65,7 +65,7 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Fetch one full Documentation entry.
+    /// Fetch one full markdown context entry.
     Get {
         id: String,
         #[arg(long)]
@@ -74,7 +74,7 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Delete one Documentation entry.
+    /// Delete one markdown context entry.
     #[command(alias = "remove")]
     Delete {
         id: String,
@@ -84,7 +84,7 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Fetch RAG-ready chunks from Documentation.
+    /// Fetch RAG-ready chunks from markdown context.
     Chunks {
         #[arg(long)]
         app: Option<String>,
@@ -92,7 +92,7 @@ pub enum DocsCommands {
         label: Option<String>,
         #[arg(long)]
         kind: Option<String>,
-        /// Documentation visibility scope: local, global, or all.
+        /// markdown context visibility scope: local, global, or all.
         #[arg(long, value_parser = ["local", "global", "all"])]
         scope: Option<String>,
         #[arg(long = "query", alias = "q")]
@@ -103,7 +103,7 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Publish a docs-first JSON/YAML file as agent-facing Documentation.
+    /// Publish a docs-first JSON/YAML file as agent-facing markdown context.
     Publish {
         #[arg(long)]
         file: PathBuf,
@@ -115,7 +115,7 @@ pub enum DocsCommands {
         category: Option<String>,
         #[arg(long = "parent-page")]
         parent_page: Option<String>,
-        /// Parent Documentation node id for hierarchy placement.
+        /// Parent markdown context node id for hierarchy placement.
         #[arg(long = "parent-id")]
         parent_id: Option<String>,
         #[arg(long)]
@@ -171,7 +171,7 @@ pub enum DocsCommands {
         category: Option<String>,
         #[arg(long = "parent-page")]
         parent_page: Option<String>,
-        /// Parent Documentation node id for hierarchy placement.
+        /// Parent markdown context node id for hierarchy placement.
         #[arg(long = "parent-id")]
         parent_id: Option<String>,
         #[arg(long)]
@@ -217,7 +217,7 @@ pub enum DocsCommands {
         openapi: Option<PathBuf>,
     },
 
-    /// Export one gateway-backed Documentation entry to a source-adjacent docs file.
+    /// Export one gateway-backed markdown context entry to a source-adjacent docs file.
     Export {
         /// API context id/artifact id. If omitted, --app must match exactly one doc.
         id: Option<String>,
@@ -239,14 +239,14 @@ pub enum DocsCommands {
         agent_id: Option<String>,
     },
 
-    /// Browse the Documentation hierarchy for the current project and visible global docs.
+    /// Browse the markdown context hierarchy for the current project and visible global docs.
     #[command(alias = "tree", alias = "list-tree", alias = "get-tree")]
     Hierarchy {
         #[arg(long)]
         app: Option<String>,
         #[arg(long)]
         space: Option<String>,
-        /// Documentation visibility scope: local, global, or all.
+        /// markdown context visibility scope: local, global, or all.
         #[arg(long, value_parser = ["local", "global", "all"])]
         scope: Option<String>,
         #[arg(long = "query", alias = "q")]
@@ -353,9 +353,9 @@ fn ensure_gateway_configured() -> Result<()> {
     let cfg = load_config();
     if cfg.gateway.url.is_none() || cfg.gateway.api_key.is_none() {
         anyhow::bail!(
-            "Documentation is not available - agent-gateway is not configured.\n\
+            "Markdown context is not available - agent-gateway is not configured.\n\
              Docs require a running agent-gateway connection. Ask the user to run\n\
-             `agent-tools setup gateway` to enable the agent-facing Documentation registry."
+             `agent-tools setup gateway` to enable the agent-facing markdown context registry."
         );
     }
     Ok(())
@@ -566,7 +566,7 @@ async fn cmd_list(
                 target.profile
             ),
             Err(error) => {
-                return Err(error).context("list Documentation entries on default gateway")
+                return Err(error).context("list markdown context entries on default gateway")
             }
         }
     }
@@ -624,7 +624,7 @@ async fn cmd_delete(id: String, project: Option<String>, agent_id: Option<String
         .await
         .with_context(|| {
             format!(
-                "delete Documentation entry {id}; if this was a short or stale id, run `agent-tools docs list` and retry with the full id"
+                "delete markdown context entry {id}; if this was a short or stale id, run `agent-tools docs list` and retry with the full id"
             )
         })?;
     print_delete_success(&id, &ctx.ident);
@@ -702,7 +702,7 @@ async fn cmd_hierarchy(
                 continue;
             }
             Err(error) => {
-                return Err(error).context("fetch Documentation hierarchy on default gateway")
+                return Err(error).context("fetch markdown context hierarchy on default gateway")
             }
         };
         if hierarchy.spaces.is_empty() && hierarchy.pages.is_empty() {
@@ -717,7 +717,7 @@ async fn cmd_hierarchy(
                 .gateway
                 .list_api_docs(&ctx.ident, &list_filters, Some(&ctx.agent_id))
                 .await
-                .context("fallback list Documentation entries for hierarchy")?;
+                .context("fallback list markdown context entries for hierarchy")?;
             hierarchy = synthesize_hierarchy_from_docs(
                 &ctx.ident,
                 &docs,
@@ -778,7 +778,7 @@ async fn cmd_publish(
         .context("publish API context doc")?;
 
     println!(
-        "published Documentation [{}] {} ({})",
+        "published markdown context [{}] {} ({})",
         doc.summary.id, doc.summary.title, doc.summary.app
     );
     println!(
@@ -799,7 +799,7 @@ fn cmd_validate(file: PathBuf) -> Result<()> {
     let prepared = load_and_prepare_file(&file, PublishOverrides::default())?;
     validate_docs_file(&prepared)?;
     println!(
-        "valid Documentation context file: {} ({})",
+        "valid markdown context file: {} ({})",
         prepared.title, prepared.app
     );
     print_content_guidance(&prepared.content);
@@ -834,10 +834,7 @@ fn cmd_bootstrap(
     }
     let body = serde_yaml::to_string(&docs).context("serialize starter docs file")?;
     fs::write(&output, body).with_context(|| format!("write {}", output.display()))?;
-    println!(
-        "created starter Documentation context file {}",
-        output.display()
-    );
+    println!("created starter markdown context file {}", output.display());
     Ok(())
 }
 
@@ -884,7 +881,7 @@ async fn cmd_export(
                 .gateway
                 .get_api_doc(&ctx.ident, &matches[0].1.id, Some(&ctx.agent_id))
                 .await
-                .context("fetch Documentation entry for export")?
+                .context("fetch markdown context entry for export")?
         }
     };
     let summary = &doc.summary;
@@ -1045,7 +1042,7 @@ async fn find_doc<'a>(ctx: &'a DocsContext, id: &str) -> Result<(&'a GatewayTarg
         }
     }
     anyhow::bail!(
-        "Documentation entry {id:?} was not found on configured gateways ({})",
+        "Markdown context entry {id:?} was not found on configured gateways ({})",
         errors.join("; ")
     )
 }
@@ -1175,7 +1172,7 @@ fn labels_slice(labels: &[String]) -> Option<&[String]> {
 }
 
 fn print_doc_list(project_ident: &str, docs: &[ApiDocSummary]) {
-    println!("Documentation for project {project_ident}");
+    println!("Markdown context for project {project_ident}");
     if docs.is_empty() {
         println!("(none)");
         println!("hint: create .agent/api/<app>.yaml or agent-api.yaml, then run `agent-tools docs validate --file PATH` and `agent-tools docs publish --file PATH`.");
@@ -1259,7 +1256,7 @@ fn print_federated_doc_list(project_ident: &str, batches: &[(String, Vec<ApiDocS
 
 fn print_doc_detail(doc: &ApiDoc) {
     let summary = &doc.summary;
-    println!("[{}] Documentation", summary.id);
+    println!("[{}] markdown context", summary.id);
     println!("app: {}", summary.app);
     println!("title: {}", summary.title);
     println!("kind: {}", summary.kind.as_deref().unwrap_or(DEFAULT_KIND));
@@ -1320,14 +1317,14 @@ fn print_delete_success(id: &str, project_ident: &str) {
 }
 
 fn render_delete_success(id: &str, project_ident: &str) -> String {
-    format!("deleted Documentation entry [{id}] from project {project_ident}")
+    format!("deleted markdown context entry [{id}] from project {project_ident}")
 }
 
 fn print_chunks(project_ident: &str, chunks: &[ApiDocChunk]) {
-    println!("Documentation chunks for project {project_ident}");
+    println!("Markdown context chunks for project {project_ident}");
     if chunks.is_empty() {
         println!("(none)");
-        println!("hint: publish Documentation first, then retry with --query, --app, --label, or --kind filters.");
+        println!("hint: publish markdown context first, then retry with --query, --app, --label, or --kind filters.");
         return;
     }
     for chunk in chunks {
@@ -1414,7 +1411,7 @@ fn synthesize_hierarchy_from_docs(
                 owner_project: doc.owner_project.clone(),
                 wiki_path: doc.wiki_path.clone(),
                 placement_hint: Some(
-                    "Gateway hierarchy endpoint is unavailable; this tree is synthesized from Documentation metadata."
+                    "Gateway hierarchy endpoint is unavailable; this tree is synthesized from markdown context metadata."
                         .to_string(),
                 ),
                 ..Default::default()
@@ -1470,16 +1467,16 @@ fn synthesize_hierarchy_from_docs(
 
 fn print_hierarchy(project_ident: &str, hierarchy: &DocumentationHierarchy) {
     if let Some(scope) = hierarchy.scope.as_deref() {
-        println!("Documentation hierarchy for project {project_ident} (scope={scope})");
+        println!("Markdown context hierarchy for project {project_ident} (scope={scope})");
     } else {
-        println!("Documentation hierarchy for project {project_ident}");
+        println!("Markdown context hierarchy for project {project_ident}");
     }
     if let Some(app) = hierarchy.app.as_deref() {
         println!("app: {app}");
     }
     if hierarchy.spaces.is_empty() && hierarchy.pages.is_empty() {
         println!("(none)");
-        println!("hint: publish Documentation with space/slug metadata, then retry `agent-tools docs hierarchy`.");
+        println!("hint: publish markdown context with space/slug metadata, then retry `agent-tools docs hierarchy`.");
         return;
     }
     for hint in &hierarchy.placement_hints {
@@ -2037,7 +2034,7 @@ content:
     #[test]
     fn delete_success_message_names_doc_and_project() {
         let rendered = render_delete_success("doc-1", "agent-tools");
-        assert!(rendered.contains("deleted Documentation entry [doc-1]"));
+        assert!(rendered.contains("deleted markdown context entry [doc-1]"));
         assert!(rendered.contains("project agent-tools"));
     }
 

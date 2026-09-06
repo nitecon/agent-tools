@@ -403,7 +403,7 @@ enum Commands {
         command: cmd_tasks::TasksCommands,
     },
 
-    /// Agent-first API context registry (gateway-backed)
+    /// Markdown context registry (gateway-backed)
     Docs {
         #[command(subcommand)]
         command: cmd_docs::DocsCommands,
@@ -1407,7 +1407,7 @@ fn maybe_print_api_context_hint(query: &str) {
         return;
     }
     eprintln!(
-        "hint: API-related search detected. Also check Documentation with \
+        "hint: API-related search detected. Also check markdown context with \
          `agent-tools docs search \"{query}\"`, \
          `agent-tools docs hierarchy`, or \
          `agent-tools docs chunks --query \"{query}\"`. If no docs exist, ask \

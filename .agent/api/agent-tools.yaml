@@ -1,6 +1,6 @@
 app: agent-tools
 title: Agent Tools gateway API context
-summary: Agent-first context for gateway-backed agent-tools workflows, including Documentation, app-scoped hooks, and global patterns.
+summary: Agent-first context for gateway-backed agent-tools workflows, including markdown context, app-scoped hooks, and global patterns.
 kind: agent_context
 source_format: agent_context
 source_ref: .agent/api/agent-tools.yaml
@@ -13,7 +13,7 @@ labels:
 content:
   purpose: >
     Agent Tools exposes gateway-backed command surfaces for project
-    Documentation context, app-scoped hook setup, global implementation
+    markdown context, app-scoped hook setup, global implementation
     patterns, task tracking, and comms. Agents should use this context before
     changing the matching CLI or gateway client contracts.
   workflows:
@@ -25,21 +25,21 @@ content:
         - Search with agent-tools search QUERY --type knowledge and optional namespace, kind, status, origin, path, language, and relation filters.
         - Use agent-tools get RESOURCE, graph, refs, imports, or impls for canonical metadata and bounded typed relationships.
         - Treat repository and gateway records as authoritative at their source; project.db is a rebuildable projection.
-    - name: Project OKF into Documentation
+    - name: Project OKF into markdown context
       steps:
         - Preview without gateway access or side effects using agent-tools okf publish PATH --dry-run.
         - Publish one-way using agent-tools okf publish PATH; canonical OKF identity is source_ref and content hash is version.
         - Reuse identical source_ref and version pairs; changed hashes are updates.
         - Preserve raw frontmatter, normalized metadata, body, links, authority, and inert Attested Computation metadata.
         - Do not synchronize gateway edits back into repository files and never execute OKF computations.
-    - name: Discover Documentation placement
+    - name: Discover markdown context placement
       steps:
         - Run agent-tools docs hierarchy --scope all before publishing or reorganizing docs.
         - Use --app APP or --space SPACE when the destination app or wiki space is known.
         - Use breadcrumbs, page/section ids, and placement hints from the hierarchy response to choose where new docs belong.
         - Render scope, global_rank, owner_project, wiki_path, artifact_id, and artifact_version_id when the gateway returns them.
-        - Keep source/provenance ids for debugging, but use Documentation terminology in agent-facing output.
-    - name: Search shared Documentation
+        - Keep source/provenance ids for debugging, but use markdown context terminology in agent-facing output.
+    - name: Search shared markdown context
       steps:
         - Run agent-tools docs search "<query>" --scope global to find globally visible shared docs.
         - Treat global_rank as gateway-provided priority metadata configured in the gateway UI as Global 1, Global 2, and so on.
@@ -50,7 +50,7 @@ content:
         - Run agent-tools docs chunks --query "<query>" --scope all for RAG context that combines project-local and global docs.
         - Preserve gateway result ordering; the CLI should not hardcode owner/project precedence for global docs.
         - Inspect scope, global_rank, owner_project, wiki_path, and provenance ids on each chunk before deciding what context applies.
-    - name: Publish Documentation context
+    - name: Publish markdown context
       steps:
         - Author a docs-first file such as .agent/api/<app>.yaml with app, title, content, and optional space/category/parent_page/parent_id/slug/order/sort_order placement metadata.
         - Use global_rank and global_descendants only when the user intends the page or subtree to be globally visible.
@@ -77,7 +77,7 @@ content:
   endpoints:
     - method: GET
       path: /v1/projects/:ident/api-docs/hierarchy
-      purpose: Return a wiki-style Documentation tree with spaces, pages, sections, breadcrumbs, placement hints, version ids, labels, and provenance pointers.
+      purpose: Return a wiki-style markdown context tree with spaces, pages, sections, breadcrumbs, placement hints, version ids, labels, and provenance pointers.
       query:
         - q
         - app
@@ -92,7 +92,7 @@ content:
         - artifact_version_id
     - method: GET
       path: /v1/projects/:ident/api-docs/chunks
-      purpose: Return ranked Documentation chunks with breadcrumbs and page/section targets when available.
+      purpose: Return ranked markdown context chunks with breadcrumbs and page/section targets when available.
       query:
         - q
         - app
@@ -108,7 +108,7 @@ content:
         - artifact_version_id
     - method: GET
       path: /v1/projects/:ident/api-docs
-      purpose: List or search Documentation entries with optional local/global/all visibility scope.
+      purpose: List or search markdown context entries with optional local/global/all visibility scope.
       query:
         - q
         - app
@@ -124,7 +124,7 @@ content:
         - artifact_version_id
     - method: POST
       path: /v1/projects/:ident/api-docs
-      purpose: Publish a docs-first Documentation entry with optional wiki placement metadata.
+      purpose: Publish a docs-first markdown context entry with optional wiki placement metadata.
       request:
         required:
           - app
@@ -190,7 +190,7 @@ content:
     agent_id_header: X-Agent-ID
   safety:
     - Keep CLI output concise and agent-facing; do not add JSON output flags for agent workflows.
-    - Use Documentation as the primary agent-facing term. Reserve artifact ids for provenance/debug output and low-level artifact commands.
+    - Use markdown context as the primary agent-facing term. Reserve artifact ids for provenance/debug output and low-level artifact commands.
     - Treat scope, global_rank, owner_project, wiki_path, artifact_id, and artifact_version_id as gateway-provided metadata; preserve gateway ordering for global docs.
     - Always request hooks with an explicit app namespace such as codex, claude, or gemini; hooks are not portable across clients.
     - Reject unsafe hook names before writing; names must be relative paths without parent-directory traversal.
@@ -295,9 +295,9 @@ content:
       command: agent-tools patterns publish --file DevelopWithGo.md
     - name: Search Go patterns by category
       command: agent-tools patterns search router --category programming-language/golang --version latest --state active
-    - name: Browse local plus global Documentation hierarchy
+    - name: Browse local plus global markdown context hierarchy
       command: agent-tools docs hierarchy --scope all
-    - name: Search globally visible Documentation
+    - name: Search globally visible markdown context
       command: agent-tools docs search "publishing api context" --scope global
-    - name: Fetch local plus global Documentation chunks
+    - name: Fetch local plus global markdown context chunks
       command: agent-tools docs chunks --query "artifact provenance" --scope all

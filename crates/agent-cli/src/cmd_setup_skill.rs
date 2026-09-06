@@ -148,28 +148,40 @@ agent-tools tasks done <id>              # mark complete; prompts you to save du
 agent-tools tasks comment <id> "<note>"  # append a note
 ```
 
-## Documentation (gateway-backed)
+## Markdown (structure-aware reading)
+
+Any markdown file on disk — READMEs, specs, changelogs, design notes — reads by
+structure rather than by grep: take the outline first, then pull only the
+section you need. The same two commands accept a knowledge-graph URI, since
+stored concepts render as Markdown.
+
+```bash
+agent-tools doc outline <file.md>              # heading outline only, no body
+agent-tools doc section <file.md> "<heading>"  # one section's body, by heading text
+```
+
+## Markdown Context (gateway-backed)
 
 Before searching code for API behavior or implementing API-related work, check
-the agent-facing Documentation registry. Use `docs hierarchy --scope all` to
-find where local and global docs live and where new docs belong. Treat `scope`,
+the agent-facing markdown context registry. Use `docs hierarchy --scope all` to
+find where local and global entries live and where new ones belong. Treat `scope`,
 `global_rank`, `owner_project`, `wiki_path`, and artifact ids as
 gateway-provided metadata; do not infer priority from owner project names. If no
 context exists, tell the user that future agents will work faster if a
 docs-first file is created, and ask whether to add one.
 
 ```bash
-agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
+agent-tools docs search "<topic-or-workflow>" [--scope local|global|all]
 agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
 agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
 agent-tools docs get <id>
-agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
+agent-tools docs chunks --query "<topic-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
 agent-tools docs validate --file .agent/api/<app>.yaml
 agent-tools docs publish --file .agent/api/<app>.yaml
 ```
 
 When creating or materially changing API-related files, publish the
-corresponding Documentation context with `agent-tools docs publish`; for substantial
+corresponding markdown context with `agent-tools docs publish`; for substantial
 work, track that publish step as an `agent-tools tasks` subtask or checklist
 item.
 
@@ -276,28 +288,40 @@ agent-tools tasks done <id>              # mark complete; prompts you to save du
 agent-tools tasks comment <id> "<note>"  # append a note
 ```
 
-## Documentation (gateway-backed)
+## Markdown (structure-aware reading)
+
+Any markdown file on disk — READMEs, specs, changelogs, design notes — reads by
+structure rather than by grep: take the outline first, then pull only the
+section you need. The same two commands accept a knowledge-graph URI, since
+stored concepts render as Markdown.
+
+```bash
+agent-tools doc outline <file.md>              # heading outline only, no body
+agent-tools doc section <file.md> "<heading>"  # one section's body, by heading text
+```
+
+## Markdown Context (gateway-backed)
 
 Before searching code for API behavior or implementing API-related work, check
-the agent-facing Documentation registry. Use `docs hierarchy --scope all` to
-find where local and global docs live and where new docs belong. Treat `scope`,
+the agent-facing markdown context registry. Use `docs hierarchy --scope all` to
+find where local and global entries live and where new ones belong. Treat `scope`,
 `global_rank`, `owner_project`, `wiki_path`, and artifact ids as
 gateway-provided metadata; do not infer priority from owner project names. If no
 context exists, tell the user that future agents will work faster if a
 docs-first file is created, and ask whether to add one.
 
 ```bash
-agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
+agent-tools docs search "<topic-or-workflow>" [--scope local|global|all]
 agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
 agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
 agent-tools docs get <id>
-agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
+agent-tools docs chunks --query "<topic-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
 agent-tools docs validate --file .agent/api/<app>.yaml
 agent-tools docs publish --file .agent/api/<app>.yaml
 ```
 
 When creating or materially changing API-related files, publish the
-corresponding Documentation context with `agent-tools docs publish`; for substantial
+corresponding markdown context with `agent-tools docs publish`; for substantial
 work, track that publish step as an `agent-tools tasks` subtask or checklist
 item.
 
@@ -447,7 +471,9 @@ mod tests {
         assert!(body.contains("allowed-tools: Bash(agent-tools *), Bash(memory *)"));
         assert!(body.contains("Code Exploration"));
         assert!(body.contains("Task Board"));
-        assert!(body.contains("Documentation"));
+        assert!(body.contains("Markdown (structure-aware reading)"));
+        assert!(body.contains("agent-tools doc outline"));
+        assert!(body.contains("Markdown Context (gateway-backed)"));
         assert!(body.contains("agent-tools docs hierarchy"));
         assert!(body.contains("agent-tools docs publish"));
         assert!(body.contains("Comms"));
@@ -472,7 +498,9 @@ mod tests {
         // Capability coverage still required.
         assert!(body.contains("Code Exploration"));
         assert!(body.contains("Task Board"));
-        assert!(body.contains("Documentation"));
+        assert!(body.contains("Markdown (structure-aware reading)"));
+        assert!(body.contains("agent-tools doc outline"));
+        assert!(body.contains("Markdown Context (gateway-backed)"));
         assert!(body.contains("agent-tools docs hierarchy"));
         assert!(body.contains("agent-tools docs publish"));
         assert!(body.contains("Comms"));

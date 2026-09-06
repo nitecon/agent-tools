@@ -113,7 +113,7 @@ Commands:
   rm        Remove a file or directory
   comms     Send / receive messages via the gateway
   tasks     Per-project task board via the gateway
-  docs      Documentation registry via the gateway
+  docs      Markdown context registry via the gateway
   patterns  Global pattern library and .patterns tracking via the gateway
   setup     Setup and configuration commands
   init      Configure gateway connection (alias for `setup gateway`)
@@ -354,15 +354,15 @@ on `done` (never on `claim`/`release`/`comment`) and only after the transition
 succeeds. Set `AGENT_TOOLS_MEMORY_REMINDER=off` to suppress it if you don't run
 agent-memory.
 
-### Documentation (CLI)
+### Markdown Context (CLI)
 
-Gateway-backed Documentation gives agents context for services and apps: intent,
+Gateway-backed markdown context gives agents context for services and apps: intent,
 workflows, auth expectations, safety constraints, cross-app relationships,
 copyable examples, operations, and schemas. OpenAPI/Swagger can feed this
 registry, but it is not required.
 
 ```bash
-# Look up Documentation before searching code for API behavior
+# Look up markdown context before searching code for API behavior
 agent-tools docs search "billing refunds"
 agent-tools docs hierarchy --scope all
 agent-tools docs search QUERY --scope global
@@ -378,7 +378,7 @@ agent-tools docs bootstrap --app billing --openapi openapi.yaml --output .agent/
 ```
 
 Use `--scope local|global|all` where supported. `local` searches the current
-project, `global` searches globally visible Documentation from owner projects,
+project, `global` searches globally visible markdown context from owner projects,
 and `all` combines both. Global precedence is provided by the gateway rank
 configured in the gateway UI as Global 1, Global 2, and so on; it is not tied to
 SRE, security, platform, or any `owner_project` naming convention. Results may
@@ -478,7 +478,7 @@ Detection is by **agent home directory** rather than rule-file existence, so a f
 
 The injected block is wrapped in `<agent-tools-rules>...</agent-tools-rules>` markers; re-runs replace the block in place rather than duplicating it. A `<file>.bak` sibling is written before each destructive modification so changes are recoverable (brand-new files skip the backup to avoid zero-byte `.bak` clutter).
 
-When the gateway is configured, the injected block includes code-exploration + comms + tasks + Documentation + patterns. When the gateway is not configured, only the code-exploration section is injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
+When the gateway is configured, the injected block includes code-exploration + markdown + comms + tasks + markdown context + patterns. When the gateway is not configured, only the code-exploration section is injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
 
 ### Automated install: `agent-tools setup hooks`
 
@@ -597,10 +597,10 @@ Prefer symbol-level tools over raw file reads whenever possible.
 </code_exploration_protocol>
 
 <api_context_protocol>
-## Documentation (MANDATORY when API-related)
+## Markdown Context (MANDATORY when API-related)
 
 Before searching code for API behavior or implementing API-related work, look
-up gateway-backed Documentation and its hierarchy:
+up gateway-backed markdown context and its hierarchy:
 
 ```bash
 /opt/agentic/bin/agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
@@ -614,7 +614,7 @@ local plus global context is useful. Treat `scope`, `global_rank`,
 `owner_project`, `wiki_path`, and artifact ids as gateway-provided metadata;
 do not infer priority from owner project names.
 
-If no Documentation context exists, tell the user that future agents will work faster if
+If no markdown context exists, tell the user that future agents will work faster if
 one is created, and ask whether to add `.agent/api/<app>.yaml` or
 `agent-api.yaml`. When creating or materially changing API-related files,
 publish the corresponding context with:
@@ -746,10 +746,10 @@ Prefer symbol-level tools over raw file reads whenever possible.
 </code_exploration_protocol>
 
 <api_context_protocol>
-## Documentation (MANDATORY when API-related)
+## Markdown Context (MANDATORY when API-related)
 
 Before searching code for API behavior or implementing API-related work, look
-up gateway-backed Documentation and its hierarchy:
+up gateway-backed markdown context and its hierarchy:
 
 ```bash
 /opt/agentic/bin/agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
@@ -763,7 +763,7 @@ local plus global context is useful. Treat `scope`, `global_rank`,
 `owner_project`, `wiki_path`, and artifact ids as gateway-provided metadata;
 do not infer priority from owner project names.
 
-If no Documentation context exists, tell the user that future agents will work faster if
+If no markdown context exists, tell the user that future agents will work faster if
 one is created, and ask whether to add `.agent/api/<app>.yaml` or
 `agent-api.yaml`. When creating or materially changing API-related files,
 publish the corresponding context with:
@@ -906,7 +906,7 @@ The MCP server includes 6 communication tools (`set_identity`, `send_message`, `
 
 ### Project upstream gateways
 
-A repository can declare read sources for tasks, patterns, and Documentation in
+A repository can declare read sources for tasks, patterns, and markdown context in
 `.agents/alternate-gateways.yml`. Credentials never belong in that file; each
 developer binds the declared profile locally through setup. Set
 `replace_default: true` when the repository's declared gateways must be used

@@ -108,21 +108,33 @@ agent-tools tasks rank <id> <n>          # set ordering within a column
 ```
 "#;
 
-const DOCS_SECTION: &str = r#"
-### Documentation (gateway-backed)
+const MARKDOWN_SECTION: &str = r#"
+### Markdown (structure-aware reading)
 
-- Before code search or API work, look up existing Documentation context.
-- Use `docs hierarchy --scope all` to find where local and global docs live and where new docs belong.
+- Read any `.md` file by structure instead of grepping it: outline first, then pull only the section you need.
+- Applies to every markdown file — READMEs, specs, changelogs, notes — and to knowledge-graph URIs, which render as Markdown too.
+
+```bash
+agent-tools doc outline <file.md>              # heading outline only, no body
+agent-tools doc section <file.md> "<heading>"  # one section's body, by heading text
+```
+"#;
+
+const MARKDOWN_CONTEXT_SECTION: &str = r#"
+### Markdown Context (gateway-backed)
+
+- Before code search or API work, look up existing gateway-backed markdown context.
+- Use `docs hierarchy --scope all` to find where local and global entries live and where new ones belong.
 - Treat `scope`, `global_rank`, `owner_project`, `wiki_path`, and artifact ids as gateway-provided metadata; do not infer priority from owner project names.
-- If docs are missing, propose `.agent/api/<app>.yaml`.
+- If context is missing, propose `.agent/api/<app>.yaml`.
 - After material API file changes, publish context and track the publish step.
 
 ```bash
-agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
+agent-tools docs search "<topic-or-workflow>" [--scope local|global|all]
 agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
 agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
 agent-tools docs get <id>
-agent-tools docs chunks --query "<api-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
+agent-tools docs chunks --query "<topic-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
 agent-tools docs validate --file .agent/api/<app>.yaml
 agent-tools docs publish --file .agent/api/<app>.yaml
 ```
@@ -293,10 +305,11 @@ fn build_block(include_gateway_sections: bool) -> String {
     let mut body = String::new();
     body.push_str(HEADER);
     body.push_str(CODE_EXPLORATION_SECTION);
+    body.push_str(MARKDOWN_SECTION);
     if include_gateway_sections {
         body.push_str(COMMS_SECTION);
         body.push_str(TASKS_SECTION);
-        body.push_str(DOCS_SECTION);
+        body.push_str(MARKDOWN_CONTEXT_SECTION);
         body.push_str(PATTERNS_SECTION);
     }
     format!("{OPEN_MARKER}\n{body}{CLOSE_MARKER}\n")
@@ -431,6 +444,8 @@ mod tests {
         assert!(b.contains("agent-tools comms send"));
         assert!(!b.contains("agent-tools comms recv"));
         assert!(b.contains("agent-tools tasks list"));
+        assert!(b.contains("agent-tools doc outline"));
+        assert!(b.contains("agent-tools doc section"));
         assert!(b.contains("agent-tools docs search"));
         assert!(b.contains("agent-tools docs hierarchy"));
         assert!(b.contains("publish context and track the publish step"));
@@ -450,8 +465,11 @@ mod tests {
         assert!(b.contains("agent-tools sed"));
         assert!(!b.contains("agent-tools comms"));
         assert!(!b.contains("agent-tools tasks"));
-        assert!(!b.contains("agent-tools docs"));
         assert!(!b.contains("agent-tools patterns"));
+        // Local markdown reading needs no gateway, so it ships either way;
+        // only the gateway-backed `docs` registry drops out.
+        assert!(b.contains("agent-tools doc outline"));
+        assert!(!b.contains("agent-tools docs"));
     }
 
     #[test]

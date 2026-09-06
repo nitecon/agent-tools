@@ -70,12 +70,12 @@ pub(crate) fn publish(
                 Some(&ctx.agent_id),
             )
             .await
-            .context("list existing OKF Documentation")?;
+            .context("list existing OKF markdown context")?;
         let plans = plan_projection(&projections, &existing);
         for (projection, decision) in projections.iter().zip(plans) {
             if decision.action == "reuse" {
                 println!(
-                    "reused Documentation [{}] {}",
+                    "reused markdown context [{}] {}",
                     decision.existing_id.as_deref().unwrap_or("unknown"),
                     projection.source_ref
                 );
@@ -108,7 +108,7 @@ pub(crate) fn publish(
                 .await
                 .with_context(|| format!("publish {}", projection.source_ref))?;
             println!(
-                "published Documentation [{}] {}",
+                "published markdown context [{}] {}",
                 published.summary.id, projection.source_ref
             );
         }
