@@ -100,6 +100,28 @@ pub enum CommsCommands {
         agent_id: Option<String>,
     },
 
+    /// List conversation threads for this project with their state.
+    List {
+        /// open | acknowledged | answered | resolved | unresolved (default) | all
+        #[arg(long, default_value = "unresolved")]
+        state: String,
+        /// Comma-separated author kinds: human,agent,bot,webhook,system
+        #[arg(long)]
+        kind: Option<String>,
+        /// Maximum threads to print.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+
+    /// Mark a thread resolved so it leaves the human inbox.
+    Resolve {
+        /// Numeric message id of the thread root (or any message in it).
+        message_id: i64,
+        /// Override the machine agent-id for this invocation.
+        #[arg(long)]
+        agent_id: Option<String>,
+    },
+
     /// Print derived project ident + agent-id (debug / verification).
     Whoami,
 }
@@ -131,6 +153,11 @@ async fn run(cmd: CommsCommands) -> Result<()> {
             cmd_send(content, meta, agent_id, channel).await
         }
         CommsCommands::Recv { agent_id } => cmd_recv(agent_id).await,
+        CommsCommands::List { state, kind, limit } => cmd_list(state, kind, limit).await,
+        CommsCommands::Resolve {
+            message_id,
+            agent_id,
+        } => cmd_resolve(message_id, agent_id).await,
         CommsCommands::Confirm {
             message_id,
             agent_id,
@@ -286,6 +313,72 @@ async fn cmd_send(
 }
 
 // -- recv --------------------------------------------------------------------
+
+async fn cmd_list(state: String, kind: Option<String>, limit: usize) -> Result<()> {
+    let ctx = resolve_context(None)?;
+    ensure_registered(&ctx, None).await?;
+    let kinds: Vec<&str> = kind
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .collect();
+    let resp = ctx
+        .gateway
+        .list_threads(&ctx.ident, Some(&state), &kinds, limit)
+        .await
+        .context("list threads")?;
+    println!(
+        "open: {} human, {} agent, {} alerts, {} system · {} resolved",
+        resp.counts.human_open,
+        resp.counts.agent_open,
+        resp.counts.alerts_open,
+        resp.counts.system_open,
+        resp.counts.resolved
+    );
+    if resp.threads.is_empty() {
+        println!("no threads");
+        return Ok(());
+    }
+    for t in &resp.threads {
+        let who = t
+            .agent_id
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| t.author_kind.clone());
+        let title = t
+            .subject
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| t.preview.lines().next().unwrap_or(""));
+        let replies = if t.reply_count > 0 {
+            format!(" ({} replies)", t.reply_count)
+        } else {
+            String::new()
+        };
+        println!("(id={}) [{}] [{}] {}{}", t.id, t.state, who, title, replies);
+    }
+    println!();
+    println!("Resolve a thread with: agent-tools comms resolve <id>");
+    Ok(())
+}
+
+async fn cmd_resolve(message_id: i64, agent_id: Option<String>) -> Result<()> {
+    let ctx = resolve_context(agent_id)?;
+    ensure_registered(&ctx, None).await?;
+    let resp = ctx
+        .gateway
+        .resolve_message(&ctx.ident, message_id, Some(&ctx.agent_id))
+        .await
+        .context("resolve message")?;
+    if resp.changed {
+        println!("resolved message {message_id}");
+    } else {
+        println!("message {message_id} was already resolved (or not found)");
+    }
+    Ok(())
+}
 
 async fn cmd_recv(agent_id: Option<String>) -> Result<()> {
     let ctx = resolve_context(agent_id)?;

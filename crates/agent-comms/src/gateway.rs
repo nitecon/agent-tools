@@ -117,6 +117,47 @@ pub struct ConfirmResponse {
     pub confirmed: bool,
 }
 
+/// One thread (root message) with gateway-derived state.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ThreadSummary {
+    pub id: i64,
+    pub project_ident: String,
+    pub source: String,
+    pub author_kind: String,
+    pub agent_id: Option<String>,
+    pub hostname: Option<String>,
+    pub subject: Option<String>,
+    pub preview: String,
+    pub sent_at: i64,
+    pub last_activity_at: i64,
+    pub reply_count: i64,
+    pub ack_count: i64,
+    /// open | acknowledged | answered | resolved
+    pub state: String,
+    pub resolved_at: Option<i64>,
+    pub resolved_by: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct InboxCounts {
+    pub human_open: i64,
+    pub agent_open: i64,
+    pub alerts_open: i64,
+    pub system_open: i64,
+    pub resolved: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ListThreadsResponse {
+    pub threads: Vec<ThreadSummary>,
+    pub counts: InboxCounts,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ResolveResponse {
+    pub changed: bool,
+}
+
 /// Response returned after replying to or acting on a message.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReplyResponse {
@@ -321,6 +362,71 @@ impl GatewayClient {
         resp.json::<GetUnreadResponse>()
             .await
             .context("decode unread response")
+    }
+
+    /// List threads (root messages) for a project with derived state.
+    ///
+    /// `state` is one of open | acknowledged | answered | resolved |
+    /// unresolved | all; `kinds` filters by author kind (human, agent, bot,
+    /// webhook, system).
+    pub async fn list_threads(
+        &self,
+        ident: &str,
+        state: Option<&str>,
+        kinds: &[&str],
+        limit: usize,
+    ) -> Result<ListThreadsResponse> {
+        let mut url = format!(
+            "{}/v1/projects/{}/messages?limit={}",
+            self.base_url, ident, limit
+        );
+        if let Some(state) = state {
+            url.push_str(&format!("&state={state}"));
+        }
+        if !kinds.is_empty() {
+            url.push_str(&format!("&kind={}", kinds.join(",")));
+        }
+        let resp = self
+            .client
+            .get(&url)
+            .header("Authorization", self.auth())
+            .send()
+            .await
+            .context("GET /v1/projects/:ident/messages")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("gateway error {status}: {body}");
+        }
+        resp.json::<ListThreadsResponse>()
+            .await
+            .context("decode thread list")
+    }
+
+    /// Mark a thread resolved so it leaves the human inbox.
+    pub async fn resolve_message(
+        &self,
+        ident: &str,
+        msg_id: i64,
+        agent_id: Option<&str>,
+    ) -> Result<ResolveResponse> {
+        let url = format!(
+            "{}/v1/projects/{}/messages/{}/resolve",
+            self.base_url, ident, msg_id
+        );
+        let builder = self.client.post(&url).header("Authorization", self.auth());
+        let resp = Self::add_agent_id(builder, agent_id)
+            .send()
+            .await
+            .context("POST /v1/projects/:ident/messages/:id/resolve")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("gateway error {status}: {body}");
+        }
+        resp.json::<ResolveResponse>()
+            .await
+            .context("decode resolve response")
     }
 
     /// Confirm a single message as read and acted upon.
