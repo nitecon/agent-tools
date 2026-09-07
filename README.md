@@ -156,9 +156,9 @@ agent-tools search config --type file
 agent-tools search checkout --type knowledge --status stable
 
 # Inspect and traverse a canonical resource
-agent-tools get "Checkout Service"
+agent-tools get "Checkout Service"            # compact card (--json for the raw resource + every edge)
 agent-tools graph "Checkout Service" --relation links_to --depth 2
-agent-tools refs process_checkout
+agent-tools refs process_checkout             # resolved callers/callees (--all includes unresolved)
 
 # Portable text search and rewrite
 agent-tools grep needle src

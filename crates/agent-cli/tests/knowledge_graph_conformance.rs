@@ -178,7 +178,7 @@ fn okf_import_search_and_get_share_canonical_resource_metadata() {
     assert!(search.status.success(), "{}", stderr(&search));
     assert!(stdout(&search).contains("services/service.md [stable:repository]"));
 
-    let get = run_agent_tools(&project, &state, &["get", "Checkout Service"]);
+    let get = run_agent_tools(&project, &state, &["get", "--json", "Checkout Service"]);
     assert!(get.status.success(), "{}", stderr(&get));
     let output = stdout(&get);
     assert!(output.contains("\"authority\": \"repository\""));
@@ -284,18 +284,46 @@ fn prompt_hook_injects_bounded_local_knowledge_without_a_gateway() {
         &project,
         &state,
         &["hook", "user-prompt-submit", "--agent", "claude"],
-        br#"{"prompt":"checkout recovery runbook"}"#,
+        br#"{"session_id":"kg-a010","prompt":"checkout recovery runbook"}"#,
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let context = envelope["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(context.contains("Relevant knowledge"));
-    assert!(context.contains("authority=repository"));
-    assert!(context.contains("trust="));
-    assert!(context.contains("agent-tools get"));
-    assert!(context.len() <= 3_000);
+    assert!(context.contains("Relevant knowledge [authority · lifecycle · trust]"));
+    assert!(context.contains("[repository · "), "{context}");
+    assert!(context.contains("agent-tools get <uri>"));
+    assert!(context.len() <= 2_100, "{}", context.len());
+
+    // The same session never receives the same concept twice.
+    let again = run_agent_tools_with_input(
+        &project,
+        &state,
+        &["hook", "user-prompt-submit", "--agent", "claude"],
+        br#"{"session_id":"kg-a010","prompt":"checkout recovery runbook"}"#,
+    );
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert!(again.stdout.is_empty(), "{}", stdout(&again));
+
+    // A different session starts fresh.
+    let other = run_agent_tools_with_input(
+        &project,
+        &state,
+        &["hook", "user-prompt-submit", "--agent", "claude"],
+        br#"{"session_id":"kg-a010-b","prompt":"checkout recovery runbook"}"#,
+    );
+    assert!(!other.stdout.is_empty());
+
+    // Harness bookkeeping is never answered.
+    let notification = run_agent_tools_with_input(
+        &project,
+        &state,
+        &["hook", "user-prompt-submit", "--agent", "claude"],
+        br#"{"session_id":"kg-a010-c","prompt":"[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification>checkout recovery runbook</task-notification>"}"#,
+    );
+    assert!(notification.status.success());
+    assert!(notification.stdout.is_empty(), "{}", stdout(&notification));
 
     fs::remove_dir_all(state).expect("remove isolated state");
 }
@@ -463,7 +491,7 @@ fn tool_use_accumulates_bounded_access_signals_and_can_be_disabled() {
         let read = run_agent_tools(&project, &state, &["read", "python/app.py"]);
         assert!(read.status.success(), "{}", stderr(&read));
     }
-    let get = run_agent_tools(&project, &state, &["get", "python/app.py"]);
+    let get = run_agent_tools(&project, &state, &["get", "--json", "python/app.py"]);
     assert!(get.status.success(), "{}", stderr(&get));
     let detail = stdout(&get);
     let accesses = detail
@@ -483,7 +511,7 @@ fn tool_use_accumulates_bounded_access_signals_and_can_be_disabled() {
         .output()
         .expect("run agent-tools");
     assert!(opted_out.status.success(), "{}", stderr(&opted_out));
-    let after = run_agent_tools(&project, &state, &["get", "python/app.py"]);
+    let after = run_agent_tools(&project, &state, &["get", "--json", "python/app.py"]);
     let line = stdout(&after)
         .lines()
         .find(|line| line.contains("\"accesses\""))

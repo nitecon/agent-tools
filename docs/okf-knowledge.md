@@ -142,10 +142,10 @@ agent-tools search worker --type all --file src --language Rust
 Use a canonical URI whenever a title or symbol name is ambiguous:
 
 ```bash
-agent-tools get "Checkout Service"
+agent-tools get "Checkout Service"            # compact card; --json for the raw resource + every edge
 agent-tools graph "okf://project/.agents/knowledge/services/service.md" \
   --relation links_to --direction both --depth 2 --limit 20
-agent-tools refs process_checkout
+agent-tools refs process_checkout             # resolved callers/callees; --all includes unresolved
 agent-tools imports src/main.rs
 agent-tools impls CheckoutService
 ```
@@ -216,10 +216,23 @@ gateway-only commands.
 - Verification and provenance are trust evidence, not authorization.
 
 Prompt hooks add only compact, bounded excerpts after relevant patterns and
-tasks. Every excerpt labels source, authority, lifecycle, and trust and points
-to `agent-tools get` or `agent-tools docs get` for a deeper read. Gateway work is
-time-bounded and fail-open; local knowledge still works without a gateway. Set
-`AGENT_TOOLS_HOOK=off` to disable all hook injection.
+tasks. Every excerpt is labelled `[authority · lifecycle · trust]` and names the
+URI to pass to `agent-tools get` (or `agent-tools docs get`) for a deeper read.
+Gateway work is time-bounded and fail-open; local knowledge still works without
+a gateway. Set `AGENT_TOOLS_HOOK=off` to disable all hook injection.
+
+Injection is gated so it earns its tokens. Prompt words are reduced to
+discriminating terms (stopwords, bare numbers, and the project's own name are
+dropped, and so is any term that hits most candidate titles). Repository- and
+gateway-authored knowledge is injected on any genuine hit, because it carries
+intent the source cannot express. Derived concepts summarize code the agent can
+read directly, so they are injected only when the prompt names them (a title
+hit) and either a second term corroborates it or the agent has read the concept
+before; relationship and export listings never qualify, and near-empty excerpts
+are skipped. Each session (keyed by the hook payload's `session_id`) receives a
+given concept, task, or pattern at most once, and harness notifications are
+never answered. Session records live under the project state directory in
+`hook-sessions/` and are pruned after seven days.
 
 ## Migration, rebuild, and recovery
 

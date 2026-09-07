@@ -121,9 +121,9 @@ to disable.
 
 ```bash
 agent-tools search <query> --type knowledge    # concepts (--type all adds symbols/files)
-agent-tools get <uri-or-title>                 # resource, authority, lifecycle, trust
+agent-tools get <uri-or-title>                 # compact card: authority, lifecycle, trust, use, resolved links (--json: raw)
 agent-tools graph <uri> --relation <r> --depth <n>   # bounded typed traversal
-agent-tools refs|imports|impls <symbol>        # callers/callees, imports, inheritance
+agent-tools refs|imports|impls <symbol>        # resolved callers/callees (--all adds unresolved), imports, inheritance
 agent-tools read <okf-uri>                     # render a stored concept as Markdown
 agent-tools okf export --destination <dir>     # optional: materialize the stored bundle
 ```
@@ -261,9 +261,9 @@ to disable.
 
 ```bash
 agent-tools search <query> --type knowledge    # concepts (--type all adds symbols/files)
-agent-tools get <uri-or-title>                 # resource, authority, lifecycle, trust
+agent-tools get <uri-or-title>                 # compact card: authority, lifecycle, trust, use, resolved links (--json: raw)
 agent-tools graph <uri> --relation <r> --depth <n>   # bounded typed traversal
-agent-tools refs|imports|impls <symbol>        # callers/callees, imports, inheritance
+agent-tools refs|imports|impls <symbol>        # resolved callers/callees (--all adds unresolved), imports, inheritance
 agent-tools read <okf-uri>                     # render a stored concept as Markdown
 agent-tools okf export --destination <dir>     # optional: materialize the stored bundle
 ```

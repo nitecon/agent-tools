@@ -9,12 +9,14 @@
 //! Every Err path silently returns Ok(()). Unconfigured gateway => silent.
 
 use crate::cmd_gateway_context::{ensure_all_registered, resolve_context, resolve_context_for};
+use crate::hook_session::SessionMemory;
 use agent_comms::docs::ApiDocFilters;
 use agent_comms::patterns::PatternFilters;
 use anyhow::Result;
 use clap::Subcommand;
 use serde_json::Value;
-use std::io::Read;
+use std::collections::BTreeSet;
+use std::io::{IsTerminal, Read};
 use std::time::Duration;
 
 #[derive(Subcommand)]
@@ -167,8 +169,257 @@ fn short_id(id: &str) -> &str {
     &id[..8.min(id.len())]
 }
 
+/// Session id from the hook payload, falling back to the env vars some CLIs
+/// export instead. `None` disables per-session dedupe.
+pub(crate) fn extract_session_id(payload: &Value) -> Option<String> {
+    for key in &["session_id", "sessionId"] {
+        if let Some(Value::String(s)) = payload.get(key) {
+            if !s.trim().is_empty() {
+                return Some(s.trim().to_owned());
+            }
+        }
+    }
+    ["CLAUDE_SESSION_ID", "GEMINI_SESSION_ID", "CODEX_SESSION_ID"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok().filter(|s| !s.trim().is_empty()))
+}
+
+/// Prompts that are harness bookkeeping rather than the user speaking.
+///
+/// Background-task notifications and system reminders arrive through the same
+/// hook as a real prompt. They never benefit from context injection, and they
+/// are frequent enough in long sessions that answering them costs real tokens.
+pub(crate) fn is_harness_notification(prompt: &str) -> bool {
+    let head: String = prompt.trim_start().chars().take(400).collect();
+    const MARKERS: &[&str] = &[
+        "<task-notification>",
+        "[SYSTEM NOTIFICATION",
+        "<system-reminder>",
+        "<local-command-stdout>",
+        "<command-name>",
+    ];
+    MARKERS.iter().any(|marker| head.starts_with(marker))
+        || head.contains("[SYSTEM NOTIFICATION - NOT USER INPUT]")
+}
+
+/// Stable dedupe key for a task: a status change makes it new again.
+fn task_key(id: &str, status: &str) -> String {
+    format!("{id}:{status}")
+}
+
+/// Longest excerpt injected for authored (repository/gateway) knowledge.
 const KNOWLEDGE_SEGMENT_CHARS: usize = 320;
-const KNOWLEDGE_CONTEXT_CHARS: usize = 3_000;
+/// Derived concepts summarize code the agent can read directly; keep them short.
+const DERIVED_SEGMENT_CHARS: usize = 220;
+/// Upper bound on the whole knowledge section per prompt.
+const KNOWLEDGE_CONTEXT_CHARS: usize = 2_000;
+
+/// Prompt words that carry no signal for a knowledge lookup. Matching on these
+/// is what made every prompt light up a handful of unrelated modules.
+const STOPWORDS: &[&str] = &[
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "are",
+    "was",
+    "were",
+    "have",
+    "has",
+    "had",
+    "not",
+    "but",
+    "you",
+    "your",
+    "our",
+    "can",
+    "will",
+    "would",
+    "should",
+    "could",
+    "into",
+    "about",
+    "then",
+    "than",
+    "them",
+    "they",
+    "what",
+    "when",
+    "where",
+    "which",
+    "how",
+    "why",
+    "also",
+    "just",
+    "make",
+    "need",
+    "want",
+    "like",
+    "use",
+    "using",
+    "used",
+    "get",
+    "got",
+    "let",
+    "lets",
+    "please",
+    "now",
+    "here",
+    "there",
+    "some",
+    "any",
+    "all",
+    "more",
+    "most",
+    "very",
+    "its",
+    "out",
+    "over",
+    "only",
+    "does",
+    "did",
+    "doing",
+    "done",
+    "see",
+    "look",
+    "fix",
+    "add",
+    "run",
+    "code",
+    "file",
+    "files",
+    "new",
+    "one",
+    "way",
+    "still",
+    "sure",
+    "think",
+    "thing",
+    "things",
+    "something",
+    "right",
+    "okay",
+    "yes",
+    "going",
+    "ahead",
+    "actually",
+    "really",
+    "maybe",
+    "much",
+    "many",
+    "each",
+    "own",
+    "same",
+    "other",
+    "because",
+    "being",
+    "before",
+    "after",
+    "again",
+    "through",
+    "under",
+    "while",
+    "both",
+];
+
+/// Prompt tokens worth searching the knowledge index for: distinct, at least
+/// three characters, not a stopword, not a bare number, and not part of the
+/// project's own name (which appears in nearly every concept title).
+pub(crate) fn knowledge_query_tokens(prompt: &str, project_ident: &str) -> Vec<String> {
+    let ident_tokens: BTreeSet<String> = prompt_tokens(project_ident).into_iter().collect();
+    let mut seen = BTreeSet::new();
+    prompt_tokens(prompt)
+        .into_iter()
+        .filter(|token| token.len() >= 3)
+        .filter(|token| !STOPWORDS.contains(&token.as_str()))
+        .filter(|token| !token.chars().all(|c| c.is_ascii_digit()))
+        .filter(|token| !ident_tokens.contains(token))
+        .filter(|token| seen.insert(token.clone()))
+        .take(8)
+        .collect()
+}
+
+/// Share of candidate titles a token may hit before it stops discriminating.
+const UBIQUITOUS_TITLE_SHARE: f64 = 0.5;
+/// Candidate sets smaller than this are too small to judge ubiquity.
+const MIN_CANDIDATES_FOR_IDF: usize = 4;
+
+/// Drop tokens that hit the titles of most candidates. A word that names half
+/// the result set (a crate name, a common noun in this codebase) cannot be
+/// evidence that the prompt means any one of them.
+pub(crate) fn discriminative_tokens(tokens: &[String], titles: &[String]) -> Vec<String> {
+    if titles.len() < MIN_CANDIDATES_FOR_IDF {
+        return tokens.to_vec();
+    }
+    let lowered: Vec<String> = titles.iter().map(|t| t.to_ascii_lowercase()).collect();
+    tokens
+        .iter()
+        .filter(|token| {
+            let hits = lowered
+                .iter()
+                .filter(|t| t.contains(token.as_str()))
+                .count();
+            (hits as f64) / (titles.len() as f64) < UBIQUITOUS_TITLE_SHARE
+        })
+        .cloned()
+        .collect()
+}
+
+/// Shortest derived excerpt worth injecting. Anything shorter is a bare
+/// heading or a symbol-count line, which tells the agent nothing.
+const MIN_DERIVED_TEXT_CHARS: usize = 60;
+
+/// How many distinct query tokens hit a concept's title and how many hit the
+/// matched excerpt. Title hits are the strong signal: they mean the prompt is
+/// naming the thing rather than sharing vocabulary with its description.
+pub(crate) fn knowledge_hits(tokens: &[String], title: &str, text: &str) -> (usize, usize) {
+    let title = title.to_ascii_lowercase();
+    let text = text.to_ascii_lowercase();
+    let title_hits = tokens.iter().filter(|t| title.contains(t.as_str())).count();
+    let text_hits = tokens
+        .iter()
+        .filter(|t| !title.contains(t.as_str()) && text.contains(t.as_str()))
+        .count();
+    (title_hits, text_hits)
+}
+
+/// Segments that list a concept's relationships or exports are indexes, not
+/// knowledge. A hit there means a call-site name matched, which says nothing
+/// about the prompt.
+fn is_index_segment(heading_path: Option<&str>, text: &str) -> bool {
+    let heading = heading_path.unwrap_or("");
+    let head: String = text.trim_start().chars().take(40).collect();
+    ["Relationships", "Exported symbols"]
+        .iter()
+        .any(|marker| heading.contains(marker) || head.contains(marker))
+}
+
+/// Decide whether a matched concept is worth injecting without being asked.
+///
+/// Authored knowledge (repository or gateway authority) carries intent the
+/// source cannot express, so any genuine hit is worth surfacing. Derived
+/// concepts summarize code the agent can read for itself; they only earn
+/// transparent injection when the prompt names them (a title hit) and either
+/// corroborates that with a second token or the agent has read them before.
+pub(crate) fn passes_value_gate(
+    authority: &str,
+    heading_path: Option<&str>,
+    text: &str,
+    title_hits: usize,
+    text_hits: usize,
+    accesses: u64,
+) -> bool {
+    if is_index_segment(heading_path, text) {
+        return false;
+    }
+    if matches!(authority, "repository" | "gateway") {
+        return title_hits + text_hits >= 1;
+    }
+    title_hits >= 1 && (title_hits + text_hits >= 2 || accesses > 0)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct KnowledgeSnippet {
@@ -228,12 +479,20 @@ fn rank_by_recorded_use(
         .collect())
 }
 
-fn local_knowledge_snippets(prompt: &str, limit: usize) -> Result<Vec<KnowledgeSnippet>> {
+/// Concepts from the local index that this prompt genuinely points at.
+///
+/// `seen` holds identities already injected this session; they are skipped so
+/// the same concept is never sent twice.
+fn local_knowledge_snippets(
+    prompt: &str,
+    limit: usize,
+    seen: &BTreeSet<String>,
+) -> Result<Vec<KnowledgeSnippet>> {
     let root = std::env::current_dir()?;
     let project_id = agent_core::project_ident(&root);
-    let query = prompt_tokens(prompt)
-        .into_iter()
-        .take(8)
+    let tokens = knowledge_query_tokens(prompt, &project_id);
+    let query = tokens
+        .iter()
         .map(|token| format!("\"{token}\""))
         .collect::<Vec<_>>()
         .join(" OR ");
@@ -251,28 +510,34 @@ fn local_knowledge_snippets(prompt: &str, limit: usize) -> Result<Vec<KnowledgeS
         &agent_knowledge::SearchFilter::default(),
         limit.saturating_mul(KNOWLEDGE_CANDIDATE_FACTOR),
     )?;
-    let matches = rank_by_recorded_use(&index, matches, limit)?;
+    // Rank the full candidate set; the value gate below decides what survives,
+    // so trimming to `limit` first would let a rejected candidate crowd out an
+    // accepted one further down.
+    let candidate_count = matches.len();
+    let titles: Vec<String> = matches.iter().map(|m| m.resource.title.clone()).collect();
+    let tokens = discriminative_tokens(&tokens, &titles);
+    let matches = rank_by_recorded_use(&index, matches, candidate_count)?;
     let mut snippets = Vec::new();
     for item in matches {
-        if item.resource.status == "deprecated" {
+        if snippets.len() >= limit {
+            break;
+        }
+        if item.resource.status == "deprecated" || seen.contains(&item.resource.canonical_uri) {
+            continue;
+        }
+        let accesses = index.access_count(item.resource.id).unwrap_or(0).max(0) as u64;
+        let (title_hits, text_hits) = knowledge_hits(&tokens, &item.resource.title, &item.text);
+        if !passes_value_gate(
+            &item.resource.authority,
+            item.heading_path.as_deref(),
+            &item.text,
+            title_hits,
+            text_hits,
+            accesses,
+        ) {
             continue;
         }
         let detail = index.resource_detail(item.resource.id)?;
-        let graph = index.traverse(item.resource.id, None, "both", 1, 2)?;
-        let relation_hint = graph
-            .iter()
-            .map(|edge| {
-                format!(
-                    "{}:{}",
-                    edge.relation,
-                    edge.target_title
-                        .as_deref()
-                        .or(edge.unresolved_ref.as_deref())
-                        .unwrap_or("?")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
         let lifecycle = detail
             .as_ref()
             .and_then(|detail| detail.stale_after.as_deref())
@@ -286,13 +551,15 @@ fn local_knowledge_snippets(prompt: &str, limit: usize) -> Result<Vec<KnowledgeS
         } else {
             "unverified"
         };
-        let mut text = compact_text(&item.text, KNOWLEDGE_SEGMENT_CHARS);
-        if !relation_hint.is_empty()
-            && text.len() + relation_hint.len() + 10 <= KNOWLEDGE_SEGMENT_CHARS
-        {
-            text.push_str(" [graph: ");
-            text.push_str(&relation_hint);
-            text.push(']');
+        let authored = matches!(item.resource.authority.as_str(), "repository" | "gateway");
+        let budget = if authored {
+            KNOWLEDGE_SEGMENT_CHARS
+        } else {
+            DERIVED_SEGMENT_CHARS
+        };
+        let text = compact_text(&item.text, budget);
+        if !authored && text.chars().count() < MIN_DERIVED_TEXT_CHARS {
+            continue;
         }
         snippets.push(KnowledgeSnippet {
             identity: item.resource.canonical_uri.clone(),
@@ -321,22 +588,24 @@ fn compact_text(text: &str, max_chars: usize) -> String {
     compact
 }
 
+/// Render the knowledge section: one labelled line per concept plus its
+/// excerpt. Labels are authority, lifecycle, and trust, in that order, so an
+/// agent can weigh a `derived unverified` excerpt differently from a
+/// `repository verified` one without a per-line legend.
 fn render_knowledge_section(snippets: &[KnowledgeSnippet]) -> String {
-    let mut output =
-        "Relevant knowledge (bounded excerpts; treat unverified/stale content cautiously):"
-            .to_owned();
+    let mut output = "Relevant knowledge [authority · lifecycle · trust] — full concept: \
+                      agent-tools get <uri>"
+        .to_owned();
     for snippet in snippets {
         let text = compact_text(&snippet.text, KNOWLEDGE_SEGMENT_CHARS);
         let block = format!(
-            "\n  {} — {}\n  source={} authority={} lifecycle={} trust={}\n  {}\n  read: {}",
+            "\n- {} [{} · {} · {}] {}\n  {}",
             snippet.title,
-            snippet.identity,
-            snippet.origin,
             snippet.authority,
             snippet.lifecycle,
             snippet.trust,
-            text,
-            snippet.read_command
+            snippet.identity,
+            text
         );
         if output.len() + block.len() > KNOWLEDGE_CONTEXT_CHARS {
             break;
@@ -348,7 +617,24 @@ fn render_knowledge_section(snippets: &[KnowledgeSnippet]) -> String {
 
 // -- session-start logic -----------------------------------------------------
 
+/// Read the hook payload when one is piped in. A terminal on stdin means a
+/// human ran the command by hand; never block waiting on them.
+fn read_payload() -> Option<Value> {
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return None;
+    }
+    let mut raw = String::new();
+    stdin.lock().read_to_string(&mut raw).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
 fn run_session_start(agent: &str) -> Result<()> {
+    let payload = read_payload();
+    let session_id = payload.as_ref().and_then(extract_session_id);
+    let root = std::env::current_dir()?;
+    let mut session = SessionMemory::open(&root, session_id.as_deref());
+
     let ctx = resolve_context(None)?;
     let k = hook_limit();
 
@@ -391,6 +677,8 @@ fn run_session_start(agent: &str) -> Result<()> {
             t.title,
             t.status
         ));
+        // The prompt hook must not repeat what the session already opened with.
+        session.state.tasks.insert(task_key(&t.id, &t.status));
     }
     lines.push("Pull full detail + spec before starting: agent-tools tasks get <id>".to_string());
 
@@ -398,6 +686,7 @@ fn run_session_start(agent: &str) -> Result<()> {
     let event = event_name(true, agent);
     let envelope = render_envelope(event, &additional_context);
     println!("{envelope}");
+    session.save();
     Ok(())
 }
 
@@ -413,10 +702,17 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
 
     // Extract prompt; None => silent.
     let prompt = extract_prompt(&payload).ok_or_else(|| anyhow::anyhow!("no prompt"))?;
+    if is_harness_notification(&prompt) {
+        return Ok(());
+    }
+
+    let root = std::env::current_dir()?;
+    let mut session = SessionMemory::open(&root, extract_session_id(&payload).as_deref());
 
     let k = hook_limit();
     let tokens = prompt_tokens(&prompt);
-    let mut knowledge = local_knowledge_snippets(&prompt, k).unwrap_or_default();
+    let mut knowledge =
+        local_knowledge_snippets(&prompt, k, &session.state.knowledge).unwrap_or_default();
 
     let task_ctx = resolve_context(None).ok();
     let agent_id = task_ctx.as_ref().map(|ctx| ctx.agent_id.clone());
@@ -528,13 +824,20 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
     });
     knowledge
         .dedup_by(|left, right| left.identity == right.identity && left.origin == right.origin);
+    knowledge.retain(|snippet| !session.state.knowledge.contains(&snippet.identity));
     knowledge.truncate(k);
 
-    let patterns: Vec<_> = patterns.into_iter().take(k).collect();
+    let patterns: Vec<_> = patterns
+        .into_iter()
+        .filter(|p| !session.state.patterns.contains(&p.id))
+        .take(k)
+        .collect();
 
-    // Rank tasks by prompt token overlap.
+    // Rank tasks by prompt token overlap, skipping ones this session has seen
+    // in their current status.
     let mut scored_tasks: Vec<_> = tasks
         .into_iter()
+        .filter(|t| !session.state.tasks.contains(&task_key(&t.id, &t.status)))
         .filter_map(|t| {
             let s = score_task(&tokens, &t.title, &t.labels);
             if s > 0 {
@@ -549,6 +852,16 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
 
     if patterns.is_empty() && top_tasks.is_empty() && knowledge.is_empty() {
         return Ok(());
+    }
+
+    for snippet in &knowledge {
+        session.state.knowledge.insert(snippet.identity.clone());
+    }
+    for pattern in &patterns {
+        session.state.patterns.insert(pattern.id.clone());
+    }
+    for task in &top_tasks {
+        session.state.tasks.insert(task_key(&task.id, &task.status));
     }
 
     let mut sections = Vec::new();
@@ -584,6 +897,7 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
     let event = event_name(false, agent);
     let envelope = render_envelope(event, &additional_context);
     println!("{envelope}");
+    session.save();
     Ok(())
 }
 
@@ -644,10 +958,9 @@ mod tests {
         let second = render_knowledge_section(&snippets);
         assert_eq!(first, second);
         assert!(first.len() <= KNOWLEDGE_CONTEXT_CHARS);
-        assert!(first.contains("authority=repository"));
-        assert!(first.contains("lifecycle=draft stale_after=2020-01-01"));
-        assert!(first.contains("trust=unverified"));
-        assert!(first.contains("read: agent-tools get"));
+        assert!(first.contains("[repository · draft stale_after=2020-01-01 · unverified]"));
+        assert!(first.contains("okf://fixture/runbook"));
+        assert!(first.contains("agent-tools get <uri>"));
     }
 
     #[test]
@@ -750,6 +1063,150 @@ mod tests {
             text: String::new(),
             rank_micros: 0,
         }
+    }
+
+    // -- value gate ----------------------------------------------------------
+
+    fn tokens(prompt: &str) -> Vec<String> {
+        knowledge_query_tokens(prompt, "github.com/nitecon/agent-tools.git")
+    }
+
+    #[test]
+    fn query_tokens_drop_stopwords_numbers_duplicates_and_project_name() {
+        let got = tokens("Ok lets make it happen then, fix the hook dispatch 42 hook");
+        assert_eq!(got, vec!["happen", "hook", "dispatch"]);
+        assert!(tokens("the and for").is_empty());
+        // "agent" and "tools" name the project; they would hit every title.
+        assert_eq!(
+            tokens("our agent tools have OKF built in"),
+            vec!["okf", "built"]
+        );
+    }
+
+    #[test]
+    fn ubiquitous_title_tokens_stop_counting() {
+        let toks = vec!["hook".to_owned(), "cli".to_owned()];
+        let titles: Vec<String> = [
+            "crates/agent-cli/src/cmd_hook.rs",
+            "crates/agent-cli/src/cmd_tasks.rs",
+            "crates/agent-cli/src/main.rs",
+            "crates/agent-cli/src/nudge.rs",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(discriminative_tokens(&toks, &titles), vec!["hook"]);
+        // Too few candidates to judge: keep everything.
+        assert_eq!(discriminative_tokens(&toks, &titles[..2]), toks);
+    }
+
+    #[test]
+    fn hits_count_distinct_tokens_and_do_not_double_count_title_words() {
+        let toks = tokens("refactor the hook dispatch");
+        let (title, text) = knowledge_hits(&toks, "dispatch", "Dispatch hook subcommands.");
+        assert_eq!((title, text), (1, 1));
+        let (title, text) = knowledge_hits(&toks, "crates/agent-cli/src/cmd_hook.rs", "");
+        assert_eq!((title, text), (1, 0));
+        let (title, text) = knowledge_hits(&toks, "GatewayClient::new", "build a client");
+        assert_eq!((title, text), (0, 0));
+    }
+
+    #[test]
+    fn authored_knowledge_passes_on_any_hit() {
+        assert!(passes_value_gate("repository", None, "runbook", 0, 1, 0));
+        assert!(passes_value_gate("gateway", None, "api note", 1, 0, 0));
+        assert!(!passes_value_gate("repository", None, "unrelated", 0, 0, 0));
+    }
+
+    #[test]
+    fn derived_knowledge_needs_a_title_hit_plus_corroboration() {
+        // Vocabulary overlap in the body alone is exactly the old noise.
+        assert!(!passes_value_gate(
+            "derived",
+            None,
+            "mentions hook twice",
+            0,
+            2,
+            0
+        ));
+        // A title hit with nothing else is still too weak when never read.
+        assert!(!passes_value_gate("derived", None, "…", 1, 0, 0));
+        // Title hit + second token, or title hit + prior use, is a real signal.
+        assert!(passes_value_gate("derived", None, "…", 1, 1, 0));
+        assert!(passes_value_gate("derived", None, "…", 1, 0, 3));
+        assert!(passes_value_gate("derived", None, "…", 2, 0, 0));
+    }
+
+    #[test]
+    fn index_segments_never_pass() {
+        assert!(!passes_value_gate(
+            "repository",
+            Some("Relationships"),
+            "- calls `Ok`",
+            2,
+            2,
+            9
+        ));
+        assert!(!passes_value_gate(
+            "derived",
+            None,
+            "## Exported symbols - [HookCommands](...)",
+            2,
+            2,
+            9
+        ));
+    }
+
+    #[test]
+    fn harness_notifications_are_recognised() {
+        assert!(is_harness_notification(
+            "<task-notification>\n<task-id>x</task-id>\n</task-notification>"
+        ));
+        assert!(is_harness_notification(
+            "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated event"
+        ));
+        assert!(is_harness_notification("  <system-reminder>\nreminder"));
+        assert!(!is_harness_notification("fix the notification hook"));
+        assert!(!is_harness_notification(
+            "please read <task-notification> docs"
+        ));
+    }
+
+    #[test]
+    fn session_id_comes_from_payload_before_env() {
+        let payload = json!({"session_id": " abc-123 ", "prompt": "x"});
+        assert_eq!(extract_session_id(&payload).as_deref(), Some("abc-123"));
+        let payload = json!({"sessionId": "camel"});
+        assert_eq!(extract_session_id(&payload).as_deref(), Some("camel"));
+        let prev = std::env::var("CLAUDE_SESSION_ID").ok();
+        std::env::remove_var("CLAUDE_SESSION_ID");
+        std::env::remove_var("GEMINI_SESSION_ID");
+        std::env::remove_var("CODEX_SESSION_ID");
+        assert!(extract_session_id(&json!({"prompt": "x"})).is_none());
+        if let Some(v) = prev {
+            std::env::set_var("CLAUDE_SESSION_ID", v);
+        }
+    }
+
+    #[test]
+    fn knowledge_section_is_compact_and_labelled() {
+        let snippet = KnowledgeSnippet {
+            identity: "okf://fixture/runbook".to_owned(),
+            title: "Recovery".to_owned(),
+            text: "Restore from the last snapshot.".to_owned(),
+            origin: "repository:.agents/knowledge".to_owned(),
+            authority: "repository".to_owned(),
+            lifecycle: "stable".to_owned(),
+            trust: "verified".to_owned(),
+            read_command: String::new(),
+        };
+        let section = render_knowledge_section(&[snippet]);
+        assert!(
+            section.contains("- Recovery [repository · stable · verified] okf://fixture/runbook")
+        );
+        assert!(section.contains("\n  Restore from the last snapshot."));
+        assert!(section.contains("agent-tools get <uri>"));
+        assert!(section.len() < 260, "{}", section.len());
     }
 
     #[test]

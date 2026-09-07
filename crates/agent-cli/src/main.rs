@@ -14,6 +14,8 @@ mod cmd_setup_skill;
 mod cmd_tasks;
 mod cmd_text;
 mod codex_hooks_toml;
+mod concept_view;
+mod hook_session;
 mod memory_reminder;
 mod nudge;
 mod observe;
@@ -129,10 +131,13 @@ enum Commands {
         relation: Option<String>,
     },
 
-    /// Get a resource and its current version, authority, lifecycle, and trust metadata
+    /// Show a concept as a compact card: authority, lifecycle, trust, use, body, and resolved relationships
     Get {
         /// Resource URI, title, or external identifier
         resource: String,
+        /// Emit the full resource, every edge, and access count as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Validate, import, or deterministically export an OKF bundle
@@ -159,12 +164,15 @@ enum Commands {
         limit: usize,
     },
 
-    /// Show callers and callees for a symbol
+    /// Show resolved callers and callees for a symbol
     Refs {
         /// Symbol URI or name
         symbol: String,
         #[arg(short, long, default_value = "20")]
         limit: usize,
+        /// Include unresolved references (std/library calls the index could not link)
+        #[arg(long)]
+        all: bool,
     },
 
     /// Show imports to and from a file or symbol
@@ -645,7 +653,7 @@ fn main_inner() -> Result<()> {
             relation,
         ),
 
-        Commands::Get { resource } => cmd_get(&resource),
+        Commands::Get { resource, json } => cmd_get(&resource, json),
 
         Commands::Okf { command } => cmd_okf(command),
 
@@ -657,7 +665,7 @@ fn main_inner() -> Result<()> {
             limit,
         } => cmd_graph(&resource, relation.as_deref(), &direction, depth, limit),
 
-        Commands::Refs { symbol, limit } => cmd_graph(&symbol, Some("calls"), "both", 1, limit),
+        Commands::Refs { symbol, limit, all } => cmd_refs(&symbol, limit, all),
 
         Commands::Imports { resource, limit } => {
             cmd_graph(&resource, Some("imports"), "both", 1, limit)
@@ -1133,7 +1141,7 @@ fn cmd_search(
     Ok(())
 }
 
-fn cmd_get(query: &str) -> Result<()> {
+fn cmd_get(query: &str, json: bool) -> Result<()> {
     let root = std::env::current_dir()?;
     let index = agent_knowledge::ProjectIndex::open_for_project(&root)?;
     let project_id = agent_core::project_ident(&root);
@@ -1156,14 +1164,61 @@ fn cmd_get(query: &str) -> Result<()> {
     let relationships = index.traverse(resource.id, None, "both", 1, 100)?;
     let accesses = index.access_count(resource.id)?;
     observe::resource("get", resource.id);
-    println!(
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "resource": detail,
+                "relationships": relationships,
+                "accesses": accesses,
+            }))?
+        );
+        return Ok(());
+    }
+    let document = index.resource_document(resource.id)?;
+    print!(
         "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "resource": detail,
-            "relationships": relationships,
-            "accesses": accesses,
-        }))?
+        concept_view::render(&detail, document.as_deref(), &relationships, accesses)
     );
+    Ok(())
+}
+
+/// Callers and callees, resolved to project symbols by default.
+///
+/// Extracted call edges include every `Ok`, `Some`, and `Vec::new` in the
+/// body; those never resolve and only bury the edges an agent came for. They
+/// are hidden unless `--all` is passed, and the caller is told how many were.
+fn cmd_refs(query: &str, limit: usize, all: bool) -> Result<()> {
+    let root = std::env::current_dir()?;
+    let index = open_graph_index(&root)?;
+    let resource = resolve_graph_resource(&index, &root, query)?;
+    // Over-fetch so hidden unresolved edges do not eat the caller's limit.
+    let fetch = if all {
+        limit
+    } else {
+        limit.saturating_mul(5).max(limit)
+    };
+    let mut edges = index.traverse_graph(resource.id, Some("calls"), "both", 1, fetch)?;
+    let hidden = if all {
+        0
+    } else {
+        let before = edges.len();
+        edges.retain(|edge| edge.target_uri.is_some());
+        before - edges.len()
+    };
+    edges.truncate(limit);
+    observe::resource("refs", resource.id);
+    if edges.is_empty() {
+        println!(
+            "No resolved call relationships from {}",
+            resource.canonical_uri
+        );
+    } else {
+        render_graph_edges(&edges);
+    }
+    if hidden > 0 {
+        println!("({hidden} unresolved references hidden; pass --all to include them)");
+    }
     Ok(())
 }
 
