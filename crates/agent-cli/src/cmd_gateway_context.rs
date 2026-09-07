@@ -90,7 +90,7 @@ pub(crate) async fn ensure_registered(
     }
     let resp = ctx
         .gateway
-        .register_project(&ctx.ident, channel_override)
+        .register_project_with_remote(&ctx.ident, channel_override, Some(&ctx.canonical_ident))
         .await
         .context("register project with gateway")?;
     write_registration_marker(&ctx.canonical_ident, &ctx.gateway_url, &resp.channel_name)?;
@@ -102,7 +102,11 @@ pub(crate) async fn ensure_all_registered(ctx: &GatewayContext) -> Result<()> {
         if read_registration_marker(&ctx.canonical_ident, &target.gateway_url).is_some() {
             continue;
         }
-        let response = match target.gateway.register_project(&ctx.ident, None).await {
+        let response = match target
+            .gateway
+            .register_project_with_remote(&ctx.ident, None, Some(&ctx.canonical_ident))
+            .await
+        {
             Ok(response) => response,
             Err(error) if !target.primary => {
                 eprintln!(
@@ -139,19 +143,28 @@ fn registration_marker_for_gateway(ident: &str, gateway_url: &str) -> PathBuf {
 }
 
 /// Return Some(channel_name) if this (ident, gateway_url) has been registered.
+/// Bumped when registration starts sending new data the gateway needs
+/// (v2: `repo_url`). Older markers are treated as absent.
+pub(crate) const REGISTRATION_MARKER_VERSION: u32 = 2;
+
 pub(crate) fn read_registration_marker(ident: &str, gateway_url: &str) -> Option<String> {
     let path = registration_marker_for_gateway(ident, gateway_url);
     let content = std::fs::read_to_string(&path).ok()?;
     let mut url = None;
     let mut channel = None;
+    let mut version = 1u32;
     for line in content.lines() {
         if let Some(v) = line.strip_prefix("GATEWAY_URL=") {
             url = Some(v.to_string());
         } else if let Some(v) = line.strip_prefix("CHANNEL_NAME=") {
             channel = Some(v.to_string());
+        } else if let Some(v) = line.strip_prefix("MARKER_VERSION=") {
+            version = v.trim().parse().unwrap_or(1);
         }
     }
-    if url.as_deref() == Some(gateway_url) {
+    // Version 1 markers predate remote-aware registration; ignore them so the
+    // project is registered once more and the gateway can fill its mapping.
+    if version >= REGISTRATION_MARKER_VERSION && url.as_deref() == Some(gateway_url) {
         channel
     } else {
         None
@@ -168,7 +181,9 @@ pub(crate) fn write_registration_marker(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create directory {}", parent.display()))?;
     }
-    let body = format!("GATEWAY_URL={gateway_url}\nCHANNEL_NAME={channel_name}\n");
+    let body = format!(
+        "GATEWAY_URL={gateway_url}\nCHANNEL_NAME={channel_name}\nMARKER_VERSION={REGISTRATION_MARKER_VERSION}\n"
+    );
     std::fs::write(&path, body)
         .with_context(|| format!("write registration marker {}", path.display()))?;
     Ok(())
@@ -206,5 +221,21 @@ mod tests {
         assert_eq!(read_registration_marker(&ident, "http://other"), None);
 
         let _ = std::fs::remove_file(&gateway_path);
+    }
+
+    #[test]
+    fn legacy_marker_without_version_forces_reregistration() {
+        let ident = format!("github.com/legacy/{}.git", std::process::id());
+        let url = "http://legacy.gateway";
+        let path = registration_marker_for_gateway(&ident, url);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, format!("GATEWAY_URL={url}\nCHANNEL_NAME=old\n")).unwrap();
+        assert_eq!(read_registration_marker(&ident, url), None);
+        write_registration_marker(&ident, url, "fresh").unwrap();
+        assert_eq!(
+            read_registration_marker(&ident, url).as_deref(),
+            Some("fresh")
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

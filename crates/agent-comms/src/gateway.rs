@@ -26,6 +26,10 @@ struct RegisterProjectRequest<'a> {
     ident: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<&'a str>,
+    /// Git remote / canonical ident so the gateway can derive the repository
+    /// mapping instead of guessing from the short ident.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_url: Option<&'a str>,
 }
 
 /// Response returned after registering (or re-registering) a project.
@@ -216,12 +220,28 @@ impl GatewayClient {
         ident: &str,
         channel: Option<&str>,
     ) -> Result<RegisterProjectResponse> {
+        self.register_project_with_remote(ident, channel, None)
+            .await
+    }
+
+    /// Register a project and tell the gateway its git remote (or agent-tools
+    /// canonical ident) so the repository mapping is derived server-side.
+    pub async fn register_project_with_remote(
+        &self,
+        ident: &str,
+        channel: Option<&str>,
+        repo_url: Option<&str>,
+    ) -> Result<RegisterProjectResponse> {
         let url = format!("{}/v1/projects", self.base_url);
         let resp = self
             .client
             .post(&url)
             .header("Authorization", self.auth())
-            .json(&RegisterProjectRequest { ident, channel })
+            .json(&RegisterProjectRequest {
+                ident,
+                channel,
+                repo_url,
+            })
             .send()
             .await
             .context("POST /v1/projects")?;

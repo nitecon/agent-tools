@@ -516,6 +516,8 @@ struct RegisterProjectRequest<'a> {
     ident: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_url: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2312,6 +2314,7 @@ async fn ensure_registered(ctx: &ArtifactContext) -> Result<()> {
         .json(&RegisterProjectRequest {
             ident: &ctx.ident,
             channel: None,
+            repo_url: Some(&ctx.canonical_ident),
         })
         .send()
         .await

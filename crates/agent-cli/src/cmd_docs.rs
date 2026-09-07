@@ -1003,7 +1003,11 @@ async fn ensure_registered(ctx: &DocsContext) -> Result<()> {
         if read_registration_marker(&ctx.canonical_ident, &target.gateway_url).is_some() {
             continue;
         }
-        let resp = match target.gateway.register_project(&ctx.ident, None).await {
+        let resp = match target
+            .gateway
+            .register_project_with_remote(&ctx.ident, None, Some(&ctx.canonical_ident))
+            .await
+        {
             Ok(response) => response,
             Err(error) if !target.primary => {
                 eprintln!(
