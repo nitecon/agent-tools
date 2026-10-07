@@ -155,6 +155,10 @@ Use `agent-tools session` for your exact session, provider and OS, and
 Task mutations resolve and attach that identity automatically. If explicit CMUX
 context cannot be verified, the mutation fails instead of inventing an identity.
 Outside CMUX, the existing machine agent identity remains compatible.
+The harness must preserve inherited `CMUX_SURFACE_ID` and `CMUX_SOCKET` or
+`CMUX_SOCKET_PATH` in shell tools. Verify `agent-tools session --json` from the
+model's actual tool after configuring/restarting the provider. Do not hard-code
+identity or borrow another terminal's context when inheritance was filtered.
 
 Read platform requirements and ownership, then successfully claim a task before
 working. Respect peer claims even when machine author names match. Agents choose
@@ -310,6 +314,10 @@ Use `agent-tools session` for your exact session, provider and OS, and
 Task mutations resolve and attach that identity automatically. If explicit CMUX
 context cannot be verified, the mutation fails instead of inventing an identity.
 Outside CMUX, the existing machine agent identity remains compatible.
+The harness must preserve inherited `CMUX_SURFACE_ID` and `CMUX_SOCKET` or
+`CMUX_SOCKET_PATH` in shell tools. Verify `agent-tools session --json` from the
+model's actual tool after configuring/restarting the provider. Do not hard-code
+identity or borrow another terminal's context when inheritance was filtered.
 
 Read platform requirements and ownership, then successfully claim a task before
 working. Respect peer claims even when machine author names match. Agents choose

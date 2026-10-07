@@ -8,6 +8,7 @@
   without requiring gateway configuration.
 - Display task ownership and comment provenance using gateway `owner_origin`.
 - Include independent-agent coordination guidance in owned rule/skill templates.
+- Document harness environment preservation and discovery from actual shell tools.
 - Keep the pinned glibc 2.31 release baseline without unrelated package upgrades.
 
 Upgrade CMUX Linux to v0.6.4 and restart it before updating this client. Current

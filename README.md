@@ -84,6 +84,33 @@ commands do not automatically update installed binaries, so publishing v1.19.0
 does not change the Windows client. The previous Windows archive remains
 available from the [v1.18.0 release](https://github.com/nitecon/agent-tools/releases/tag/v1.18.0).
 
+The agent harness must preserve `CMUX_SURFACE_ID` and `CMUX_SOCKET` or
+`CMUX_SOCKET_PATH` when launching shell tools. A provider process can inherit
+these while its shell tools do not: Codex's `shell_environment_policy.inherit =
+"core"` trims the environment before the tools run. Start Codex from its CMUX
+terminal with `codex -c 'shell_environment_policy.inherit="all"'`, ensuring any
+existing include/exclude policy also retains the CMUX fields. A focused Linux
+configuration using the supported legacy allowlist syntax is:
+
+```toml
+[shell_environment_policy]
+inherit = "all"
+include_only = [
+  "PATH", "HOME", "USER", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "LC_*",
+  "CMUX_SOCKET", "CMUX_SOCKET_PATH", "CMUX_SURFACE_ID", "CMUX_WORKSPACE_ID",
+]
+```
+
+Retain any additional variables your tooling needs. If using the newer keyed
+`filters` syntax, put the CMUX fields in that allowlist instead; do not combine
+the two forms. See the official [Codex shell environment policy](https://learn.chatgpt.com/docs/config-file/config-advanced#shell-environment-policy).
+Restart the provider after changing its configuration, then run
+`agent-tools session --json` **through that model's shell tool**, not just the
+interactive terminal. It must report a verified session before attributing task
+mutations. Do not hard-code session/surface IDs in persistent settings or copy
+another terminal's context. Without inherited CMUX context, commands retain
+legacy identity and cannot support exact-session self-echo suppression.
+
 If an older update installed a binary that cannot start because of a glibc
 version error, recover without invoking that binary by rerunning the Linux
 installer:
