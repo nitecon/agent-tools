@@ -1,103 +1,74 @@
-//! Local CMUX discovery. Identity is resolved anew for each invocation, with no
-//! provider invocation, screen reads, persistent cache or assignment policy.
+//! Actor discovery and optional CMUX membership. A local terminal never supplies
+//! actor identity; it can only validate/bind the independently derived origin.
 
-use agent_comms::session::{is_uuid, SessionOrigin};
+use agent_comms::{
+    actor::Actor,
+    session::{is_uuid, SessionOrigin},
+};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_RESPONSE: u64 = 64 * 1024;
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct AgentSession {
-    #[serde(flatten)]
-    pub(crate) origin: SessionOrigin,
-    pub(crate) surface_id: String,
-    pub(crate) workspace_id: String,
+pub(crate) struct Membership {
+    origin: SessionOrigin,
+    provider_session_id: String,
+    executor_generation: Vec<String>,
+    binding_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    repository: Option<String>,
+    surface_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recipient_session_id: Option<String>,
 }
 
-/// Both environment fields must be present in CMUX. Missing/broken explicit
-/// context is an error rather than an unattributed mutation or stale identity.
-struct LocalContext {
-    endpoint: String,
-    surface_id: String,
-}
-
-impl LocalContext {
-    fn from_env() -> Result<Option<Self>> {
-        Self::from_values(
-            std::env::var("CMUX_SOCKET").ok(),
-            std::env::var("CMUX_SOCKET_PATH").ok(),
-            std::env::var("CMUX_SURFACE_ID").ok(),
-        )
-    }
-
-    fn from_values(
-        socket: Option<String>,
-        socket_path: Option<String>,
-        surface_id: Option<String>,
-    ) -> Result<Option<Self>> {
-        if socket.is_none() && socket_path.is_none() && surface_id.is_none() {
-            return Ok(None);
-        }
-        let endpoint = socket
-            .or(socket_path)
-            .context("CMUX_SOCKET or CMUX_SOCKET_PATH is required for session identity")?;
-        ensure!(!endpoint.is_empty(), "CMUX socket endpoint is empty");
-        let surface_id = surface_id.context("CMUX_SURFACE_ID is required for session identity")?;
-        ensure!(is_uuid(&surface_id), "invalid CMUX surface UUID");
-        Ok(Some(Self {
-            endpoint,
-            surface_id,
-        }))
-    }
-
-    async fn session(&self) -> Result<AgentSession> {
-        let value = rpc(
-            &self.endpoint,
-            "gateway.session",
-            json!({"surface_id": self.surface_id}),
-        )
-        .await?;
-        self.decode_session(value)
-    }
-
-    fn decode_session(&self, value: Value) -> Result<AgentSession> {
-        let session: AgentSession =
-            serde_json::from_value(value).context("decode CMUX agent session")?;
-        validate_session(&session)?;
-        ensure!(
-            session.surface_id == self.surface_id,
-            "CMUX returned identity for a different surface"
-        );
-        Ok(session)
-    }
-}
-
-fn validate_session(session: &AgentSession) -> Result<()> {
-    session.origin.validate()?;
+fn decode_membership(actor: &Actor, value: Value) -> Result<Membership> {
+    let membership: Membership =
+        serde_json::from_value(value).context("decode CMUX actor membership")?;
     ensure!(
-        is_uuid(&session.surface_id) && is_uuid(&session.workspace_id),
-        "invalid CMUX surface/workspace UUID"
+        membership.origin == actor.origin
+            && membership.provider_session_id == actor.provider_session_id
+            && membership.executor_generation == actor.executor_generation,
+        "CMUX membership did not echo the verified actor"
     );
-    Ok(())
+    match membership.binding_state.as_str() {
+        "bound" => ensure!(
+            [
+                &membership.surface_id,
+                &membership.workspace_id,
+                &membership.recipient_session_id
+            ]
+            .iter()
+            .all(|field| field.as_deref().is_some_and(is_uuid)),
+            "CMUX bound membership lacks valid recipient context"
+        ),
+        "unbound" => ensure!(
+            membership.surface_id.is_none()
+                && membership.workspace_id.is_none()
+                && membership.recipient_session_id.is_none(),
+            "CMUX unbound membership contains recipient context"
+        ),
+        _ => bail!("unknown CMUX actor binding state"),
+    }
+    Ok(membership)
 }
 
 pub(crate) async fn mutation_origin() -> Result<Option<SessionOrigin>> {
-    match LocalContext::from_env()? {
-        None => Ok(None),
-        Some(context) => Ok(Some(
-            context
-                .session()
-                .await
-                .context("resolve current CMUX agent identity; task mutation was not sent")?
-                .origin,
-        )),
+    let actor = crate::actor_runtime::current()
+        .context("verify calling actor; task mutation was not sent")?;
+    if let Some(actor) = actor {
+        // Optional membership/capability requests may trigger safe-idle bootstrap.
+        // No RPC absence, old API, invalid binding or timeout revokes provenance.
+        let _ = membership(&actor, "gateway.session.announce", None).await;
+        Ok(Some(actor.origin))
+    } else {
+        Ok(None)
     }
 }
 
@@ -109,50 +80,215 @@ pub(crate) fn run(peers: bool, json_output: bool) -> Result<()> {
 }
 
 async fn discover(peers: bool, json_output: bool) -> Result<()> {
-    let context = LocalContext::from_env()?.context("not running in a CMUX agent surface")?;
     if peers {
-        #[derive(Deserialize, Serialize)]
-        struct Peers {
-            sessions: Vec<AgentSession>,
-        }
-        let result: Peers =
-            serde_json::from_value(rpc(&context.endpoint, "gateway.sessions", json!({})).await?)?;
-        for session in &result.sessions {
-            validate_session(session)?;
-        }
-        if json_output {
-            println!("{}", serde_json::to_string(&result)?);
-        } else {
-            for session in result.sessions {
-                print_session(&session);
+        let peers = tokio::time::timeout(TIMEOUT, async {
+            for endpoint in endpoints()? {
+                if let Ok(value) = rpc(&endpoint, "gateway.sessions", json!({})).await {
+                    validate_peers(&value)?;
+                    return Ok(value);
+                }
             }
-        }
-    } else {
-        let session = context.session().await?;
+            bail!("CMUX peer discovery unavailable")
+        })
+        .await
+        .context("CMUX peer lookup timed out")??;
         if json_output {
-            println!("{}", serde_json::to_string(&session)?);
+            println!("{}", serde_json::to_string(&peers)?);
         } else {
-            print_session(&session);
+            println!("{}", serde_json::to_string_pretty(&peers)?);
+        }
+        return Ok(());
+    }
+    let actor = crate::actor_runtime::current()?
+        .context("no provider-native actor context in this invocation")?;
+    let bound = membership(&actor, "gateway.session.resolve", None)
+        .await
+        .ok();
+    if json_output {
+        let mut value = serde_json::to_value(&actor)?;
+        if let Some(bound) = bound {
+            value["membership"] = serde_json::to_value(bound)?;
+        }
+        println!("{}", serde_json::to_string(&value)?);
+    } else {
+        println!(
+            "{} {} {} instance={} native={} binding={}",
+            actor.origin.session_id,
+            actor.origin.provider,
+            actor.origin.os,
+            actor.origin.instance_id,
+            actor.provider_session_id,
+            bound
+                .as_ref()
+                .map(|m| m.binding_state.as_str())
+                .unwrap_or("unavailable")
+        );
+        if let Some(surface) = bound.and_then(|m| m.surface_id) {
+            println!("surface={surface}");
         }
     }
     Ok(())
 }
 
-fn print_session(session: &AgentSession) {
-    println!(
-        "{} {} {} surface={} workspace={} instance={}{}",
-        session.origin.session_id,
-        session.origin.provider,
-        session.origin.os,
-        session.surface_id,
-        session.workspace_id,
-        session.origin.instance_id,
-        session
-            .repository
-            .as_deref()
-            .map(|repository| format!(" repository={repository}"))
-            .unwrap_or_default()
+fn validate_peers(value: &Value) -> Result<()> {
+    let sessions = value
+        .get("sessions")
+        .and_then(Value::as_array)
+        .context("CMUX peers response missing sessions")?;
+    for session in sessions {
+        let origin: SessionOrigin = serde_json::from_value(session.clone())?;
+        origin.validate()?;
+        ensure!(
+            ["surface_id", "workspace_id"].iter().all(|field| session
+                .get(field)
+                .and_then(Value::as_str)
+                .is_some_and(is_uuid)),
+            "invalid CMUX peer surface/workspace UUID"
+        );
+    }
+    Ok(())
+}
+
+pub(crate) async fn membership(
+    actor: &Actor,
+    method: &str,
+    token: Option<&str>,
+) -> Result<Membership> {
+    tokio::time::timeout(TIMEOUT, async {
+        let mut params = serde_json::to_value(actor)?;
+        if let Some(token) = token {
+            ensure!(
+                token.len() == 64
+                    && token
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                "invalid CMUX enrollment token"
+            );
+            params["enrollment_token"] = json!(token);
+        }
+        if let Ok(repository) = agent_core::project_ident_from_cwd() {
+            params["repository"] = json!(repository);
+        }
+        for endpoint in endpoints()? {
+            // Try only conventional/hinted endpoints. A server error does not
+            // authorize replacement provenance or token logging.
+            if let Ok(result) = rpc(&endpoint, method, params.clone()).await {
+                return decode_membership(actor, result);
+            }
+        }
+        bail!("CMUX actor membership unavailable")
+    })
+    .await
+    .context("CMUX membership lookup timed out")?
+}
+
+fn endpoints() -> Result<Vec<String>> {
+    let mut paths = Vec::new();
+    for key in ["CMUX_SOCKET", "CMUX_SOCKET_PATH"] {
+        if let Ok(path) = std::env::var(key) {
+            if !path.is_empty() && path.len() <= 4096 && !paths.contains(&path) {
+                #[cfg(unix)]
+                if !PathBuf::from(&path).is_absolute() {
+                    continue;
+                }
+                paths.push(path);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: getuid has no parameters or memory effects.
+        let uid = unsafe { libc::getuid() };
+        let configured = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .filter(|p| {
+                std::fs::symlink_metadata(p)
+                    .is_ok_and(|m| m.is_dir() && m.uid() == uid && m.mode() & 0o077 == 0)
+            });
+        let runtime = configured.unwrap_or_else(|| PathBuf::from(format!("/run/user/{uid}")));
+        let directory = runtime.join("cmux");
+        paths.push(directory.join("cmux.sock").to_string_lossy().into_owned());
+        let marker = directory.join("last-socket-path");
+        if let Ok(metadata) = std::fs::symlink_metadata(&marker) {
+            if metadata.is_file()
+                && metadata.uid() == uid
+                && metadata.mode() & 0o077 == 0
+                && metadata.len() <= 4096
+            {
+                if let Ok(text) = std::fs::read_to_string(marker) {
+                    let path = text.trim();
+                    if PathBuf::from(path).is_absolute() && !paths.iter().any(|p| p == path) {
+                        paths.push(path.into());
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    if let Ok(sid) = user_sid() {
+        paths.push(format!(r"\\.\pipe\cmux-{sid}-control"));
+    }
+    // No well-known macOS enrollment endpoint is advertised by this release.
+    Ok(paths)
+}
+
+#[cfg(windows)]
+fn user_sid() -> Result<String> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, LocalFree},
+        Security::{
+            Authorization::ConvertSidToStringSidW, GetTokenInformation, TokenUser, TOKEN_QUERY,
+            TOKEN_USER,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    let mut token = std::ptr::null_mut();
+    // SAFETY: native handles and checked output buffers match the API; all
+    // allocated resources are released, including failure paths.
+    ensure!(
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } != 0,
+        "current user token unavailable"
     );
+    let result = (|| {
+        let mut size = 0;
+        unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut size) };
+        ensure!(size > 0 && size <= 65536, "invalid current user token size");
+        let mut buffer = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+        ensure!(
+            unsafe {
+                GetTokenInformation(
+                    token,
+                    TokenUser,
+                    buffer.as_mut_ptr().cast(),
+                    size,
+                    &mut size,
+                )
+            } != 0,
+            "current user SID unavailable"
+        );
+        let user = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() };
+        let mut text = std::ptr::null_mut();
+        ensure!(
+            unsafe { ConvertSidToStringSidW(user.User.Sid, &mut text) } != 0,
+            "current user SID text unavailable"
+        );
+        let mut length = 0;
+        while length < 256 && unsafe { *text.add(length) } != 0 {
+            length += 1;
+        }
+        let sid = if length < 256 {
+            String::from_utf16(unsafe { std::slice::from_raw_parts(text, length) })
+                .context("invalid SID text")
+        } else {
+            Err(anyhow::anyhow!("SID text exceeds bound"))
+        };
+        unsafe { LocalFree(text.cast()) };
+        sid
+    })();
+    unsafe { CloseHandle(token) };
+    result
 }
 
 /// Deadline covers connect, write and bounded newline-delimited response read.
@@ -183,7 +319,7 @@ async fn rpc(endpoint: &str, method: &str, params: Value) -> Result<Value> {
         }
     })
     .await
-    .context("CMUX session lookup timed out after 2 seconds")?
+    .context("CMUX lookup timed out after 2 seconds")?
 }
 
 async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
@@ -191,7 +327,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
     method: &str,
     params: Value,
 ) -> Result<Value> {
-    let mut request = serde_json::to_vec(&json!({"id": 1, "method": method, "params": params}))?;
+    let mut request = serde_json::to_vec(&json!({"id":1,"method":method,"params":params}))?;
     request.push(b'\n');
     stream.write_all(&request).await?;
     let mut response = Vec::new();
@@ -200,19 +336,18 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         .await?;
     ensure!(
         response.len() as u64 <= MAX_RESPONSE,
-        "CMUX session response exceeds 64 KiB"
+        "CMUX response exceeds 64 KiB"
     );
-    ensure!(
-        response.last() == Some(&b'\n'),
-        "incomplete CMUX session response"
-    );
+    ensure!(response.last() == Some(&b'\n'), "incomplete CMUX response");
     let response: Value = serde_json::from_slice(&response).context("decode CMUX RPC response")?;
     ensure!(
         response.get("id") == Some(&json!(1)),
         "CMUX RPC response ID mismatch"
     );
-    if let Some(error) = response.get("error").filter(|value| !value.is_null()) {
-        bail!("CMUX {method}: {error}");
+    if response.get("error").is_some_and(|value| !value.is_null()) {
+        // Never print a server-controlled error object that could contain token
+        // or other request contents.
+        bail!("CMUX rejected actor membership request");
     }
     response
         .get("result")
@@ -223,180 +358,123 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    const SURFACE: &str = "00000000-0000-4000-8000-000000000001";
-
-    fn session_value(surface: &str) -> Value {
-        json!({"session_id":"00000000-0000-4000-8000-000000000002", "instance_id":"00000000-0000-4000-8000-000000000003",
-            "provider":"codex", "os": std::env::consts::OS, "surface_id":surface, "workspace_id":"00000000-0000-4000-8000-000000000004"})
+    fn fixture() -> Actor {
+        let vectors: Value =
+            serde_json::from_str(include_str!("../../../docs/actor-origin-vectors.json")).unwrap();
+        let row = &vectors[0];
+        serde_json::from_value(json!({"version":1,"origin":{"session_id":row["session_id"],"instance_id":row["instance_id"],"provider":row["provider"],"os":row["os"]},"provider_session_id":row["provider_session_id"],"executor_generation":row["executor_generation"]})).unwrap()
     }
-
-    async fn serve_session<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S) {
+    fn response(actor: &Actor) -> Value {
+        let mut value = serde_json::to_value(actor).unwrap();
+        value["binding_state"] = json!("unbound");
+        value
+    }
+    #[test]
+    fn membership_must_echo_actor_and_requires_exact_bound_context() {
+        let actor = fixture();
+        let value = response(&actor);
+        assert!(decode_membership(&actor, value.clone()).is_ok());
+        for field in ["origin", "provider_session_id", "executor_generation"] {
+            let mut broken = value.clone();
+            broken[field] = Value::Null;
+            assert!(decode_membership(&actor, broken).is_err());
+        }
+        let mut bound = value;
+        bound["binding_state"] = json!("bound");
+        assert!(decode_membership(&actor, bound.clone()).is_err());
+        for field in ["surface_id", "workspace_id", "recipient_session_id"] {
+            bound[field] = json!("00000000-0000-4000-8000-000000000001");
+        }
+        assert!(decode_membership(&actor, bound).is_ok());
+    }
+    #[test]
+    fn peers_keep_existing_verified_native_session_schema() {
+        let mut session = serde_json::to_value(fixture().origin).unwrap();
+        session["surface_id"] = json!("00000000-0000-4000-8000-000000000001");
+        session["workspace_id"] = session["surface_id"].clone();
+        assert!(validate_peers(&json!({"sessions":[session.clone()]})).is_ok());
+        session["provider"] = json!("unknown");
+        assert!(validate_peers(&json!({"sessions":[session]})).is_err());
+        assert!(validate_peers(&json!({})).is_err());
+    }
+    async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S) {
         let mut request = String::new();
         BufReader::new(&mut stream)
             .read_line(&mut request)
             .await
             .unwrap();
         let request: Value = serde_json::from_str(&request).unwrap();
-        assert_eq!(request["method"], "gateway.session");
-        assert_eq!(request["params"]["surface_id"], SURFACE);
-        let mut response =
-            serde_json::to_vec(&json!({"id":request["id"],"result":session_value(SURFACE)}))
-                .unwrap();
-        response.push(b'\n');
-        stream.write_all(&response).await.unwrap();
-        // Keep the Windows server handle alive until the client consumes its
-        // response; closing a named pipe can discard unread buffered bytes.
+        assert_eq!(request["method"], "gateway.session.announce");
+        assert_eq!(
+            request["params"]["origin"],
+            serde_json::to_value(&fixture().origin).unwrap()
+        );
+        let mut reply = serde_json::to_vec(&json!({"id":1,"result":response(&fixture())})).unwrap();
+        reply.push(b'\n');
+        stream.write_all(&reply).await.unwrap();
         let mut closed = [0u8; 1];
         let _ = stream.read(&mut closed).await;
     }
-
     #[tokio::test]
-    #[cfg(any(unix, windows))]
-    async fn native_local_transport_resolves_verified_session() {
+    async fn native_transport_announces_exact_actor() {
         #[cfg(unix)]
-        let (endpoint, fixture, _directory) = {
+        let (endpoint, job, _directory) = {
             let directory = tempfile::tempdir().unwrap();
-            let endpoint = directory.path().join("session.sock");
+            let endpoint = directory.path().join("actor.sock");
             let listener = tokio::net::UnixListener::bind(&endpoint).unwrap();
-            let fixture = tokio::spawn(async move {
-                serve_session(listener.accept().await.unwrap().0).await;
-            });
-            (endpoint.to_string_lossy().into_owned(), fixture, directory)
+            let job = tokio::spawn(async move { serve(listener.accept().await.unwrap().0).await });
+            (endpoint.to_string_lossy().into_owned(), job, directory)
         };
         #[cfg(windows)]
-        let (endpoint, fixture) = {
-            let endpoint = format!(r"\\.\pipe\agent-tools-session-{}", std::process::id());
+        let (endpoint, job) = {
+            let endpoint = format!(r"\\.\pipe\agent-tools-actor-{}", std::process::id());
             let server = tokio::net::windows::named_pipe::ServerOptions::new()
                 .first_pipe_instance(true)
                 .create(&endpoint)
                 .unwrap();
-            let fixture = tokio::spawn(async move {
+            let job = tokio::spawn(async move {
                 server.connect().await.unwrap();
-                serve_session(server).await;
+                serve(server).await
             });
-            (endpoint, fixture)
+            (endpoint, job)
         };
-        let context = LocalContext {
-            endpoint,
-            surface_id: SURFACE.into(),
-        };
-        let session = context.session().await.unwrap();
-        assert_eq!(session.origin.provider, "codex");
-        assert_eq!(session.surface_id, SURFACE);
-        fixture.await.unwrap();
-    }
-
-    #[test]
-    fn identity_rejects_malformed_provenance() {
-        for field in [
-            "session_id",
-            "instance_id",
-            "provider",
-            "os",
-            "surface_id",
-            "workspace_id",
-        ] {
-            let mut value = session_value(SURFACE);
-            value[field] = json!("unknown");
-            let session: AgentSession = serde_json::from_value(value).unwrap();
-            assert!(
-                validate_session(&session).is_err(),
-                "accepted invalid {field}"
-            );
-        }
-    }
-
-    #[test]
-    fn identity_is_surface_bound_and_never_reuses_an_old_generation() {
-        let context = LocalContext {
-            endpoint: "socket".into(),
-            surface_id: SURFACE.into(),
-        };
-        assert!(context
-            .decode_session(session_value("00000000-0000-4000-8000-000000000099"))
-            .is_err());
-        let first = context.decode_session(session_value(SURFACE)).unwrap();
-        let mut replacement = session_value(SURFACE);
-        replacement["session_id"] = json!("00000000-0000-4000-8000-000000000098");
-        let next = context.decode_session(replacement).unwrap();
-        assert_ne!(first.origin.session_id, next.origin.session_id);
-        assert!(context.decode_session(Value::Null).is_err());
-    }
-
-    #[test]
-    fn explicit_context_never_falls_back_to_legacy() {
-        assert!(LocalContext::from_values(None, None, None)
-            .unwrap()
-            .is_none());
-        assert!(LocalContext::from_values(None, None, Some(SURFACE.into())).is_err());
-        assert!(
-            LocalContext::from_values(Some(String::new()), None, Some(SURFACE.into())).is_err()
-        );
-        assert!(LocalContext::from_values(Some("socket".into()), None, None).is_err());
-        assert!(
-            LocalContext::from_values(Some("socket".into()), None, Some("1000".into())).is_err()
-        );
+        let actor = fixture();
+        let value = rpc(
+            &endpoint,
+            "gateway.session.announce",
+            serde_json::to_value(&actor).unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
-            LocalContext::from_values(None, Some("pipe".into()), Some(SURFACE.into()))
-                .unwrap()
-                .unwrap()
-                .endpoint,
-            "pipe"
+            decode_membership(&actor, value).unwrap().binding_state,
+            "unbound"
         );
+        job.await.unwrap();
     }
-
     #[tokio::test]
-    async fn rpc_checks_errors_and_framing() {
-        for (reply, expected) in [
-            ("{\"id\":1,\"result\":{\"ok\":true}}\n", true),
-            (
-                "{\"id\":1,\"error\":{\"message\":\"no verified session\"}}\n",
-                false,
-            ),
-            ("{\"id\":2,\"result\":{}}\n", false),
-            ("{\"id\":1,\"result\":{}}", false),
-            ("not json\n", false),
+    async fn rpc_rejects_errors_bad_framing_and_oversized_responses_without_token_logging() {
+        for reply in [
+            "{\"id\":1,\"error\":{\"token\":\"DO_NOT_LOG\"}}\n".to_owned(),
+            "{\"id\":2,\"result\":{}}\n".into(),
+            "{\"id\":1,\"result\":{}}".into(),
+            "not JSON\n".into(),
+            " ".repeat(MAX_RESPONSE as usize + 1),
         ] {
             let (client, mut server) = tokio::io::duplex(4096);
-            let fixture = tokio::spawn(async move {
+            let job = tokio::spawn(async move {
                 let mut request = String::new();
                 BufReader::new(&mut server)
                     .read_line(&mut request)
                     .await
                     .unwrap();
-                let request: Value = serde_json::from_str(&request).unwrap();
-                assert_eq!(request["method"], "gateway.session");
-                assert_eq!(request["params"]["surface_id"], SURFACE);
-                server.write_all(reply.as_bytes()).await.unwrap();
+                let _ = server.write_all(reply.as_bytes()).await;
             });
-            assert_eq!(
-                exchange(client, "gateway.session", json!({"surface_id": SURFACE}))
-                    .await
-                    .is_ok(),
-                expected
-            );
-            fixture.await.unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn rpc_rejects_oversized_response() {
-        let (client, mut server) = tokio::io::duplex(4096);
-        let fixture = tokio::spawn(async move {
-            let mut request = String::new();
-            BufReader::new(&mut server)
-                .read_line(&mut request)
+            let error = exchange(client, "gateway.session.resolve", json!({}))
                 .await
-                .unwrap();
-            let _ = server
-                .write_all(&vec![b' '; MAX_RESPONSE as usize + 1])
-                .await;
-        });
-        assert!(exchange(client, "gateway.sessions", json!({}))
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("64 KiB"));
-        fixture.await.unwrap();
+                .unwrap_err();
+            assert!(!error.to_string().contains("DO_NOT_LOG"));
+            job.await.unwrap();
+        }
     }
 }

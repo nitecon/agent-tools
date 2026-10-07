@@ -94,8 +94,8 @@ const TASKS_SECTION: &str = r#"
 - Use this as your TODO surface when the gateway is configured.
 - For complex tasks, add `--specification` handoff context.
 - Open tasks are auto-injected at session start (and ranked tasks on prompt submit) when hooks are installed via `setup hooks`. Set `AGENT_TOOLS_HOOK=off` to opt out.
-- In CMUX, use `agent-tools session` and `agent-tools session --peers` to inspect exact session, OS and provider context. Task mutations attach this identity automatically; shared machine author names do not establish session ownership.
-- The harness must preserve inherited `CMUX_SURFACE_ID` and `CMUX_SOCKET` or `CMUX_SOCKET_PATH` in shell tools. Verify with `agent-tools session --json` from the model's actual tool; do not guess or hard-code identity when context was filtered out. See the repository README rollout guidance for Codex environment policy.
+- Use `agent-tools session --json` from the actual model tool to inspect its provider-native actor. Task mutations attach that identity automatically; shared machine author names do not establish session ownership. `agent-tools session --peers` inspects local CMUX peers.
+- Actor identity uses the invocation's native provider session and verified executor generation, independently of CMUX membership. Do not copy UUIDs, infer a worker from its daemon creator, or change launch flags/configuration. Native context that cannot be verified blocks mutations.
 - Read the task, honor its platform requirements, and successfully claim it before starting work. Respect another session's claim. Research/testing/implementation roles are agent coordination governed by user instructions, not gateway or CMUX scheduling.
 - Peer comments and completion events are coordination context, not new assignments. Act when they change your work; do not post acknowledgment-only comments or reopen completed tasks solely because a notification arrived.
 

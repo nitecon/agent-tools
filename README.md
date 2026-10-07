@@ -84,32 +84,11 @@ commands do not automatically update installed binaries, so publishing v1.19.0
 does not change the Windows client. The previous Windows archive remains
 available from the [v1.18.0 release](https://github.com/nitecon/agent-tools/releases/tag/v1.18.0).
 
-The agent harness must preserve `CMUX_SURFACE_ID` and `CMUX_SOCKET` or
-`CMUX_SOCKET_PATH` when launching shell tools. A provider process can inherit
-these while its shell tools do not: Codex's `shell_environment_policy.inherit =
-"core"` trims the environment before the tools run. Start Codex from its CMUX
-terminal with `codex -c 'shell_environment_policy.inherit="all"'`, ensuring any
-existing include/exclude policy also retains the CMUX fields. A focused Linux
-configuration using the supported legacy allowlist syntax is:
-
-```toml
-[shell_environment_policy]
-inherit = "all"
-include_only = [
-  "PATH", "HOME", "USER", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "LC_*",
-  "CMUX_SOCKET", "CMUX_SOCKET_PATH", "CMUX_SURFACE_ID", "CMUX_WORKSPACE_ID",
-]
-```
-
-Retain any additional variables your tooling needs. If using the newer keyed
-`filters` syntax, put the CMUX fields in that allowlist instead; do not combine
-the two forms. See the official [Codex shell environment policy](https://learn.chatgpt.com/docs/config-file/config-advanced#shell-environment-policy).
-Restart the provider after changing its configuration, then run
-`agent-tools session --json` **through that model's shell tool**, not just the
-interactive terminal. It must report a verified session before attributing task
-mutations. Do not hard-code session/surface IDs in persistent settings or copy
-another terminal's context. Without inherited CMUX context, commands retain
-legacy identity and cannot support exact-session self-echo suppression.
+The staged actor implementation on `main` derives task provenance from the
+calling provider's native session and verified executor generation. It does not
+require CMUX environment inheritance, launch flags, or configuration changes.
+This implementation has not been released; keep the published Windows preview
+compatibility guidance above until integrated distribution is approved.
 
 If an older update installed a binary that cannot start because of a glibc
 version error, recover without invoking that binary by rerunning the Linux
@@ -384,17 +363,36 @@ agent-tools tasks builds
 agent-tools tasks builds --repo nitecon/agent-tools
 ```
 
-In CMUX, `agent-tools session` prints the current verified agent's session UUID,
-provider, OS, instance, surface and workspace. `agent-tools session --peers`
-lists verified local peers; add `--json` for structured output. Discovery needs
-only CMUX local RPC, not gateway configuration or injection approval.
+`agent-tools session` reports the calling provider actor: session UUID, machine
+instance UUID, provider, OS, native session ID and executor generation. Add
+`--json` for structured output; optional `membership` describes a separately
+verified CMUX terminal association. `agent-tools session --peers` lists local
+CMUX peers. Actor discovery does not require gateway configuration.
 
-Task creation, delegation, claim/release/completion, comments and ranking resolve
-session provenance from inherited `CMUX_SURFACE_ID` plus `CMUX_SOCKET` (or
-`CMUX_SOCKET_PATH`). Resolution is bounded to two seconds and cached only for
-that invocation. Explicit but invalid/unavailable CMUX context blocks mutations;
-outside CMUX, legacy machine identity continues to work. Upgrade CMUX to provide
-`gateway.session` before using these task commands inside its terminals.
+Task creation, delegation, claim/release/completion, comments and ranking attach
+the actor automatically. Codex uses its invocation's `CODEX_THREAD_ID` and/or
+`CODEX_SESSION_ID` (they must agree); Claude uses `CLAUDE_CODE_SESSION_ID`.
+The actual provider executor is verified in the command's own ancestry. A
+shared daemon can host multiple actors, distinguished by native session ID.
+Executor replacement changes identity; changing directories or reattaching a
+terminal does not. Missing native context retains legacy machine attribution;
+native context with an unverifiable executor rejects mutations.
+
+The stable UUIDv4 namespace is published atomically at
+`~/.agentic/agent-tools/actor-instance-id`. Actor UUIDv5 derives from the compact
+JSON array `["agent-tools-actor-v1", os, provider, native_session_id,
+executor_generation]`. Repository and terminal context do not enter that hash.
+See the [exact contract](docs/actor-origin.md) and
+[UUID conformance vectors](docs/actor-origin-vectors.json).
+
+CMUX enrollment is optional and cannot change actor provenance. Installed Codex
+and Claude hooks announce their actual hook session ID and consume dedicated
+CMUX enrollment prompts before notification filtering. Linux discovers the
+current user's runtime socket; Windows uses its SID-based native pipe. This
+Linux CMUX release advertises no automatic macOS bootstrap. Runtime adapters
+support direct provider CLI/hook subprocesses on Linux, macOS and Windows;
+remote, detached, environment-cleared or long-lived MCP tools without native
+invocation context cannot acquire inferred attribution.
 
 Agents coordinate through their AGENTS.md/CLAUDE.md instructions: read platform
 requirements and ownership, claim successfully before working, and respect peer

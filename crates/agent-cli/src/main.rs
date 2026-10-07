@@ -1,3 +1,4 @@
+mod actor_runtime;
 mod cmd_comms;
 mod cmd_docs;
 mod cmd_docs_artifacts;
@@ -412,7 +413,7 @@ enum Commands {
         command: cmd_tasks::TasksCommands,
     },
 
-    /// Discover this CMUX agent session or verified local peers (no gateway needed).
+    /// Inspect the calling provider actor or local CMUX peers (no gateway needed).
     Session {
         #[arg(long)]
         peers: bool,

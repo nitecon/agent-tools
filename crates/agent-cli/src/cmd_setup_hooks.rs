@@ -225,9 +225,7 @@ fn local_hook_entries(target: HookTarget, exe: &str) -> Vec<LocalHookEntry> {
     let app = target.app();
     match target {
         HookTarget::Claude => vec![
-            // session-start is Claude-only: Codex/Gemini have no equivalent
-            // session-scoped event in this wiring, so we only inject the
-            // open-tasks context there.
+            // Session-start announces identity and injects open-task context.
             LocalHookEntry {
                 event: "SessionStart",
                 command: format!("{exe} hook session-start --agent {app}"),
@@ -246,11 +244,18 @@ fn local_hook_entries(target: HookTarget, exe: &str) -> Vec<LocalHookEntry> {
             command: format!("{exe} hook user-prompt-submit --agent {app}"),
             timeout: Some(10000),
         }],
-        HookTarget::Codex => vec![LocalHookEntry {
-            event: "UserPromptSubmit",
-            command: format!("{exe} hook user-prompt-submit --agent {app}"),
-            timeout: None,
-        }],
+        HookTarget::Codex => vec![
+            LocalHookEntry {
+                event: "SessionStart",
+                command: format!("{exe} hook session-start --agent {app}"),
+                timeout: None,
+            },
+            LocalHookEntry {
+                event: "UserPromptSubmit",
+                command: format!("{exe} hook user-prompt-submit --agent {app}"),
+                timeout: None,
+            },
+        ],
     }
 }
 

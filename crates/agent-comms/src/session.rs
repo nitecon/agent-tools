@@ -12,17 +12,17 @@ pub struct SessionOrigin {
 }
 
 impl SessionOrigin {
-    /// Validate local RPC metadata before using it as HTTP provenance.
+    /// Validate originating actor metadata before using it as HTTP provenance.
     pub fn validate(&self) -> Result<()> {
-        ensure!(is_uuid(&self.session_id), "invalid CMUX session UUID");
-        ensure!(is_uuid(&self.instance_id), "invalid CMUX instance UUID");
+        ensure!(is_uuid(&self.session_id), "invalid actor session UUID");
+        ensure!(is_uuid(&self.instance_id), "invalid actor instance UUID");
         ensure!(
             matches!(self.provider.as_str(), "codex" | "claude"),
-            "unsupported CMUX agent provider"
+            "unsupported actor provider"
         );
         ensure!(
             matches!(self.os.as_str(), "linux" | "windows" | "macos"),
-            "unsupported CMUX agent OS"
+            "unsupported actor OS"
         );
         Ok(())
     }

@@ -148,17 +148,17 @@ agent-tools tasks done <id>              # mark complete; prompts you to save du
 agent-tools tasks comment <id> "<note>"  # append a note
 ```
 
-## Independent CMUX sessions
+## Independent provider actors
 
-Use `agent-tools session` for your exact session, provider and OS, and
-`agent-tools session --peers` for verified local peers (`--json` is available).
-Task mutations resolve and attach that identity automatically. If explicit CMUX
-context cannot be verified, the mutation fails instead of inventing an identity.
-Outside CMUX, the existing machine agent identity remains compatible.
-The harness must preserve inherited `CMUX_SURFACE_ID` and `CMUX_SOCKET` or
-`CMUX_SOCKET_PATH` in shell tools. Verify `agent-tools session --json` from the
-model's actual tool after configuring/restarting the provider. Do not hard-code
-identity or borrow another terminal's context when inheritance was filtered.
+Use `agent-tools session --json` from the model's actual tool to inspect its
+native provider actor and optional CMUX membership. `agent-tools session --peers`
+inspects local CMUX peers. Task mutations attach actor identity automatically.
+The native provider session and verified executor generation distinguish peers
+under a shared daemon; directory changes and terminal reattachment keep the same
+actor. CMUX membership never selects or replaces that identity. No launch flags,
+configuration edits or model-copied UUIDs are needed. Native context with an
+unverifiable executor blocks mutations; ordinary tools with no native provider
+context retain legacy attribution. Do not infer a worker from its daemon creator.
 
 Read platform requirements and ownership, then successfully claim a task before
 working. Respect peer claims even when machine author names match. Agents choose
@@ -307,17 +307,17 @@ agent-tools tasks done <id>              # mark complete; prompts you to save du
 agent-tools tasks comment <id> "<note>"  # append a note
 ```
 
-## Independent CMUX sessions
+## Independent provider actors
 
-Use `agent-tools session` for your exact session, provider and OS, and
-`agent-tools session --peers` for verified local peers (`--json` is available).
-Task mutations resolve and attach that identity automatically. If explicit CMUX
-context cannot be verified, the mutation fails instead of inventing an identity.
-Outside CMUX, the existing machine agent identity remains compatible.
-The harness must preserve inherited `CMUX_SURFACE_ID` and `CMUX_SOCKET` or
-`CMUX_SOCKET_PATH` in shell tools. Verify `agent-tools session --json` from the
-model's actual tool after configuring/restarting the provider. Do not hard-code
-identity or borrow another terminal's context when inheritance was filtered.
+Use `agent-tools session --json` from the model's actual tool to inspect its
+native provider actor and optional CMUX membership. `agent-tools session --peers`
+inspects local CMUX peers. Task mutations attach actor identity automatically.
+The native provider session and verified executor generation distinguish peers
+under a shared daemon; directory changes and terminal reattachment keep the same
+actor. CMUX membership never selects or replaces that identity. No launch flags,
+configuration edits or model-copied UUIDs are needed. Native context with an
+unverifiable executor blocks mutations; ordinary tools with no native provider
+context retain legacy attribution. Do not infer a worker from its daemon creator.
 
 Read platform requirements and ownership, then successfully claim a task before
 working. Respect peer claims even when machine author names match. Agents choose

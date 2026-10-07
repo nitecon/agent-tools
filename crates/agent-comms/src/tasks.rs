@@ -455,7 +455,6 @@ mod tests {
 
     #[tokio::test]
     async fn every_task_mutation_sends_exact_origin_over_http() {
-        use crate::session::SessionOrigin;
         use std::io::{BufRead, BufReader, Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -463,6 +462,19 @@ mod tests {
         let delegated = serde_json::json!({"delegation":{"id":"delegation-1","source_project_ident":"demo","source_task_id":"source","target_project_ident":"other","target_task_id":"target","created_at":1},"source_task":task,"target_task":task,"message_id":1});
         let comment = serde_json::json!({"id":"comment-1","task_id":"task-1","author":"machine-agent","author_type":"agent","content":"result","created_at":1});
         let responses = [task.clone(), delegated, task, comment];
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../../../docs/actor-origin-vectors.json")).unwrap();
+        let row = &vectors[0];
+        let origin = crate::actor::derive(
+            uuid::Uuid::parse_str(row["instance_id"].as_str().unwrap()).unwrap(),
+            row["os"].as_str().unwrap(),
+            row["provider"].as_str().unwrap(),
+            row["provider_session_id"].as_str().unwrap(),
+            serde_json::from_value(row["executor_generation"].clone()).unwrap(),
+        )
+        .unwrap()
+        .origin;
+        let expected_origin = origin.clone();
         let fixture = std::thread::spawn(move || {
             for (index, response) in responses.into_iter().enumerate() {
                 let (stream, _) = listener.accept().unwrap();
@@ -484,14 +496,8 @@ mod tests {
                     headers.insert(key.to_ascii_lowercase(), value.trim().to_string());
                 }
                 assert_eq!(headers["x-agent-id"], "machine-agent");
-                assert_eq!(
-                    headers["x-agent-session-id"],
-                    "00000000-0000-4000-8000-000000000001"
-                );
-                assert_eq!(
-                    headers["x-agent-instance-id"],
-                    "00000000-0000-4000-8000-000000000002"
-                );
+                assert_eq!(headers["x-agent-session-id"], expected_origin.session_id);
+                assert_eq!(headers["x-agent-instance-id"], expected_origin.instance_id);
                 assert_eq!(headers["x-agent-provider"], "codex");
                 assert_eq!(headers["x-agent-os"], "linux");
                 let mut request_body = vec![0; headers["content-length"].parse::<usize>().unwrap()];
@@ -505,14 +511,7 @@ mod tests {
         });
         let mut client =
             GatewayClient::new(format!("http://{address}"), "test-key".into(), 5000).unwrap();
-        client
-            .set_session_origin(SessionOrigin {
-                session_id: "00000000-0000-4000-8000-000000000001".into(),
-                instance_id: "00000000-0000-4000-8000-000000000002".into(),
-                provider: "codex".into(),
-                os: "linux".into(),
-            })
-            .unwrap();
+        client.set_session_origin(origin).unwrap();
         client
             .create_task(
                 "demo",

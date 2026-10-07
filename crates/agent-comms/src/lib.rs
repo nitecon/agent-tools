@@ -1,3 +1,4 @@
+pub mod actor;
 pub mod config;
 pub mod docs;
 pub mod gateway;
