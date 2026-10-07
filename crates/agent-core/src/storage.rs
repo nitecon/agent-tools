@@ -159,7 +159,7 @@ fn resolve_project_identifier(project_root: &Path) -> String {
 ///   `https://github.com/nitecon/agent-tools.git`    -> `github.com/nitecon/agent-tools.git`
 ///   `ssh://git@github.com/nitecon/agent-tools.git`  -> `github.com/nitecon/agent-tools.git`
 ///   `https://user@github.com/nitecon/agent-tools.git` -> `github.com/nitecon/agent-tools.git`
-fn normalize_git_url(url: &str) -> String {
+pub fn normalize_git_url(url: &str) -> String {
     let mut s = url.to_string();
 
     // Strip protocol prefix

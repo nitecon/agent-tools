@@ -168,8 +168,24 @@ pub(crate) async fn membership(
             );
             params["enrollment_token"] = json!(token);
         }
-        if let Ok(repository) = agent_core::project_ident_from_cwd() {
-            params["repository"] = json!(repository);
+        // Announce an actual remote only, never project_ident's cwd fallback.
+        // Async git stays inside the membership deadline and is killed on drop.
+        if let Ok(output) = tokio::process::Command::new("git")
+            .args(["remote", "get-url", "origin"])
+            .kill_on_drop(true)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .await
+        {
+            if output.status.success() {
+                if let Ok(remote) = std::str::from_utf8(&output.stdout) {
+                    let repository = agent_core::storage::normalize_git_url(remote.trim());
+                    let repository = repository.strip_suffix(".git").unwrap_or(&repository);
+                    if !repository.is_empty() {
+                        params["repository"] = json!(repository);
+                    }
+                }
+            }
         }
         for endpoint in endpoints()? {
             // Try only conventional/hinted endpoints. A server error does not

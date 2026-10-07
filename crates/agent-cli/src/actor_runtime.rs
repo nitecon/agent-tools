@@ -339,6 +339,7 @@ mod tests {
         let Ok(output) = std::env::var("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT") else {
             return;
         };
+        let provider = std::env::var("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER").unwrap();
         if std::env::var("AGENT_TOOLS_RUNTIME_FIXTURE_MODE").as_deref() == Ok("worker") {
             let actor = current().unwrap().unwrap();
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -353,17 +354,28 @@ mod tests {
             );
             assert_eq!(
                 actor,
-                from_hook("codex", &actor.provider_session_id).unwrap()
+                from_hook(&provider, &actor.provider_session_id).unwrap()
             );
-            assert!(from_hook("codex", "another-thread").is_err());
-            assert!(from_hook("claude", &actor.provider_session_id).is_err());
+            assert_eq!(actor.origin.provider, provider);
+            assert!(from_hook(&provider, "another-thread").is_err());
+            let other = if provider == "codex" {
+                "claude"
+            } else {
+                "codex"
+            };
+            assert!(from_hook(other, &actor.provider_session_id).is_err());
             std::fs::write(output, serde_json::to_vec(&actor).unwrap()).unwrap();
             // This child runs exactly this one test; its environment changes
             // cannot race other tests or alter the parent executor's context.
-            std::env::set_var("CODEX_SESSION_ID", "conflicting-native-id");
+            if provider == "codex" {
+                std::env::set_var("CODEX_SESSION_ID", "conflicting-native-id");
+            } else {
+                std::env::set_var("CLAUDE_CODE_SESSION_ID", "");
+            }
             assert!(rt.block_on(crate::cmd_session::mutation_origin()).is_err());
             std::env::remove_var("CODEX_THREAD_ID");
             std::env::remove_var("CODEX_SESSION_ID");
+            std::env::remove_var("CLAUDE_CODE_SESSION_ID");
             assert!(rt
                 .block_on(crate::cmd_session::mutation_origin())
                 .unwrap()
@@ -374,7 +386,8 @@ mod tests {
         let mut actors = Vec::new();
         for native in ["fixture-thread-a", "fixture-thread-b"] {
             let child_output = format!("{output}.{native}");
-            let status = std::process::Command::new(&executable)
+            let mut command = std::process::Command::new(&executable);
+            command
                 .args([
                     "--exact",
                     "actor_runtime::tests::runtime_child_fixture",
@@ -382,16 +395,26 @@ mod tests {
                 ])
                 .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "worker")
                 .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &child_output)
-                .env("CODEX_THREAD_ID", native)
-                .env("CODEX_SESSION_ID", native)
+                .env_remove("CODEX_THREAD_ID")
+                .env_remove("CODEX_SESSION_ID")
                 .env_remove("CLAUDE_CODE_SESSION_ID")
                 .env(
                     "CMUX_SURFACE_ID",
                     "inherited-daemon-surface-must-not-select-actor",
                 )
-                .env("CMUX_SOCKET", "/missing/legacy/socket")
-                .status()
-                .unwrap();
+                .env("CMUX_SOCKET", "/missing/legacy/socket");
+            if provider == "codex" {
+                command
+                    .env("CODEX_THREAD_ID", native)
+                    .env("CODEX_SESSION_ID", native)
+                    .env("CLAUDE_CODE_SESSION_ID", "inherited-other-provider");
+            } else {
+                command
+                    .env("CLAUDE_CODE_SESSION_ID", native)
+                    .env("CODEX_THREAD_ID", "inherited-other-provider")
+                    .env("CODEX_SESSION_ID", "inherited-other-provider");
+            }
+            let status = command.status().unwrap();
             assert!(status.success());
             let actor: Actor =
                 serde_json::from_slice(&std::fs::read(child_output).unwrap()).unwrap();
@@ -404,42 +427,50 @@ mod tests {
     fn shared_executor_threads_are_isolated_and_replacement_changes_actor() {
         let directory = tempfile::tempdir().unwrap();
         let worker = std::env::current_exe().unwrap();
-        let executor = directory
-            .path()
-            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
-        std::fs::copy(&worker, &executor).unwrap();
-        let mut runs = Vec::new();
-        for run in 0..2 {
-            let output = directory.path().join(format!("actors-{run}.json"));
-            let status = std::process::Command::new(&executor)
-                .args([
-                    "--exact",
-                    "actor_runtime::tests::runtime_child_fixture",
-                    "--nocapture",
-                ])
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "executor")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &output)
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_WORKER", &worker)
-                .status()
-                .unwrap();
-            assert!(status.success());
-            let actors: Vec<Actor> =
-                serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
-            assert_eq!(actors[0].executor_generation, actors[1].executor_generation);
-            assert_eq!(actors[0].origin.instance_id, actors[1].origin.instance_id);
-            assert_ne!(actors[0].origin.session_id, actors[1].origin.session_id);
-            runs.push(actors);
+        for provider in ["codex", "claude"] {
+            let name = if cfg!(windows) {
+                format!("{provider}.exe")
+            } else {
+                provider.into()
+            };
+            let executor = directory.path().join(name);
+            std::fs::copy(&worker, &executor).unwrap();
+            let mut runs = Vec::new();
+            for run in 0..2 {
+                let output = directory
+                    .path()
+                    .join(format!("{provider}-actors-{run}.json"));
+                let status = std::process::Command::new(&executor)
+                    .args([
+                        "--exact",
+                        "actor_runtime::tests::runtime_child_fixture",
+                        "--nocapture",
+                    ])
+                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "executor")
+                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER", provider)
+                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &output)
+                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_WORKER", &worker)
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+                let actors: Vec<Actor> =
+                    serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+                assert_eq!(actors[0].executor_generation, actors[1].executor_generation);
+                assert_eq!(actors[0].origin.instance_id, actors[1].origin.instance_id);
+                assert_ne!(actors[0].origin.session_id, actors[1].origin.session_id);
+                runs.push(actors);
+            }
+            assert_eq!(
+                runs[0][0].provider_session_id,
+                runs[1][0].provider_session_id
+            );
+            assert_eq!(runs[0][0].origin.instance_id, runs[1][0].origin.instance_id);
+            assert_ne!(
+                runs[0][0].executor_generation,
+                runs[1][0].executor_generation
+            );
+            assert_ne!(runs[0][0].origin.session_id, runs[1][0].origin.session_id);
         }
-        assert_eq!(
-            runs[0][0].provider_session_id,
-            runs[1][0].provider_session_id
-        );
-        assert_eq!(runs[0][0].origin.instance_id, runs[1][0].origin.instance_id);
-        assert_ne!(
-            runs[0][0].executor_generation,
-            runs[1][0].executor_generation
-        );
-        assert_ne!(runs[0][0].origin.session_id, runs[1][0].origin.session_id);
     }
 
     #[test]

@@ -1,9 +1,12 @@
 //! Client-owned actor identity. CMUX membership and cwd never select an actor.
 
-use crate::{config::home_dir, session::SessionOrigin};
+use crate::session::SessionOrigin;
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{io::Write, path::Path};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 use uuid::Uuid;
 
 pub const CONTRACT: &str = "agent-tools-actor-v1";
@@ -19,7 +22,12 @@ pub struct Actor {
 /// Identity initialization publishes a complete file without replacing a winner.
 /// No display-id override or terminal metadata participates in this namespace.
 pub fn instance_id() -> Result<Uuid> {
-    load_instance(&home_dir().join(".agentic/agent-tools/actor-instance-id"))
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .context("actor data home unavailable")?;
+    ensure!(home.is_absolute(), "actor data home must be absolute");
+    load_instance(&home.join(".agentic/agent-tools/actor-instance-id"))
 }
 
 fn load_instance(path: &Path) -> Result<Uuid> {
