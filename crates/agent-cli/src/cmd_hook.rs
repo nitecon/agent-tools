@@ -671,8 +671,13 @@ fn run_session_start(agent: &str) -> Result<()> {
     let mut lines = vec!["Open tasks for this session:".to_string()];
     for t in &displayed {
         let owner = t.owner_agent_id.as_deref().unwrap_or("—");
+        let owner_session = t
+            .owner_session_id
+            .as_deref()
+            .map(|id| format!(", owner_session={id}"))
+            .unwrap_or_default();
         lines.push(format!(
-            "[{}] {} ({}, owner={owner})",
+            "[{}] {} ({}, owner={owner}{owner_session})",
             short_id(&t.id),
             t.title,
             t.status

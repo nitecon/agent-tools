@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use crate::sanitize::validate_api_key;
+use crate::session::SessionOrigin;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,46 @@ pub struct GatewayClient {
     client: Client,
     base_url: String,
     api_key: String,
+    session_origin: Option<SessionOrigin>,
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    #[test]
+    fn exact_origin_is_additive_and_legacy_requests_stay_unattributed() {
+        let mut client =
+            GatewayClient::new("https://gateway.invalid".into(), "test-key".into(), 1000).unwrap();
+        let request = client
+            .add_task_origin(GatewayClient::add_agent_id(
+                client.http_client().post("https://gateway.invalid"),
+                Some("machine-agent"),
+            ))
+            .build()
+            .unwrap();
+        assert_eq!(request.headers()["X-Agent-Id"], "machine-agent");
+        assert!(!request.headers().contains_key("X-Agent-Session-Id"));
+        let origin = SessionOrigin {
+            session_id: "00000000-0000-4000-8000-000000000001".into(),
+            instance_id: "00000000-0000-4000-8000-000000000002".into(),
+            provider: "claude".into(),
+            os: "windows".into(),
+        };
+        client.set_session_origin(origin.clone()).unwrap();
+        let request = client
+            .add_task_origin(GatewayClient::add_agent_id(
+                client.http_client().post("https://gateway.invalid"),
+                Some("machine-agent"),
+            ))
+            .build()
+            .unwrap();
+        assert_eq!(request.headers()["X-Agent-Session-Id"], origin.session_id);
+        assert_eq!(request.headers()["X-Agent-Instance-Id"], origin.instance_id);
+        assert_eq!(request.headers()["X-Agent-Provider"], "claude");
+        assert_eq!(request.headers()["X-Agent-OS"], "windows");
+        assert_eq!(request.headers()["X-Agent-Id"], "machine-agent");
+    }
 }
 
 // -- Request / response types -------------------------------------------------
@@ -220,6 +261,7 @@ impl GatewayClient {
             client,
             base_url,
             api_key,
+            session_origin: None,
         })
     }
 
@@ -239,6 +281,28 @@ impl GatewayClient {
     /// paths without exposing the field directly.
     pub(crate) fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Set identity resolved once for this CLI invocation, never cached on disk.
+    pub fn set_session_origin(&mut self, origin: SessionOrigin) -> Result<()> {
+        origin.validate()?;
+        self.session_origin = Some(origin);
+        Ok(())
+    }
+
+    /// Attach exact provenance to task mutations only; reads remain compatible.
+    pub(crate) fn add_task_origin(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
+        match &self.session_origin {
+            Some(origin) => builder
+                .header("X-Agent-Session-Id", &origin.session_id)
+                .header("X-Agent-Instance-Id", &origin.instance_id)
+                .header("X-Agent-Provider", &origin.provider)
+                .header("X-Agent-OS", &origin.os),
+            None => builder,
+        }
     }
 
     /// Conditionally attach the `X-Agent-Id` header to a request builder.

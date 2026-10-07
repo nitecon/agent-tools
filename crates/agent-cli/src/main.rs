@@ -6,6 +6,7 @@ mod cmd_hook;
 mod cmd_okf;
 mod cmd_patterns;
 mod cmd_read;
+mod cmd_session;
 mod cmd_setup_hooks;
 mod cmd_setup_menu;
 mod cmd_setup_perms;
@@ -409,6 +410,14 @@ enum Commands {
     Tasks {
         #[command(subcommand)]
         command: cmd_tasks::TasksCommands,
+    },
+
+    /// Discover this CMUX agent session or verified local peers (no gateway needed).
+    Session {
+        #[arg(long)]
+        peers: bool,
+        #[arg(long)]
+        json: bool,
     },
 
     /// Markdown context registry (gateway-backed)
@@ -886,6 +895,8 @@ fn main_inner() -> Result<()> {
         Commands::Comms { command } => cmd_comms::dispatch(command),
 
         Commands::Tasks { command } => cmd_tasks::dispatch(command),
+
+        Commands::Session { peers, json } => cmd_session::run(peers, json),
 
         Commands::Docs { command } => cmd_docs::dispatch(command),
 

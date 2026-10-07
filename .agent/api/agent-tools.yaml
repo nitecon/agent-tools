@@ -17,6 +17,14 @@ content:
     patterns, task tracking, and comms. Agents should use this context before
     changing the matching CLI or gateway client contracts.
   workflows:
+    - name: Coordinate independent CMUX agents
+      steps:
+        - Run agent-tools session or agent-tools session --peers, with optional --json, for verified local session/provider/OS context without gateway configuration.
+        - Local CMUX RPC gateway.session accepts surface_id from inherited CMUX_SURFACE_ID; gateway.sessions returns sessions. Both use newline-delimited JSON over inherited CMUX_SOCKET or CMUX_SOCKET_PATH, using Unix sockets or native Windows named pipes.
+        - Resolve identity once per CLI invocation with a two-second deadline and 64 KiB response limit before task mutations; explicit unavailable CMUX identity blocks mutation rather than fabricating provenance. Outside CMUX retain legacy identity.
+        - Attach X-Agent-Session-Id, X-Agent-Instance-Id, X-Agent-Provider and X-Agent-OS automatically to task create/delegate/update/comment requests while retaining X-Agent-Id.
+        - Use AGENTS.md/CLAUDE.md for platform requirements and agent coordination; claim successfully before work and respect exact peer session ownership. Neither gateway nor CMUX assigns work.
+        - Treat peer comments and completion events as coordination context, not new assignments, and avoid acknowledgment-only comments.
     - name: Author and retrieve unified OKF knowledge
       steps:
         - Put repository-authored OKF 0.2 Markdown under .agents/knowledge or pass an explicit in-repository bundle path.

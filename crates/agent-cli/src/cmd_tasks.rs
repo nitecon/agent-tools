@@ -256,6 +256,19 @@ async fn run(cmd: TasksCommands) -> Result<()> {
 
 // -- Helpers -----------------------------------------------------------------
 
+/// Resolve exact session once before any task mutation or registration call.
+async fn resolve_mutation_context(agent_id: Option<String>) -> Result<GatewayContext> {
+    let origin = crate::cmd_session::mutation_origin().await?;
+    let mut ctx = resolve_context(agent_id)?;
+    if let Some(origin) = origin {
+        ctx.gateway.set_session_origin(origin.clone())?;
+        for target in &mut ctx.gateways {
+            target.gateway.set_session_origin(origin.clone())?;
+        }
+    }
+    Ok(ctx)
+}
+
 fn local_hostname_or_none(flag: Option<String>) -> Option<String> {
     match flag {
         Some(s) if s.is_empty() => None,
@@ -422,7 +435,12 @@ fn print_summary_row(t: &TaskSummary, profile: Option<&str>) {
                 .as_deref()
                 .map(|o| format!("@{o}"))
                 .unwrap_or_else(|| "@—".to_string());
-            format!("{owner}  {}", fmt_relative_from_now(t.updated_at))
+            let session = t
+                .owner_session_id
+                .as_deref()
+                .map(|id| format!(" session={id}"))
+                .unwrap_or_default();
+            format!("{owner}{session}  {}", fmt_relative_from_now(t.updated_at))
         }
         _ => labels,
     };
@@ -469,6 +487,9 @@ fn print_task_detail(task: &Task, comments: &[TaskComment]) {
         task.owner_agent_id.as_deref().unwrap_or("—")
     );
     println!("hostname:  {}", task.hostname.as_deref().unwrap_or("—"));
+    if let Some(session_id) = &task.owner_session_id {
+        println!("session:   {session_id}");
+    }
     println!("created:   {}", fmt_epoch_ms(task.created_at));
     println!("updated:   {}", fmt_epoch_ms(task.updated_at));
     if let Some(started) = task.started_at {
@@ -506,11 +527,22 @@ fn print_task_detail(task: &Task, comments: &[TaskComment]) {
         println!("  (none)");
     } else {
         for c in comments {
+            let origin = c
+                .origin
+                .as_ref()
+                .map(|origin| {
+                    format!(
+                        " session={} {}/{}",
+                        origin.session_id, origin.provider, origin.os
+                    )
+                })
+                .unwrap_or_default();
             println!(
-                "  [{}] {} ({}): {}",
+                "  [{}] {} ({}{}): {}",
                 fmt_epoch_ms(c.created_at),
                 c.author,
                 c.author_type,
+                origin,
                 c.content
             );
         }
@@ -529,7 +561,7 @@ async fn cmd_add(
     reporter: Option<String>,
     agent_id: Option<String>,
 ) -> Result<()> {
-    let ctx = resolve_context(agent_id)?;
+    let ctx = resolve_mutation_context(agent_id).await?;
     ensure_registered(&ctx, None).await?;
 
     let host = local_hostname_or_none(hostname);
@@ -592,7 +624,7 @@ async fn cmd_add_delegated(
     require_nonempty_flag("--description", &description)?;
     require_nonempty_flag("--specification", &specification)?;
 
-    let ctx = resolve_context(agent_id)?;
+    let ctx = resolve_mutation_context(agent_id).await?;
     ensure_registered(&ctx, None).await?;
 
     let host = local_hostname_or_none(hostname);
@@ -638,7 +670,7 @@ async fn cmd_status_transition(
 ) -> Result<()> {
     let selector = parse_task_selector(&task_id)?;
 
-    let ctx = resolve_context(agent_id)?;
+    let ctx = resolve_mutation_context(agent_id).await?;
     ensure_all_registered(&ctx).await?;
     let (target, _) = find_task(&ctx, &selector).await?;
 
@@ -660,6 +692,9 @@ async fn cmd_status_transition(
         task.status,
         task.owner_agent_id.as_deref().unwrap_or("—")
     );
+    if let Some(session_id) = &task.owner_session_id {
+        println!("owner session: {session_id}");
+    }
 
     // Completing a task is the natural memory-save moment — remind the agent to
     // persist durable learnings + update WorkingContext. Only on `done`, never
@@ -686,7 +721,7 @@ async fn cmd_comment(
 ) -> Result<()> {
     let selector = parse_task_selector(&task_id)?;
 
-    let ctx = resolve_context(agent_id)?;
+    let ctx = resolve_mutation_context(agent_id).await?;
     ensure_all_registered(&ctx).await?;
     let (target, _) = find_task(&ctx, &selector).await?;
 
@@ -718,7 +753,7 @@ async fn cmd_comment(
 async fn cmd_rank(task_id: String, rank: i64, agent_id: Option<String>) -> Result<()> {
     let selector = parse_task_selector(&task_id)?;
 
-    let ctx = resolve_context(agent_id)?;
+    let ctx = resolve_mutation_context(agent_id).await?;
     ensure_all_registered(&ctx).await?;
     let (target, _) = find_task(&ctx, &selector).await?;
 

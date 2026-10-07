@@ -344,6 +344,25 @@ agent-tools tasks builds
 agent-tools tasks builds --repo nitecon/agent-tools
 ```
 
+In CMUX, `agent-tools session` prints the current verified agent's session UUID,
+provider, OS, instance, surface and workspace. `agent-tools session --peers`
+lists verified local peers; add `--json` for structured output. Discovery needs
+only CMUX local RPC, not gateway configuration or injection approval.
+
+Task creation, delegation, claim/release/completion, comments and ranking resolve
+session provenance from inherited `CMUX_SURFACE_ID` plus `CMUX_SOCKET` (or
+`CMUX_SOCKET_PATH`). Resolution is bounded to two seconds and cached only for
+that invocation. Explicit but invalid/unavailable CMUX context blocks mutations;
+outside CMUX, legacy machine identity continues to work. Upgrade CMUX to provide
+`gateway.session` before using these task commands inside its terminals.
+
+Agents coordinate through their AGENTS.md/CLAUDE.md instructions: read platform
+requirements and ownership, claim successfully before working, and respect peer
+claims. Comments/completions inform coordination rather than assign new work.
+The gateway broadcasts provenance and enforces task ownership; it does not select
+agents. CMUX handles local delivery and exact-session self-echo suppression.
+`setup rules` and `setup skill` include this guidance for subsequent installation.
+
 Completing a task with `tasks done` is the natural memory-save moment, so it
 prints a short reminder (to stderr) to persist durable learnings and update
 WorkingContext via the [`memory`](https://github.com/nitecon/agent-memory) CLI.

@@ -148,6 +148,21 @@ agent-tools tasks done <id>              # mark complete; prompts you to save du
 agent-tools tasks comment <id> "<note>"  # append a note
 ```
 
+## Independent CMUX sessions
+
+Use `agent-tools session` for your exact session, provider and OS, and
+`agent-tools session --peers` for verified local peers (`--json` is available).
+Task mutations resolve and attach that identity automatically. If explicit CMUX
+context cannot be verified, the mutation fails instead of inventing an identity.
+Outside CMUX, the existing machine agent identity remains compatible.
+
+Read platform requirements and ownership, then successfully claim a task before
+working. Respect peer claims even when machine author names match. Agents choose
+research/testing/implementation roles under user instructions; neither CMUX nor
+the gateway assigns work. Peer comments and completions are useful coordination
+context, not automatic assignments. Do not post acknowledgment-only comments or
+restart completed work merely because an event arrives.
+
 ## Markdown (structure-aware reading)
 
 Any markdown file on disk — READMEs, specs, changelogs, design notes — reads by
@@ -287,6 +302,21 @@ agent-tools tasks release <id>           # drop ownership (-> todo)
 agent-tools tasks done <id>              # mark complete; prompts you to save durable memory + WorkingContext
 agent-tools tasks comment <id> "<note>"  # append a note
 ```
+
+## Independent CMUX sessions
+
+Use `agent-tools session` for your exact session, provider and OS, and
+`agent-tools session --peers` for verified local peers (`--json` is available).
+Task mutations resolve and attach that identity automatically. If explicit CMUX
+context cannot be verified, the mutation fails instead of inventing an identity.
+Outside CMUX, the existing machine agent identity remains compatible.
+
+Read platform requirements and ownership, then successfully claim a task before
+working. Respect peer claims even when machine author names match. Agents choose
+research/testing/implementation roles under user instructions; neither CMUX nor
+the gateway assigns work. Peer comments and completions are useful coordination
+context, not automatic assignments. Do not post acknowledgment-only comments or
+restart completed work merely because an event arrives.
 
 ## Markdown (structure-aware reading)
 

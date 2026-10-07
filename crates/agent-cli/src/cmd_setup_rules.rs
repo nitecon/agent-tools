@@ -94,6 +94,9 @@ const TASKS_SECTION: &str = r#"
 - Use this as your TODO surface when the gateway is configured.
 - For complex tasks, add `--specification` handoff context.
 - Open tasks are auto-injected at session start (and ranked tasks on prompt submit) when hooks are installed via `setup hooks`. Set `AGENT_TOOLS_HOOK=off` to opt out.
+- In CMUX, use `agent-tools session` and `agent-tools session --peers` to inspect exact session, OS and provider context. Task mutations attach this identity automatically; shared machine author names do not establish session ownership.
+- Read the task, honor its platform requirements, and successfully claim it before starting work. Respect another session's claim. Research/testing/implementation roles are agent coordination governed by user instructions, not gateway or CMUX scheduling.
+- Peer comments and completion events are coordination context, not new assignments. Act when they change your work; do not post acknowledgment-only comments or reopen completed tasks solely because a notification arrived.
 
 ```bash
 agent-tools tasks list                   # TODO + IN PROGRESS for this project

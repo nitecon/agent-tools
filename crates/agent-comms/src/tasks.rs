@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 use crate::gateway::GatewayClient;
+use crate::session::SessionOrigin;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,6 +38,8 @@ pub struct Task {
     pub hostname: Option<String>,
     #[serde(default)]
     pub owner_agent_id: Option<String>,
+    #[serde(default)]
+    pub owner_session_id: Option<String>,
     pub reporter: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -74,6 +77,8 @@ pub struct TaskSummary {
     #[serde(default)]
     pub owner_agent_id: Option<String>,
     #[serde(default)]
+    pub owner_session_id: Option<String>,
+    #[serde(default)]
     pub hostname: Option<String>,
     pub reporter: String,
     pub comment_count: i64,
@@ -90,6 +95,8 @@ pub struct TaskComment {
     pub author_type: String,
     pub content: String,
     pub created_at: i64,
+    #[serde(default)]
+    pub origin: Option<SessionOrigin>,
 }
 
 // -- Composite shapes --------------------------------------------------------
@@ -298,7 +305,8 @@ impl GatewayClient {
             .post(&url)
             .header("Authorization", self.auth())
             .json(req);
-        let resp = Self::add_agent_id(builder, agent_id)
+        let resp = self
+            .add_task_origin(Self::add_agent_id(builder, agent_id))
             .send()
             .await
             .context("POST /v1/projects/:ident/tasks")?;
@@ -322,7 +330,8 @@ impl GatewayClient {
             .post(&url)
             .header("Authorization", self.auth())
             .json(req);
-        let resp = Self::add_agent_id(builder, agent_id)
+        let resp = self
+            .add_task_origin(Self::add_agent_id(builder, agent_id))
             .send()
             .await
             .context("POST /v1/projects/:source_ident/tasks/delegate")?;
@@ -348,7 +357,8 @@ impl GatewayClient {
             .patch(&url)
             .header("Authorization", self.auth())
             .json(patch);
-        let resp = Self::add_agent_id(builder, agent_id)
+        let resp = self
+            .add_task_origin(Self::add_agent_id(builder, agent_id))
             .send()
             .await
             .context("PATCH /v1/projects/:ident/tasks/:id")?;
@@ -375,7 +385,8 @@ impl GatewayClient {
             .post(&url)
             .header("Authorization", self.auth())
             .json(req);
-        let resp = Self::add_agent_id(builder, agent_id)
+        let resp = self
+            .add_task_origin(Self::add_agent_id(builder, agent_id))
             .send()
             .await
             .context("POST /v1/projects/:ident/tasks/:id/comments")?;
@@ -441,6 +452,118 @@ fn build_eventic_status_url(base_url: &str, ident: &str, repo: Option<&str>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn every_task_mutation_sends_exact_origin_over_http() {
+        use crate::session::SessionOrigin;
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = serde_json::json!({"id":"task-1","project_ident":"demo","title":"Demo","status":"todo","rank":1,"reporter":"agent","created_at":1,"updated_at":1});
+        let delegated = serde_json::json!({"delegation":{"id":"delegation-1","source_project_ident":"demo","source_task_id":"source","target_project_ident":"other","target_task_id":"target","created_at":1},"source_task":task,"target_task":task,"message_id":1});
+        let comment = serde_json::json!({"id":"comment-1","task_id":"task-1","author":"machine-agent","author_type":"agent","content":"result","created_at":1});
+        let responses = [task.clone(), delegated, task, comment];
+        let fixture = std::thread::spawn(move || {
+            for (index, response) in responses.into_iter().enumerate() {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(line.starts_with(if index == 2 { "PATCH " } else { "POST " }));
+                let mut headers = std::collections::HashMap::new();
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    let (key, value) = line.split_once(':').unwrap();
+                    headers.insert(key.to_ascii_lowercase(), value.trim().to_string());
+                }
+                assert_eq!(headers["x-agent-id"], "machine-agent");
+                assert_eq!(
+                    headers["x-agent-session-id"],
+                    "00000000-0000-4000-8000-000000000001"
+                );
+                assert_eq!(
+                    headers["x-agent-instance-id"],
+                    "00000000-0000-4000-8000-000000000002"
+                );
+                assert_eq!(headers["x-agent-provider"], "codex");
+                assert_eq!(headers["x-agent-os"], "linux");
+                let mut request_body = vec![0; headers["content-length"].parse::<usize>().unwrap()];
+                reader.read_exact(&mut request_body).unwrap();
+                assert!(serde_json::from_slice::<serde_json::Value>(&request_body).is_ok());
+                let body = serde_json::to_vec(&response).unwrap();
+                let stream = reader.get_mut();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+        let mut client =
+            GatewayClient::new(format!("http://{address}"), "test-key".into(), 5000).unwrap();
+        client
+            .set_session_origin(SessionOrigin {
+                session_id: "00000000-0000-4000-8000-000000000001".into(),
+                instance_id: "00000000-0000-4000-8000-000000000002".into(),
+                provider: "codex".into(),
+                os: "linux".into(),
+            })
+            .unwrap();
+        client
+            .create_task(
+                "demo",
+                &CreateTaskRequest {
+                    title: "Demo",
+                    ..Default::default()
+                },
+                Some("machine-agent"),
+            )
+            .await
+            .unwrap();
+        client
+            .delegate_task(
+                "demo",
+                &DelegateTaskRequest {
+                    target_project_ident: "other",
+                    title: "Demo",
+                    description: "description",
+                    specification: "specification",
+                    ..Default::default()
+                },
+                Some("machine-agent"),
+            )
+            .await
+            .unwrap();
+        client
+            .update_task(
+                "demo",
+                "task-1",
+                &UpdateTaskRequest {
+                    status: Some("in_progress"),
+                    ..Default::default()
+                },
+                Some("machine-agent"),
+            )
+            .await
+            .unwrap();
+        client
+            .add_task_comment(
+                "demo",
+                "task-1",
+                &AddCommentRequest {
+                    content: "result",
+                    ..Default::default()
+                },
+                Some("machine-agent"),
+            )
+            .await
+            .unwrap();
+        fixture.join().unwrap();
+    }
 
     #[test]
     fn update_request_omits_absent_fields() {
@@ -534,9 +657,23 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(task.specification_text(), Some("new spec"));
+        assert!(task.owner_session_id.is_none());
 
         task.specification = None;
         assert_eq!(task.specification_text(), Some("legacy details"));
+    }
+
+    #[test]
+    fn session_ownership_and_comment_origin_survive_decoding() {
+        let value = serde_json::json!({"id":"task-1","project_ident":"demo","title":"Demo","status":"in_progress","rank":1,"reporter":"agent","created_at":1,"updated_at":1,"owner_agent_id":"shared-machine","owner_session_id":"00000000-0000-4000-8000-000000000001"});
+        let task: Task = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            task.owner_session_id.as_deref(),
+            Some("00000000-0000-4000-8000-000000000001")
+        );
+        let origin = serde_json::json!({"session_id":"00000000-0000-4000-8000-000000000002","instance_id":"00000000-0000-4000-8000-000000000003","provider":"claude","os":"windows"});
+        let comment: TaskComment = serde_json::from_value(serde_json::json!({"id":"comment-1","task_id":"task-1","author":"shared-machine","author_type":"agent","content":"result","created_at":1,"origin":origin})).unwrap();
+        assert_eq!(comment.origin.unwrap().provider, "claude");
     }
 
     #[test]

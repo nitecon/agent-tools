@@ -5,4 +5,5 @@ pub mod hooks;
 pub mod identity;
 pub mod patterns;
 pub mod sanitize;
+pub mod session;
 pub mod tasks;
