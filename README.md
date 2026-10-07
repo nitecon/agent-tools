@@ -84,11 +84,19 @@ commands do not automatically update installed binaries, so publishing v1.19.0
 does not change the Windows client. The previous Windows archive remains
 available from the [v1.18.0 release](https://github.com/nitecon/agent-tools/releases/tag/v1.18.0).
 
-The staged actor implementation on `main` derives task provenance from the
-calling provider's native session and verified executor generation. It does not
-require CMUX environment inheritance, launch flags, or configuration changes.
-This implementation has not been released; keep the published Windows preview
-compatibility guidance above until integrated distribution is approved.
+The prepared v1.20.0 release derives task provenance from the calling provider's
+native session and verified executor generation. It does not require CMUX
+environment inheritance, launch flags, or configuration changes. Unlike v1.19.0,
+valid provider task mutations continue when the local membership API is absent
+or unsupported. CMUX Linux v0.6.5 provides coordinated terminal enrollment and
+delivery; publication remains held until integrated distribution is approved.
+
+The older Windows preview cannot bind these actors to terminals or provide exact
+actor self-echo suppression. The new client's direct CLI/hook actor derivation
+is covered by Windows CI, but this does not establish live preview compatibility.
+No manual environment workaround supplies verified membership. Keep the existing
+preview deployment until coordinated distribution is approved. This Linux CMUX
+release advertises no automatic macOS bootstrap.
 
 If an older update installed a binary that cannot start because of a glibc
 version error, recover without invoking that binary by rerunning the Linux
