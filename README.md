@@ -71,6 +71,19 @@ agent-tools version
 
 The update rate-limit marker is stored at `~/.agentic/.agent-tools-update-check` and persists across reboots.
 
+Session provenance in agent-tools v1.19.0 requires a session-capable CMUX host
+(CMUX Linux v0.6.4 or later). Update and restart CMUX before explicitly updating
+agent-tools. The local `gateway.session` API must verify the current agent;
+older CMUX hosts cannot supply that identity and task mutations will fail rather
+than invent session provenance.
+
+The current native Windows CMUX preview does not provide this API. Keep
+agent-tools v1.18.0 on that Windows installation until a compatible preview is
+available; do not run `agent-tools update` there yet. Normal CLI, MCP and sync
+commands do not automatically update installed binaries, so publishing v1.19.0
+does not change the Windows client. The previous Windows archive remains
+available from the [v1.18.0 release](https://github.com/nitecon/agent-tools/releases/tag/v1.18.0).
+
 If an older update installed a binary that cannot start because of a glibc
 version error, recover without invoking that binary by rerunning the Linux
 installer:

@@ -31,8 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install build and ABI inspection tools
-        run: apt-get update && apt-get install -y --no-install-recommends binutils ca-certificates
+      - name: Verify ABI inspection tools
+        run: readelf --version
 
       - name: Install Rust toolchain
         run: |
