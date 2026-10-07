@@ -813,10 +813,12 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
         consume_enrollment(agent, &payload, token);
         return Ok(());
     }
+    // Private hook capability must be observed even when the first prompt is
+    // a gateway notification. Its rendered identity stays silent on that path.
+    let identity = actor_context(agent, &payload);
     if is_harness_notification(&prompt) {
         return Ok(());
     }
-    let identity = actor_context(agent, &payload);
 
     let root = std::env::current_dir()?;
     let mut session = SessionMemory::open(&root, extract_session_id(&payload).as_deref());

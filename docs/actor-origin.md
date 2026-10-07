@@ -78,6 +78,8 @@ fields without a token. Success echoes origin, native ID and generation with
 CMUX enables bootstrap only after observing an actual `agent-tools hook`
 SessionStart/UserPromptSubmit process through its kernel peer. An ordinary CLI
 announcement cannot prove installed, enabled hooks or grant enrollment readiness.
+UserPromptSubmit also makes this private announcement when its first prompt is a
+gateway or harness notification, then returns without any context output.
 
 The existing UserPromptSubmit hook consumes only a whole dedicated prompt:
 

@@ -2,6 +2,15 @@
 use std::process::{exit, Command};
 
 fn main() {
+    if let Some(hook) = std::env::var_os("AGENT_TOOLS_RUNTIME_FIXTURE_HOOK") {
+        let status = Command::new(hook)
+            .args(["hook", "user-prompt-submit", "--agent"])
+            .arg(std::env::var_os("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER").unwrap())
+            .stdin(std::process::Stdio::inherit())
+            .status()
+            .unwrap();
+        exit(status.code().unwrap_or(1));
+    }
     // A rejected provider boundary beneath a live executor must stop resolution,
     // rather than allowing the worker to fall back to that older executor.
     let mut command =
