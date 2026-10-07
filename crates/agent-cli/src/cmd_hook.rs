@@ -672,9 +672,14 @@ fn run_session_start(agent: &str) -> Result<()> {
     for t in &displayed {
         let owner = t.owner_agent_id.as_deref().unwrap_or("—");
         let owner_session = t
-            .owner_session_id
-            .as_deref()
-            .map(|id| format!(", owner_session={id}"))
+            .owner_origin
+            .as_ref()
+            .map(|origin| {
+                format!(
+                    ", owner_session={} owner_instance={}",
+                    origin.session_id, origin.instance_id
+                )
+            })
             .unwrap_or_default();
         lines.push(format!(
             "[{}] {} ({}, owner={owner}{owner_session})",

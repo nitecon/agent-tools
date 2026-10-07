@@ -436,9 +436,14 @@ fn print_summary_row(t: &TaskSummary, profile: Option<&str>) {
                 .map(|o| format!("@{o}"))
                 .unwrap_or_else(|| "@—".to_string());
             let session = t
-                .owner_session_id
-                .as_deref()
-                .map(|id| format!(" session={id}"))
+                .owner_origin
+                .as_ref()
+                .map(|origin| {
+                    format!(
+                        " session={} instance={}",
+                        origin.session_id, origin.instance_id
+                    )
+                })
                 .unwrap_or_default();
             format!("{owner}{session}  {}", fmt_relative_from_now(t.updated_at))
         }
@@ -487,8 +492,11 @@ fn print_task_detail(task: &Task, comments: &[TaskComment]) {
         task.owner_agent_id.as_deref().unwrap_or("—")
     );
     println!("hostname:  {}", task.hostname.as_deref().unwrap_or("—"));
-    if let Some(session_id) = &task.owner_session_id {
-        println!("session:   {session_id}");
+    if let Some(origin) = &task.owner_origin {
+        println!(
+            "session:   {} instance={} {}/{}",
+            origin.session_id, origin.instance_id, origin.provider, origin.os
+        );
     }
     println!("created:   {}", fmt_epoch_ms(task.created_at));
     println!("updated:   {}", fmt_epoch_ms(task.updated_at));
@@ -532,8 +540,8 @@ fn print_task_detail(task: &Task, comments: &[TaskComment]) {
                 .as_ref()
                 .map(|origin| {
                     format!(
-                        " session={} {}/{}",
-                        origin.session_id, origin.provider, origin.os
+                        " session={} instance={} {}/{}",
+                        origin.session_id, origin.instance_id, origin.provider, origin.os
                     )
                 })
                 .unwrap_or_default();
@@ -692,8 +700,11 @@ async fn cmd_status_transition(
         task.status,
         task.owner_agent_id.as_deref().unwrap_or("—")
     );
-    if let Some(session_id) = &task.owner_session_id {
-        println!("owner session: {session_id}");
+    if let Some(origin) = &task.owner_origin {
+        println!(
+            "owner session: {} instance={}",
+            origin.session_id, origin.instance_id
+        );
     }
 
     // Completing a task is the natural memory-save moment — remind the agent to

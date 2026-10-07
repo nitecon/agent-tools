@@ -39,7 +39,7 @@ pub struct Task {
     #[serde(default)]
     pub owner_agent_id: Option<String>,
     #[serde(default)]
-    pub owner_session_id: Option<String>,
+    pub owner_origin: Option<SessionOrigin>,
     pub reporter: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -77,7 +77,7 @@ pub struct TaskSummary {
     #[serde(default)]
     pub owner_agent_id: Option<String>,
     #[serde(default)]
-    pub owner_session_id: Option<String>,
+    pub owner_origin: Option<SessionOrigin>,
     #[serde(default)]
     pub hostname: Option<String>,
     pub reporter: String,
@@ -657,7 +657,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(task.specification_text(), Some("new spec"));
-        assert!(task.owner_session_id.is_none());
+        assert!(task.owner_origin.is_none());
 
         task.specification = None;
         assert_eq!(task.specification_text(), Some("legacy details"));
@@ -665,10 +665,12 @@ mod tests {
 
     #[test]
     fn session_ownership_and_comment_origin_survive_decoding() {
-        let value = serde_json::json!({"id":"task-1","project_ident":"demo","title":"Demo","status":"in_progress","rank":1,"reporter":"agent","created_at":1,"updated_at":1,"owner_agent_id":"shared-machine","owner_session_id":"00000000-0000-4000-8000-000000000001"});
+        let value = serde_json::json!({"id":"task-1","project_ident":"demo","title":"Demo","status":"in_progress","rank":1,"reporter":"agent","created_at":1,"updated_at":1,"owner_agent_id":"shared-machine","owner_origin":{"session_id":"00000000-0000-4000-8000-000000000001","instance_id":"00000000-0000-4000-8000-000000000003","provider":"codex","os":"linux"}});
         let task: Task = serde_json::from_value(value).unwrap();
         assert_eq!(
-            task.owner_session_id.as_deref(),
+            task.owner_origin
+                .as_ref()
+                .map(|origin| origin.session_id.as_str()),
             Some("00000000-0000-4000-8000-000000000001")
         );
         let origin = serde_json::json!({"session_id":"00000000-0000-4000-8000-000000000002","instance_id":"00000000-0000-4000-8000-000000000003","provider":"claude","os":"windows"});
