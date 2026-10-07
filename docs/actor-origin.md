@@ -45,10 +45,16 @@ same-provider environment. Other-provider environment cannot select an executor.
 The CLI inspects only its own bounded ancestry (64 processes, two seconds),
 recognizes native provider executables or Claude's official Node entrypoint,
 and rechecks executable, command, parent and precise creation generation.
-Codex helpers and its Node launcher are not executors. No ancestor supplies a
-thread ID or surface ID. Dead, replaced, reparented or unverifiable runtime
-context fails closed when native identity is present. No native provider
-context retains legacy machine attribution.
+Codex requires positive `app-server`, `exec`/`e`, `review`, or existing direct
+`--no-daemon` execution evidence. Utilities and app-server schema/proxy/daemon
+subcommands are rejected. A recognized daemon-connected frontend or official
+Codex Node launcher stops verification; the CLI cannot cross that boundary to
+select an older ancestor after backend exit. Normal shared-daemon launches
+resolve the actual `app-server` automatically; no user flags are required.
+Claude native versions under `.local/share/claude/versions` are recognized too.
+No ancestor supplies a thread ID or surface ID. Dead, replaced, reparented or
+unverifiable runtime context fails closed when native identity is present. No
+native provider context retains legacy machine attribution.
 
 Same native conversation and live executor retain one actor across terminal
 reattachment. Replacing the executor or starting another native conversation
@@ -68,6 +74,9 @@ requests registration/capability only. `gateway.session.resolve` uses the same
 fields without a token. Success echoes origin, native ID and generation with
 `binding_state` (`unbound` or `bound`); bound context adds `surface_id`,
 `workspace_id`, and `recipient_session_id`. Mismatched echoes reject membership.
+CMUX enables bootstrap only after observing an actual `agent-tools hook`
+SessionStart/UserPromptSubmit process through its kernel peer. An ordinary CLI
+announcement cannot prove installed, enabled hooks or grant enrollment readiness.
 
 The existing UserPromptSubmit hook consumes only a whole dedicated prompt:
 

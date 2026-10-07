@@ -119,36 +119,112 @@ fn provider(process: &Process) -> Option<&'static str> {
         .executable
         .file_name()?
         .to_str()?
+        .trim_end_matches(" (deleted)")
         .to_ascii_lowercase();
     let stem = executable.strip_suffix(".exe").unwrap_or(&executable);
     let args = &process.command;
     match stem {
         "codex" | "codex-x86_64-unknown-linux-musl" | "codex-aarch64-unknown-linux-musl" => {
-            // Helpers are not agent executors. Continue to the actual parent.
-            if args.get(1).is_some_and(|arg| {
-                matches!(
-                    arg.as_str(),
-                    "exec-server" | "mcp-server" | "sandbox" | "debug" | "login" | "logout"
-                )
-            }) {
-                None
-            } else {
-                Some("codex")
-            }
+            Some("codex")
         }
         "claude" => Some("claude"),
+        _ if process
+            .executable
+            .parent()
+            .is_some_and(|path| path.ends_with(".local/share/claude/versions"))
+            && stem.split('.').count() == 3
+            && stem.split('.').all(|part| {
+                !part.is_empty() && part.len() <= 16 && part.bytes().all(|b| b.is_ascii_digit())
+            }) =>
+        {
+            Some("claude")
+        }
         "node" | "nodejs" | "bun" => {
             let entry = args.get(1)?.replace('\\', "/");
             if entry.ends_with("/@anthropic-ai/claude-code/cli.js") {
                 Some("claude")
+            } else if entry.ends_with("/@openai/codex/bin/codex.js") {
+                Some("codex")
             } else {
-                // The official Codex JS launcher is a wrapper: its native child
-                // is the executor, so never bind to the Node launcher instead.
                 None
             }
         }
         _ => None,
     }
+}
+
+fn executor_role(process: &Process, provider: &str) -> bool {
+    if provider == "claude" {
+        return true;
+    }
+    // The official Codex JS launcher and daemon-connected frontend are
+    // recognized provider boundaries, but neither owns model execution.
+    let executable = process
+        .executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(
+        executable
+            .trim_end_matches(" (deleted)")
+            .trim_end_matches(".exe"),
+        "node" | "nodejs" | "bun"
+    ) {
+        return false;
+    }
+    let args = &process.command;
+    let direct = args.iter().any(|arg| arg == "--no-daemon");
+    let mut index = 1;
+    while let Some(arg) = args.get(index) {
+        if matches!(
+            arg.as_str(),
+            "-c" | "--config"
+                | "-m"
+                | "--model"
+                | "-p"
+                | "--profile"
+                | "--remote"
+                | "--remote-auth-token-env"
+                | "-C"
+                | "--cd"
+                | "-s"
+                | "--sandbox"
+                | "-a"
+                | "--ask-for-approval"
+                | "--local-provider"
+                | "--enable"
+                | "--disable"
+                | "--add-dir"
+                | "--code-mode-host"
+                | "--listen"
+        ) {
+            if args.get(index + 1).is_none() {
+                return false;
+            }
+            index += 2;
+            continue;
+        }
+        if !arg.starts_with('-') {
+            return match arg.as_str() {
+                "app-server" => !args.iter().any(|arg| {
+                    matches!(
+                        arg.as_str(),
+                        "generate-json-schema" | "generate-ts" | "proxy" | "daemon"
+                    )
+                }),
+                "exec" | "e" | "review" => true,
+                "exec-server" | "mcp" | "mcp-server" | "sandbox" | "debug" | "login" | "logout"
+                | "completion" | "features" | "apply" | "a" | "app" | "cloud" => false,
+                _ => direct,
+            };
+        }
+        if matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V") {
+            return false;
+        }
+        index += 1;
+    }
+    direct
 }
 
 fn executor() -> Result<(&'static str, Vec<String>)> {
@@ -173,6 +249,12 @@ fn executor() -> Result<(&'static str, Vec<String>)> {
             ensure!(parent_start <= child_start, "replaced provider ancestor");
         }
         let found = provider(&process);
+        if let Some(provider) = found {
+            ensure!(
+                executor_role(&process, provider),
+                "provider boundary is not a verified model executor"
+            );
+        }
         pid = process.parent;
         lineage.push(process);
         if let Some(provider) = found {
@@ -332,7 +414,7 @@ mod tests {
     use super::*;
 
     // Separate processes exercise real native ancestry and hook/tool parity.
-    // The copied test executable models a shared provider executor; no provider
+    // A small CI process fixture models a shared provider executor; no provider
     // installation, authentication, or production test bypass is required.
     #[test]
     fn runtime_child_fixture() {
@@ -341,11 +423,18 @@ mod tests {
         };
         let provider = std::env::var("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER").unwrap();
         if std::env::var("AGENT_TOOLS_RUNTIME_FIXTURE_MODE").as_deref() == Ok("worker") {
-            let actor = current().unwrap().unwrap();
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
+            if std::env::var_os("AGENT_TOOLS_RUNTIME_FIXTURE_REJECTED").is_some() {
+                assert!(current().is_err());
+                assert!(from_hook("codex", "fixture-stale-thread").is_err());
+                assert!(rt.block_on(crate::cmd_session::mutation_origin()).is_err());
+                std::fs::write(output, "rejected").unwrap();
+                return;
+            }
+            let actor = current().unwrap().unwrap();
             assert_eq!(
                 rt.block_on(crate::cmd_session::mutation_origin())
                     .unwrap()
@@ -427,6 +516,22 @@ mod tests {
     fn shared_executor_threads_are_isolated_and_replacement_changes_actor() {
         let directory = tempfile::tempdir().unwrap();
         let worker = std::env::current_exe().unwrap();
+        let fixture = directory.path().join(if cfg!(windows) {
+            "provider-fixture.exe"
+        } else {
+            "provider-fixture"
+        });
+        let compiled = std::process::Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/provider_executor.rs"
+            ))
+            .arg("-o")
+            .arg(&fixture)
+            .status()
+            .unwrap();
+        assert!(compiled.success());
         for provider in ["codex", "claude"] {
             let name = if cfg!(windows) {
                 format!("{provider}.exe")
@@ -434,18 +539,14 @@ mod tests {
                 provider.into()
             };
             let executor = directory.path().join(name);
-            std::fs::copy(&worker, &executor).unwrap();
+            std::fs::copy(&fixture, &executor).unwrap();
             let mut runs = Vec::new();
             for run in 0..2 {
                 let output = directory
                     .path()
                     .join(format!("{provider}-actors-{run}.json"));
                 let status = std::process::Command::new(&executor)
-                    .args([
-                        "--exact",
-                        "actor_runtime::tests::runtime_child_fixture",
-                        "--nocapture",
-                    ])
+                    .arg("app-server")
                     .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "executor")
                     .env("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER", provider)
                     .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &output)
@@ -471,6 +572,39 @@ mod tests {
             );
             assert_ne!(runs[0][0].origin.session_id, runs[1][0].origin.session_id);
         }
+        let executor = directory
+            .path()
+            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        let node = directory
+            .path()
+            .join(if cfg!(windows) { "node.exe" } else { "node" });
+        std::fs::copy(&fixture, &node).unwrap();
+        for (index, (boundary, argument)) in [
+            (&executor, "--yolo"),
+            (&executor, "exec-server"),
+            (&node, "/pkg/@openai/codex/bin/codex.js"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let output = directory.path().join(format!("boundary-{index}"));
+            let status = std::process::Command::new(&executor)
+                .arg("app-server")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "worker")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER", "codex")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &output)
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_WORKER", &worker)
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_REJECTED", "1")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY", boundary)
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY_ARG", argument)
+                .env("CODEX_THREAD_ID", "fixture-stale-thread")
+                .env("CODEX_SESSION_ID", "fixture-stale-thread")
+                .env_remove("CLAUDE_CODE_SESSION_ID")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            assert_eq!(std::fs::read_to_string(output).unwrap(), "rejected");
+        }
     }
 
     #[test]
@@ -494,13 +628,71 @@ mod tests {
             generation: vec![],
         };
         assert_eq!(provider(&process), Some("codex"));
+        assert!(executor_role(&process, "codex"));
         process.command[1] = "exec-server".into();
-        assert_eq!(provider(&process), None);
+        assert_eq!(provider(&process), Some("codex"));
+        assert!(!executor_role(&process, "codex"));
         process.executable = "node".into();
         process.command[1] = "/pkg/@openai/codex/bin/codex.js".into();
-        assert_eq!(provider(&process), None);
+        assert_eq!(provider(&process), Some("codex"));
+        assert!(!executor_role(&process, "codex"));
         process.command[1] = "/pkg/@anthropic-ai/claude-code/cli.js".into();
         assert_eq!(provider(&process), Some("claude"));
+        assert!(executor_role(&process, "claude"));
+        process.executable = "/user/.local/share/claude/versions/2.1.2".into();
+        assert_eq!(provider(&process), Some("claude"));
+        process.executable = "/unrelated/versions/2.1.2".into();
+        assert_eq!(provider(&process), None);
+    }
+
+    #[test]
+    fn codex_role_requires_positive_executor_evidence() {
+        let mut process = Process {
+            pid: 1,
+            parent: 0,
+            executable: "codex".into(),
+            command: vec![],
+            generation: vec![],
+        };
+        for args in [
+            vec!["codex", "app-server"],
+            vec!["codex", "exec"],
+            vec!["codex", "e"],
+            vec!["codex", "review"],
+            vec!["codex", "--no-daemon"],
+            vec!["codex", "--no-daemon", "resume", "thread"],
+            vec![
+                "codex",
+                "--config",
+                "model=review",
+                "-C",
+                "/repo",
+                "app-server",
+                "--listen",
+                "stdio://",
+            ],
+        ] {
+            process.command = args.iter().map(|value| (*value).into()).collect();
+            assert!(executor_role(&process, "codex"), "{args:?}");
+        }
+        for args in [
+            vec!["codex"],
+            vec!["codex", "--yolo"],
+            vec!["codex", "resume", "thread"],
+            vec!["codex", "--config", "role=app-server"],
+            vec!["codex", "--model", "exec"],
+            vec!["codex", "login", "--no-daemon"],
+            vec!["codex", "exec-server", "--no-daemon"],
+            vec!["codex", "--no-daemon", "completion"],
+            vec!["codex", "app-server", "daemon"],
+            vec!["codex", "app-server", "proxy"],
+            vec!["codex", "app-server", "generate-ts"],
+            vec!["codex", "--help", "--no-daemon"],
+            vec!["codex", "--config"],
+        ] {
+            process.command = args.iter().map(|value| (*value).into()).collect();
+            assert!(!executor_role(&process, "codex"), "{args:?}");
+        }
     }
 
     #[test]
