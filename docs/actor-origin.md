@@ -45,9 +45,10 @@ same-provider environment. Other-provider environment cannot select an executor.
 The CLI inspects only its own bounded ancestry (64 processes, two seconds),
 recognizes native provider executables or Claude's official Node entrypoint,
 and rechecks executable, command, parent and precise creation generation.
-Codex requires positive `app-server`, `exec`/`e`, `review`, or existing direct
-`--no-daemon` execution evidence. Utilities and app-server schema/proxy/daemon
-subcommands are rejected. A recognized daemon-connected frontend or official
+Codex requires positive `app-server`, `exec`/`e`, `review`, bare `--no-daemon`,
+or `resume`/`fork` with `--no-daemon` execution evidence. Other subcommands
+reject even with `--no-daemon`; help/version and missing option values reject
+too. App-server schema/proxy/daemon subcommands are rejected. A recognized daemon-connected frontend or official
 Codex Node launcher stops verification; the CLI cannot cross that boundary to
 select an older ancestor after backend exit. Normal shared-daemon launches
 resolve the actual `app-server` automatically; no user flags are required.

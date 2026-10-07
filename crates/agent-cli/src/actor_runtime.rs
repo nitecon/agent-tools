@@ -174,6 +174,12 @@ fn executor_role(process: &Process, provider: &str) -> bool {
         return false;
     }
     let args = &process.command;
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V"))
+    {
+        return false;
+    }
     let direct = args.iter().any(|arg| arg == "--no-daemon");
     let mut index = 1;
     while let Some(arg) = args.get(index) {
@@ -199,7 +205,10 @@ fn executor_role(process: &Process, provider: &str) -> bool {
                 | "--code-mode-host"
                 | "--listen"
         ) {
-            if args.get(index + 1).is_none() {
+            if args
+                .get(index + 1)
+                .is_none_or(|value| value.starts_with('-'))
+            {
                 return false;
             }
             index += 2;
@@ -214,13 +223,9 @@ fn executor_role(process: &Process, provider: &str) -> bool {
                     )
                 }),
                 "exec" | "e" | "review" => true,
-                "exec-server" | "mcp" | "mcp-server" | "sandbox" | "debug" | "login" | "logout"
-                | "completion" | "features" | "apply" | "a" | "app" | "cloud" => false,
-                _ => direct,
+                "resume" | "fork" => direct,
+                _ => false,
             };
-        }
-        if matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V") {
-            return false;
         }
         index += 1;
     }
@@ -661,6 +666,7 @@ mod tests {
             vec!["codex", "review"],
             vec!["codex", "--no-daemon"],
             vec!["codex", "--no-daemon", "resume", "thread"],
+            vec!["codex", "fork", "thread", "--no-daemon"],
             vec![
                 "codex",
                 "--config",
@@ -679,8 +685,12 @@ mod tests {
             vec!["codex"],
             vec!["codex", "--yolo"],
             vec!["codex", "resume", "thread"],
+            vec!["codex", "fork", "thread"],
+            vec!["codex", "unknown-subcommand", "--no-daemon"],
+            vec!["codex", "--no-daemon", "unknown-subcommand"],
             vec!["codex", "--config", "role=app-server"],
             vec!["codex", "--model", "exec"],
+            vec!["codex", "--model", "--no-daemon"],
             vec!["codex", "login", "--no-daemon"],
             vec!["codex", "exec-server", "--no-daemon"],
             vec!["codex", "--no-daemon", "completion"],
@@ -688,6 +698,8 @@ mod tests {
             vec!["codex", "app-server", "proxy"],
             vec!["codex", "app-server", "generate-ts"],
             vec!["codex", "--help", "--no-daemon"],
+            vec!["codex", "exec", "--help"],
+            vec!["codex", "app-server", "--version"],
             vec!["codex", "--config"],
         ] {
             process.command = args.iter().map(|value| (*value).into()).collect();
