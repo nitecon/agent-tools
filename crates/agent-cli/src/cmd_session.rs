@@ -20,7 +20,8 @@ const MAX_RESPONSE: u64 = 64 * 1024;
 pub(crate) struct Membership {
     origin: SessionOrigin,
     provider_session_id: String,
-    executor_generation: Vec<String>,
+    base_id: String,
+    session_slot: u32,
     binding_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     surface_id: Option<String>,
@@ -36,7 +37,8 @@ fn decode_membership(actor: &Actor, value: Value) -> Result<Membership> {
     ensure!(
         membership.origin == actor.origin
             && membership.provider_session_id == actor.provider_session_id
-            && membership.executor_generation == actor.executor_generation,
+            && membership.base_id == actor.base_id
+            && membership.session_slot == actor.session_slot,
         "CMUX membership did not echo the verified actor"
     );
     match membership.binding_state.as_str() {
@@ -63,7 +65,7 @@ fn decode_membership(actor: &Actor, value: Value) -> Result<Membership> {
 
 pub(crate) async fn mutation_origin() -> Result<Option<SessionOrigin>> {
     let actor = crate::actor_runtime::current()
-        .context("verify calling actor; task mutation was not sent")?;
+        .context("register calling conversation; task mutation was not sent")?;
     if let Some(actor) = actor {
         // Optional membership/capability requests may trigger safe-idle bootstrap.
         // No RPC absence, old API, invalid binding or timeout revokes provenance.
@@ -114,10 +116,12 @@ async fn discover(peers: bool, json_output: bool) -> Result<()> {
         println!("{}", serde_json::to_string(&value)?);
     } else {
         println!(
-            "{} {} {} instance={} native={} binding={}",
-            actor.origin.session_id,
+            "{}-{} {} {} session={} instance={} native={} binding={}",
+            actor.base_id,
+            actor.session_slot,
             actor.origin.provider,
             actor.origin.os,
+            actor.origin.session_id,
             actor.origin.instance_id,
             actor.provider_session_id,
             bound
@@ -380,7 +384,7 @@ mod tests {
         let vectors: Value =
             serde_json::from_str(include_str!("../../../docs/actor-origin-vectors.json")).unwrap();
         let row = &vectors[0];
-        serde_json::from_value(json!({"version":1,"origin":{"session_id":row["session_id"],"instance_id":row["instance_id"],"provider":row["provider"],"os":row["os"]},"provider_session_id":row["provider_session_id"],"executor_generation":row["executor_generation"]})).unwrap()
+        serde_json::from_value(json!({"version":2,"origin":{"session_id":row["session_id"],"instance_id":row["instance_id"],"provider":row["provider"],"os":row["os"]},"provider_session_id":row["provider_session_id"],"base_id":row["base_id"],"session_slot":row["session_slot"]})).unwrap()
     }
     fn response(actor: &Actor) -> Value {
         let mut value = serde_json::to_value(actor).unwrap();
@@ -392,7 +396,7 @@ mod tests {
         let actor = fixture();
         let value = response(&actor);
         assert!(decode_membership(&actor, value.clone()).is_ok());
-        for field in ["origin", "provider_session_id", "executor_generation"] {
+        for field in ["origin", "provider_session_id", "base_id", "session_slot"] {
             let mut broken = value.clone();
             broken[field] = Value::Null;
             assert!(decode_membership(&actor, broken).is_err());

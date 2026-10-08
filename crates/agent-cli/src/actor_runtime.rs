@@ -1,22 +1,8 @@
-//! Provider-native invocation identity, independent of terminal membership.
-//! Only the current command's bounded ancestry is inspected; no provider is run.
+//! Register the invocation's native conversation without inspecting executors.
 
 use agent_comms::actor::{self, Actor};
 use anyhow::{bail, ensure, Context, Result};
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Process {
-    pid: u32,
-    parent: u32,
-    executable: PathBuf,
-    command: Vec<String>,
-    generation: Vec<String>,
-}
+use std::path::Path;
 
 #[derive(Default)]
 struct NativeIds {
@@ -39,10 +25,6 @@ impl NativeIds {
             codex_session: read("CODEX_SESSION_ID")?,
             claude_session: read("CLAUDE_CODE_SESSION_ID")?,
         })
-    }
-
-    fn any(&self) -> bool {
-        self.codex_thread.is_some() || self.codex_session.is_some() || self.claude_session.is_some()
     }
 
     fn for_provider(&self, provider: &str) -> Result<Option<String>> {
@@ -71,802 +53,209 @@ impl NativeIds {
             _ => bail!("unsupported provider-native identity"),
         }
     }
+
+    fn conversation(&self) -> Result<Option<(&'static str, String)>> {
+        match (self.for_provider("codex")?, self.for_provider("claude")?) {
+            (Some(_), Some(_)) => bail!("ambiguous provider-native conversation context"),
+            (Some(native), None) => Ok(Some(("codex", native))),
+            (None, Some(native)) => Ok(Some(("claude", native))),
+            (None, None) => Ok(None),
+        }
+    }
+}
+
+fn git_value(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = std::str::from_utf8(&output.stdout).ok()?.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn register(provider: &str, native: &str) -> Result<Actor> {
+    let cwd = std::env::current_dir()?;
+    let root = git_value(&cwd, &["rev-parse", "--show-toplevel"])
+        .map(std::path::PathBuf::from)
+        .unwrap_or(cwd)
+        .canonicalize()
+        .context("canonical actor project path")?;
+    let project = root
+        .to_str()
+        .context("non-Unicode actor project path")?
+        .to_owned();
+    #[cfg(windows)]
+    let project = project.replace('\\', "/");
+    #[cfg(windows)]
+    let project = project
+        .strip_prefix("//?/")
+        .unwrap_or(&project)
+        .to_ascii_lowercase();
+    let remote = git_value(&root, &["remote", "get-url", "origin"])
+        .map(|remote| {
+            let normalized = agent_core::storage::normalize_git_url(&remote);
+            let normalized = normalized.trim_end_matches('/');
+            normalized
+                .strip_suffix(".git")
+                .unwrap_or(normalized)
+                .to_owned()
+        })
+        .unwrap_or_default();
+    let instance = actor::instance_id()?;
+    let os = std::env::consts::OS;
+    let base = actor::base_id(instance, os, provider, &project, &remote)?;
+    actor::register(instance, os, provider, native, base)
 }
 
 pub(crate) fn current() -> Result<Option<Actor>> {
-    let ids = NativeIds::from_env()?;
-    if !ids.any() {
-        return Ok(None);
-    }
-    let (provider, generation) = executor()?;
-    let native = ids
-        .for_provider(provider)?
-        .context("verified executor lacks its own native session ID")?;
-    Ok(Some(actor::derive(
-        actor::instance_id()?,
-        std::env::consts::OS,
-        provider,
-        &native,
-        generation,
-    )?))
+    NativeIds::from_env()?
+        .conversation()?
+        .map(|(provider, native)| register(provider, &native))
+        .transpose()
 }
 
 pub(crate) fn from_hook(provider: &str, native_id: &str) -> Result<Actor> {
     let native = actor::normalize_native_id(native_id)?;
-    let ids = NativeIds::from_env()?;
-    if let Some(inherited) = ids.for_provider(provider)? {
+    if let Some(inherited) = NativeIds::from_env()?.for_provider(provider)? {
         ensure!(
             native == inherited,
             "hook native ID conflicts with invocation context"
         );
     }
-    let (actual_provider, generation) = executor()?;
-    ensure!(
-        actual_provider == provider,
-        "hook provider does not match its executor"
-    );
-    actor::derive(
-        actor::instance_id()?,
-        std::env::consts::OS,
-        provider,
-        &native,
-        generation,
-    )
-}
-
-fn provider(process: &Process) -> Option<&'static str> {
-    let executable = process
-        .executable
-        .file_name()?
-        .to_str()?
-        .trim_end_matches(" (deleted)")
-        .to_ascii_lowercase();
-    let stem = executable.strip_suffix(".exe").unwrap_or(&executable);
-    let args = &process.command;
-    match stem {
-        "codex" | "codex-x86_64-unknown-linux-musl" | "codex-aarch64-unknown-linux-musl" => {
-            Some("codex")
-        }
-        "claude" => Some("claude"),
-        _ if process
-            .executable
-            .parent()
-            .is_some_and(|path| path.ends_with(".local/share/claude/versions"))
-            && stem.split('.').count() == 3
-            && stem.split('.').all(|part| {
-                !part.is_empty() && part.len() <= 16 && part.bytes().all(|b| b.is_ascii_digit())
-            }) =>
-        {
-            Some("claude")
-        }
-        "node" | "nodejs" | "bun" => {
-            let entry = args.get(1)?.replace('\\', "/");
-            if entry.ends_with("/@anthropic-ai/claude-code/cli.js") {
-                Some("claude")
-            } else if entry.ends_with("/@openai/codex/bin/codex.js") {
-                Some("codex")
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-fn executor_role(process: &Process, provider: &str) -> bool {
-    if provider == "claude" {
-        return true;
-    }
-    // The official Codex JS launcher and daemon-connected frontend are
-    // recognized provider boundaries, but neither owns model execution.
-    let executable = process
-        .executable
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if matches!(
-        executable
-            .trim_end_matches(" (deleted)")
-            .trim_end_matches(".exe"),
-        "node" | "nodejs" | "bun"
-    ) {
-        return false;
-    }
-    let args = &process.command;
-    // The installed Windows native TUI can own an embedded executor without
-    // --no-daemon. Limit this confirmed launch shape to its installation path;
-    // a provider basename alone must not turn a frontend into an executor.
-    #[cfg(windows)]
-    if args.len() == 1
-        && process.executable.is_absolute()
-        && process
-            .executable
-            .to_string_lossy()
-            .replace('\\', "/")
-            .to_ascii_lowercase()
-            .ends_with("/appdata/local/programs/openai/codex/bin/codex.exe")
-    {
-        return true;
-    }
-    if args
-        .iter()
-        .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V"))
-    {
-        return false;
-    }
-    let direct = args.iter().any(|arg| arg == "--no-daemon");
-    let mut index = 1;
-    while let Some(arg) = args.get(index) {
-        if matches!(
-            arg.as_str(),
-            "-c" | "--config"
-                | "-m"
-                | "--model"
-                | "-p"
-                | "--profile"
-                | "--remote"
-                | "--remote-auth-token-env"
-                | "-C"
-                | "--cd"
-                | "-s"
-                | "--sandbox"
-                | "-a"
-                | "--ask-for-approval"
-                | "--local-provider"
-                | "--enable"
-                | "--disable"
-                | "--add-dir"
-                | "--code-mode-host"
-                | "--listen"
-        ) {
-            if args
-                .get(index + 1)
-                .is_none_or(|value| value.starts_with('-'))
-            {
-                return false;
-            }
-            index += 2;
-            continue;
-        }
-        if !arg.starts_with('-') {
-            return match arg.as_str() {
-                "app-server" => !args.iter().any(|arg| {
-                    matches!(
-                        arg.as_str(),
-                        "generate-json-schema" | "generate-ts" | "proxy" | "daemon"
-                    )
-                }),
-                "exec" | "e" | "review" => true,
-                "resume" | "fork" => direct,
-                _ => false,
-            };
-        }
-        index += 1;
-    }
-    direct
-}
-
-fn executor() -> Result<(&'static str, Vec<String>)> {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut pid = std::process::id();
-    let mut lineage: Vec<Process> = Vec::new();
-    for _ in 0..64 {
-        ensure!(
-            Instant::now() < deadline,
-            "provider runtime verification timed out"
-        );
-        ensure!(
-            pid != 0 && !lineage.iter().any(|p| p.pid == pid),
-            "unverified provider ancestry"
-        );
-        let process = snapshot(pid)?;
-        if let Some(child) = lineage.last() {
-            // Windows can retain an exited parent's PID. Reject a reused PID
-            // whose process creation is newer than its purported child.
-            let child_start: u64 = child.generation.last().unwrap().parse()?;
-            let parent_start: u64 = process.generation.last().unwrap().parse()?;
-            ensure!(parent_start <= child_start, "replaced provider ancestor");
-        }
-        let found = provider(&process);
-        if let Some(provider) = found {
-            ensure!(
-                executor_role(&process, provider),
-                "provider boundary is not a verified model executor"
-            );
-        }
-        pid = process.parent;
-        lineage.push(process);
-        if let Some(provider) = found {
-            for expected in &lineage {
-                ensure!(
-                    Instant::now() < deadline,
-                    "provider runtime verification timed out"
-                );
-                ensure!(
-                    snapshot(expected.pid)? == *expected,
-                    "provider ancestry changed during identity verification"
-                );
-            }
-            return Ok((provider, lineage.last().unwrap().generation.clone()));
-        }
-    }
-    bail!("no verified provider executor in invocation ancestry")
-}
-
-fn snapshot(pid: u32) -> Result<Process> {
-    let observed_generation = generation(pid)?;
-    let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
-        true,
-        ProcessRefreshKind::nothing()
-            .without_tasks()
-            .with_exe(UpdateKind::Always)
-            .with_cmd(UpdateKind::Always),
-    );
-    let process = system
-        .process(Pid::from_u32(pid))
-        .context("provider ancestor disappeared")?;
-    let executable = process
-        .exe()
-        .context("provider ancestor executable unavailable")?
-        .to_path_buf();
-    let command: Vec<String> = process
-        .cmd()
-        .iter()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
-    ensure!(
-        !command.is_empty(),
-        "provider ancestor invocation unavailable"
-    );
-    let parent = process.parent().map(|p| p.as_u32()).unwrap_or(0);
-    ensure!(
-        generation(pid)? == observed_generation,
-        "provider process generation changed"
-    );
-    Ok(Process {
-        pid,
-        parent,
-        executable,
-        command,
-        generation: observed_generation,
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn generation(pid: u32) -> Result<Vec<String>> {
-    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
-    let end = stat.rfind(')').context("invalid process stat")?;
-    let fields: Vec<_> = stat[end + 1..].split_whitespace().collect();
-    ensure!(
-        fields
-            .first()
-            .is_some_and(|state| !matches!(*state, "Z" | "X")),
-        "provider process exited"
-    );
-    let ticks: u64 = fields
-        .get(19)
-        .context("missing process start ticks")?
-        .parse()?;
-    Ok(vec![
-        "linux-proc-v1".into(),
-        boot.trim().to_ascii_lowercase(),
-        pid.to_string(),
-        ticks.to_string(),
-    ])
-}
-
-#[cfg(target_os = "macos")]
-fn generation(pid: u32) -> Result<Vec<String>> {
-    // SAFETY: proc_bsdinfo is a C POD and the buffer/size match Apple's API.
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of_val(&info) as i32;
-    let read = unsafe {
-        libc::proc_pidinfo(
-            pid as i32,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            (&mut info as *mut libc::proc_bsdinfo).cast(),
-            size,
-        )
-    };
-    ensure!(
-        read == size && info.pbi_pid == pid && info.pbi_status != 5,
-        "unverified macOS process generation"
-    );
-    let start = info
-        .pbi_start_tvsec
-        .checked_mul(1_000_000)
-        .and_then(|sec| sec.checked_add(info.pbi_start_tvusec))
-        .context("invalid process creation time")?;
-    Ok(vec![
-        "macos-proc-v1".into(),
-        pid.to_string(),
-        start.to_string(),
-    ])
-}
-
-#[cfg(windows)]
-fn generation(pid: u32) -> Result<Vec<String>> {
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, FILETIME},
-        System::Threading::{
-            GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        },
-    };
-    // SAFETY: the handle is checked, output buffers are valid, and it is closed
-    // before any result is propagated. No supplied process handle is trusted.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    ensure!(!handle.is_null(), "provider process handle unavailable");
-    let mut creation = FILETIME {
-        dwLowDateTime: 0,
-        dwHighDateTime: 0,
-    };
-    let mut exit = creation;
-    let mut kernel = creation;
-    let mut user = creation;
-    let mut status = 0;
-    let valid = unsafe {
-        GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) != 0
-            && GetExitCodeProcess(handle, &mut status) != 0
-            && status == 259
-    };
-    unsafe { CloseHandle(handle) };
-    ensure!(valid, "unverified Windows process generation");
-    let start = (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
-    Ok(vec![
-        "windows-process-v1".into(),
-        pid.to_string(),
-        start.to_string(),
-    ])
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-fn generation(_: u32) -> Result<Vec<String>> {
-    bail!("provider runtime verification unsupported on this OS")
+    register(provider, &native)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Separate processes exercise real native ancestry and hook/tool parity.
-    // A small CI process fixture models a shared provider executor; no provider
-    // installation, authentication, or production test bypass is required.
     #[test]
-    fn runtime_child_fixture() {
-        let Ok(output) = std::env::var("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT") else {
-            return;
-        };
-        let provider = std::env::var("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER").unwrap();
-        if std::env::var("AGENT_TOOLS_RUNTIME_FIXTURE_MODE").as_deref() == Ok("worker") {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            if std::env::var_os("AGENT_TOOLS_RUNTIME_FIXTURE_REJECTED").is_some() {
-                assert!(current().is_err());
-                assert!(from_hook("codex", "fixture-stale-thread").is_err());
-                assert!(rt.block_on(crate::cmd_session::mutation_origin()).is_err());
-                std::fs::write(output, "rejected").unwrap();
-                return;
-            }
-            let actor = current().unwrap().unwrap();
-            assert_eq!(
-                rt.block_on(crate::cmd_session::mutation_origin())
-                    .unwrap()
-                    .unwrap(),
-                actor.origin
-            );
-            assert_eq!(
-                actor,
-                from_hook(&provider, &actor.provider_session_id).unwrap()
-            );
-            assert_eq!(actor.origin.provider, provider);
-            assert!(from_hook(&provider, "another-thread").is_err());
-            let other = if provider == "codex" {
-                "claude"
-            } else {
-                "codex"
-            };
-            assert!(from_hook(other, &actor.provider_session_id).is_err());
-            std::fs::write(output, serde_json::to_vec(&actor).unwrap()).unwrap();
-            // This child runs exactly this one test; its environment changes
-            // cannot race other tests or alter the parent executor's context.
-            if provider == "codex" {
-                std::env::set_var("CODEX_SESSION_ID", "conflicting-native-id");
-            } else {
-                std::env::set_var("CLAUDE_CODE_SESSION_ID", "");
-            }
-            assert!(rt.block_on(crate::cmd_session::mutation_origin()).is_err());
-            std::env::remove_var("CODEX_THREAD_ID");
-            std::env::remove_var("CODEX_SESSION_ID");
-            std::env::remove_var("CLAUDE_CODE_SESSION_ID");
-            assert!(rt
-                .block_on(crate::cmd_session::mutation_origin())
-                .unwrap()
-                .is_none());
-            return;
-        }
-        let executable = std::env::var_os("AGENT_TOOLS_RUNTIME_FIXTURE_WORKER").unwrap();
-        let mut actors = Vec::new();
-        for native in ["fixture-thread-a", "fixture-thread-b"] {
-            let child_output = format!("{output}.{native}");
-            let mut command = std::process::Command::new(&executable);
-            command
-                .args([
-                    "--exact",
-                    "actor_runtime::tests::runtime_child_fixture",
-                    "--nocapture",
-                ])
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "worker")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &child_output)
-                .env_remove("CODEX_THREAD_ID")
-                .env_remove("CODEX_SESSION_ID")
-                .env_remove("CLAUDE_CODE_SESSION_ID")
-                .env(
-                    "CMUX_SURFACE_ID",
-                    "inherited-daemon-surface-must-not-select-actor",
-                )
-                .env("CMUX_SOCKET", "/missing/legacy/socket");
-            if provider == "codex" {
-                command
-                    .env("CODEX_THREAD_ID", native)
-                    .env("CODEX_SESSION_ID", native)
-                    .env("CLAUDE_CODE_SESSION_ID", "inherited-other-provider");
-            } else {
-                command
-                    .env("CLAUDE_CODE_SESSION_ID", native)
-                    .env("CODEX_THREAD_ID", "inherited-other-provider")
-                    .env("CODEX_SESSION_ID", "inherited-other-provider");
-            }
-            let status = command.status().unwrap();
-            assert!(status.success());
-            let actor: Actor =
-                serde_json::from_slice(&std::fs::read(child_output).unwrap()).unwrap();
-            actors.push(actor);
-        }
-        std::fs::write(output, serde_json::to_vec(&actors).unwrap()).unwrap();
+    fn native_metadata_must_select_exactly_one_conversation() {
+        let mut ids = NativeIds::default();
+        assert!(ids.conversation().unwrap().is_none());
+        ids.codex_thread = Some("thread-a".into());
+        assert_eq!(
+            ids.conversation().unwrap(),
+            Some(("codex", "thread-a".into()))
+        );
+        ids.codex_session = Some("thread-b".into());
+        assert!(ids.conversation().is_err());
+        ids.codex_session = Some("thread-a".into());
+        ids.claude_session = Some("claude-c".into());
+        assert!(ids.conversation().is_err());
+        assert_eq!(ids.for_provider("codex").unwrap(), Some("thread-a".into()));
+        assert_eq!(ids.for_provider("claude").unwrap(), Some("claude-c".into()));
     }
 
     #[test]
-    fn shared_executor_threads_are_isolated_and_replacement_changes_actor() {
-        let directory = tempfile::tempdir().unwrap();
-        let worker = std::env::current_exe().unwrap();
-        let fixture = directory.path().join(if cfg!(windows) {
-            "provider-fixture.exe"
-        } else {
-            "provider-fixture"
-        });
-        let compiled = std::process::Command::new("rustc")
-            .arg("--edition=2021")
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/provider_executor.rs"
-            ))
-            .arg("-o")
-            .arg(&fixture)
-            .status()
+    fn registration_child_fixture() {
+        let Ok(output) = std::env::var("AGENT_TOOLS_REGISTRATION_OUTPUT") else {
+            return;
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .unwrap();
-        assert!(compiled.success());
-        for provider in ["codex", "claude"] {
-            let name = if cfg!(windows) {
-                format!("{provider}.exe")
-            } else {
-                provider.into()
-            };
-            let executor = directory.path().join(name);
-            std::fs::copy(&fixture, &executor).unwrap();
-            let mut runs = Vec::new();
-            for run in 0..2 {
-                let output = directory
-                    .path()
-                    .join(format!("{provider}-actors-{run}.json"));
-                let status = std::process::Command::new(&executor)
-                    .arg("app-server")
-                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "executor")
-                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER", provider)
-                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &output)
-                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_WORKER", &worker)
-                    .status()
-                    .unwrap();
-                assert!(status.success());
-                let actors: Vec<Actor> =
-                    serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
-                assert_eq!(actors[0].executor_generation, actors[1].executor_generation);
-                assert_eq!(actors[0].origin.instance_id, actors[1].origin.instance_id);
-                assert_ne!(actors[0].origin.session_id, actors[1].origin.session_id);
-                runs.push(actors);
-            }
-            assert_eq!(
-                runs[0][0].provider_session_id,
-                runs[1][0].provider_session_id
-            );
-            assert_eq!(runs[0][0].origin.instance_id, runs[1][0].origin.instance_id);
-            assert_ne!(
-                runs[0][0].executor_generation,
-                runs[1][0].executor_generation
-            );
-            assert_ne!(runs[0][0].origin.session_id, runs[1][0].origin.session_id);
+        if std::env::var_os("AGENT_TOOLS_REGISTRATION_REJECTED").is_some() {
+            assert!(current().is_err());
+            assert!(rt.block_on(crate::cmd_session::mutation_origin()).is_err());
+            std::fs::write(output, "rejected").unwrap();
+            return;
         }
-        let executor = directory
-            .path()
-            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
-        let node = directory
-            .path()
-            .join(if cfg!(windows) { "node.exe" } else { "node" });
-        std::fs::copy(&fixture, &node).unwrap();
-        for (index, (boundary, argument)) in [
-            (&executor, "--yolo"),
-            (&executor, "exec-server"),
-            (&node, "/pkg/@openai/codex/bin/codex.js"),
+        let actor = current().unwrap().unwrap();
+        assert_eq!(current().unwrap().unwrap(), actor);
+        assert_eq!(
+            rt.block_on(crate::cmd_session::mutation_origin())
+                .unwrap()
+                .unwrap(),
+            actor.origin
+        );
+        assert_eq!(
+            from_hook(&actor.origin.provider, &actor.provider_session_id).unwrap(),
+            actor
+        );
+        assert!(from_hook(&actor.origin.provider, "different-conversation").is_err());
+        std::fs::write(output, serde_json::to_vec(&actor).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ordinary_subprocesses_register_isolated_conversations_and_reuse_after_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = directory.path().join("repo");
+        let nested = repository.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&repository)
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .current_dir(&repository)
+            .args(["remote", "add", "origin", "git@github.com:org/repo.git"])
+            .status()
+            .unwrap()
+            .success());
+        let worker = std::env::current_exe().unwrap();
+        let mut runs = Vec::new();
+        for (index, (provider, native)) in [
+            ("codex", "thread-a"),
+            ("codex", "thread-b"),
+            ("codex", "thread-a"),
+            ("claude", "thread-a"),
         ]
         .into_iter()
         .enumerate()
         {
-            let output = directory.path().join(format!("boundary-{index}"));
-            let status = std::process::Command::new(&executor)
-                .arg("app-server")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "worker")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER", "codex")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &output)
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_WORKER", &worker)
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_REJECTED", "1")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY", boundary)
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY_ARG", argument)
-                .env("CODEX_THREAD_ID", "fixture-stale-thread")
-                .env("CODEX_SESSION_ID", "fixture-stale-thread")
-                .env_remove("CLAUDE_CODE_SESSION_ID")
-                .status()
-                .unwrap();
-            assert!(status.success());
-            assert_eq!(std::fs::read_to_string(output).unwrap(), "rejected");
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_installed_bare_codex_shell_and_code_mode_host_derive_actor() {
-        let directory = tempfile::tempdir().unwrap();
-        let executor = directory
-            .path()
-            .join("Users/nitec/AppData/Local/Programs/OpenAI/Codex/bin/codex.exe");
-        let host = directory.path().join(
-            "Users/nitec/.codex/packages/standalone/releases/0.161.0-x86_64-pc-windows-msvc/bin/codex-code-mode-host.exe",
-        );
-        std::fs::create_dir_all(executor.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(host.parent().unwrap()).unwrap();
-        assert!(std::process::Command::new("rustc")
-            .arg("--edition=2021")
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/provider_executor.rs"
-            ))
-            .arg("-o")
-            .arg(&executor)
-            .status()
-            .unwrap()
-            .success());
-        std::fs::copy(&executor, &host).unwrap();
-
-        let worker = std::env::current_exe().unwrap();
-        let mut runs: Vec<Vec<Actor>> = Vec::new();
-        for via_host in [false, true] {
-            let output = directory.path().join(format!("windows-{via_host}.json"));
-            // Match the reported bare `codex` command with a resolved native
-            // executable, then a real PowerShell child, optionally via the host.
-            let mut command = std::process::Command::new("codex");
-            command
-                .current_dir(executor.parent().unwrap())
-                .env(
-                    "PATH",
-                    std::env::join_paths(
-                        std::iter::once(executor.parent().unwrap().to_path_buf())
-                            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-                    )
-                    .unwrap(),
-                )
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "executor")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER", "codex")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &output)
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_WORKER", &worker)
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_SHELL", "powershell.exe");
-            if via_host {
+            let output = directory.path().join(format!("actor-{index}.json"));
+            let mut command = if cfg!(windows) {
+                let mut command = std::process::Command::new("powershell.exe");
+                command.args(["-NoProfile", "-NonInteractive", "-Command",
+                    "& $env:AGENT_TOOLS_REGISTRATION_WORKER --exact actor_runtime::tests::registration_child_fixture --nocapture; exit $LASTEXITCODE"]);
                 command
-                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY", &host)
-                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY_ARG", "relay");
-            }
-            let mut child = command.spawn().unwrap();
-            let pid = child.id();
-            assert!(child.wait().unwrap().success());
-            let actors: Vec<Actor> =
-                serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
-            assert_eq!(actors.len(), 2);
-            for actor in &actors {
-                assert_eq!(actor.origin.os, "windows");
-                assert_eq!(actor.executor_generation[0], "windows-process-v1");
-                assert_eq!(actor.executor_generation[1], pid.to_string());
-            }
-            assert_eq!(actors[0].executor_generation, actors[1].executor_generation);
-            assert_ne!(actors[0].origin.session_id, actors[1].origin.session_id);
-            runs.push(actors);
-        }
-        assert_ne!(
-            runs[0][0].executor_generation,
-            runs[1][0].executor_generation
-        );
-        assert_ne!(runs[0][0].origin.session_id, runs[1][0].origin.session_id);
-
-        // An installed utility or an unrelated bare codex.exe beneath a live
-        // app-server must reject instead of selecting that older executor.
-        let unrelated = directory.path().join("unrelated/codex.exe");
-        std::fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
-        std::fs::copy(&executor, &unrelated).unwrap();
-        for (index, (boundary, argument)) in [(&executor, "exec-server"), (&unrelated, "")]
-            .into_iter()
-            .enumerate()
-        {
-            let output = directory.path().join(format!("windows-rejected-{index}"));
-            assert!(std::process::Command::new(&executor)
-                .arg("app-server")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "worker")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER", "codex")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &output)
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_WORKER", &worker)
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_SHELL", "powershell.exe")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_REJECTED", "1")
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY", boundary)
-                .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY_ARG", argument)
-                .env("CODEX_THREAD_ID", "fixture-stale-thread")
-                .env("CODEX_SESSION_ID", "fixture-stale-thread")
+            } else {
+                let mut command = std::process::Command::new(&worker);
+                command.args([
+                    "--exact",
+                    "actor_runtime::tests::registration_child_fixture",
+                    "--nocapture",
+                ]);
+                command
+            };
+            command
+                .current_dir(if index == 2 { &nested } else { &repository })
+                .env("AGENT_TOOLS_REGISTRATION_WORKER", &worker)
+                .env("AGENT_TOOLS_REGISTRATION_OUTPUT", &output)
+                .env("HOME", directory.path())
+                .env("USERPROFILE", directory.path())
+                .env_remove("CODEX_THREAD_ID")
+                .env_remove("CODEX_SESSION_ID")
                 .env_remove("CLAUDE_CODE_SESSION_ID")
-                .status()
-                .unwrap()
-                .success());
-            assert_eq!(std::fs::read_to_string(output).unwrap(), "rejected");
+                .env_remove("CMUX_SOCKET")
+                .env_remove("CMUX_SOCKET_PATH");
+            command.env(
+                if provider == "codex" {
+                    "CODEX_THREAD_ID"
+                } else {
+                    "CLAUDE_CODE_SESSION_ID"
+                },
+                native,
+            );
+            assert!(command.status().unwrap().success());
+            let actor: Actor = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(actor.version, 2);
+            runs.push(actor);
         }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_bare_codex_role_requires_confirmed_installation_and_command() {
-        let mut process = Process {
-            pid: 59852,
-            parent: 10296,
-            executable: r"C:\Users\nitec\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe".into(),
-            command: vec!["codex".into()],
-            generation: vec![],
-        };
-        assert_eq!(provider(&process), Some("codex"));
-        assert!(executor_role(&process, "codex"));
-        for args in [
-            vec!["codex", "--help"],
-            vec!["codex", "--version"],
-            vec!["codex", "exec-server"],
-            vec!["codex", "login"],
-            vec!["codex", "--remote", "ws://localhost:1234"],
-            vec!["codex", "--config"],
-            vec!["codex", "--yolo"],
-        ] {
-            process.command = args.into_iter().map(String::from).collect();
-            assert!(!executor_role(&process, "codex"));
-        }
-        process.command = vec!["codex".into()];
-        for path in [
-            r"C:\unrelated\codex.exe",
-            r"AppData\Local\Programs\OpenAI\Codex\bin\codex.exe",
-            r"C:\Users\nitec\AppData\Local\Programs\OpenAI\Codex\bin\node.exe",
-            r"C:\Users\nitec\.codex\packages\standalone\releases\0.161.0-x86_64-pc-windows-msvc\bin\codex-code-mode-host.exe",
-        ] {
-            process.executable = path.into();
-            assert!(!executor_role(&process, "codex"));
-        }
-    }
-
-    #[test]
-    fn native_context_conflicts_fail_and_other_provider_context_does_not_select_actor() {
-        let ids = NativeIds {
-            codex_thread: Some("thread-a".into()),
-            codex_session: Some("thread-b".into()),
-            claude_session: Some("claude-c".into()),
-        };
-        assert!(ids.for_provider("codex").is_err());
-        assert_eq!(ids.for_provider("claude").unwrap().unwrap(), "claude-c");
-    }
-
-    #[test]
-    fn helper_and_launcher_are_not_the_executor() {
-        let mut process = Process {
-            pid: 1,
-            parent: 0,
-            executable: "/package/bin/codex".into(),
-            command: vec!["codex".into(), "app-server".into()],
-            generation: vec![],
-        };
-        assert_eq!(provider(&process), Some("codex"));
-        assert!(executor_role(&process, "codex"));
-        process.command[1] = "exec-server".into();
-        assert_eq!(provider(&process), Some("codex"));
-        assert!(!executor_role(&process, "codex"));
-        process.executable = "node".into();
-        process.command[1] = "/pkg/@openai/codex/bin/codex.js".into();
-        assert_eq!(provider(&process), Some("codex"));
-        assert!(!executor_role(&process, "codex"));
-        process.command[1] = "/pkg/@anthropic-ai/claude-code/cli.js".into();
-        assert_eq!(provider(&process), Some("claude"));
-        assert!(executor_role(&process, "claude"));
-        process.executable = "/user/.local/share/claude/versions/2.1.2".into();
-        assert_eq!(provider(&process), Some("claude"));
-        process.executable = "/unrelated/versions/2.1.2".into();
-        assert_eq!(provider(&process), None);
-    }
-
-    #[test]
-    fn codex_role_requires_positive_executor_evidence() {
-        let mut process = Process {
-            pid: 1,
-            parent: 0,
-            executable: "codex".into(),
-            command: vec![],
-            generation: vec![],
-        };
-        for args in [
-            vec!["codex", "app-server"],
-            vec!["codex", "exec"],
-            vec!["codex", "e"],
-            vec!["codex", "review"],
-            vec!["codex", "--no-daemon"],
-            vec!["codex", "--no-daemon", "resume", "thread"],
-            vec!["codex", "fork", "thread", "--no-daemon"],
-            vec![
-                "codex",
-                "--config",
-                "model=review",
-                "-C",
-                "/repo",
-                "app-server",
-                "--listen",
-                "stdio://",
-            ],
-        ] {
-            process.command = args.iter().map(|value| (*value).into()).collect();
-            assert!(executor_role(&process, "codex"), "{args:?}");
-        }
-        for args in [
-            vec!["codex"],
-            vec!["codex", "--yolo"],
-            vec!["codex", "resume", "thread"],
-            vec!["codex", "fork", "thread"],
-            vec!["codex", "unknown-subcommand", "--no-daemon"],
-            vec!["codex", "--no-daemon", "unknown-subcommand"],
-            vec!["codex", "--config", "role=app-server"],
-            vec!["codex", "--model", "exec"],
-            vec!["codex", "--model", "--no-daemon"],
-            vec!["codex", "login", "--no-daemon"],
-            vec!["codex", "exec-server", "--no-daemon"],
-            vec!["codex", "--no-daemon", "completion"],
-            vec!["codex", "app-server", "daemon"],
-            vec!["codex", "app-server", "proxy"],
-            vec!["codex", "app-server", "generate-ts"],
-            vec!["codex", "--help", "--no-daemon"],
-            vec!["codex", "exec", "--help"],
-            vec!["codex", "app-server", "--version"],
-            vec!["codex", "--config"],
-        ] {
-            process.command = args.iter().map(|value| (*value).into()).collect();
-            assert!(!executor_role(&process, "codex"), "{args:?}");
-        }
-    }
-
-    #[test]
-    fn native_process_snapshot_is_precise_and_stable() {
-        let a = snapshot(std::process::id()).unwrap();
-        let b = snapshot(std::process::id()).unwrap();
-        assert_eq!(a, b);
-        assert_ne!(a.parent, a.pid);
-        assert!(a.generation.last().unwrap().parse::<u64>().unwrap() > 0);
+        assert_eq!(runs[0], runs[2]);
+        assert_eq!(runs[0].base_id, runs[1].base_id);
+        assert_ne!(runs[0].session_slot, runs[1].session_slot);
+        assert_ne!(runs[0].origin.session_id, runs[1].origin.session_id);
+        assert_ne!(runs[0].base_id, runs[3].base_id);
+        assert_ne!(runs[0].origin.session_id, runs[3].origin.session_id);
     }
 }

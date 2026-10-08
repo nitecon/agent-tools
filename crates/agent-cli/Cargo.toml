@@ -29,7 +29,6 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 blake3 = { workspace = true }
 toml_edit = "0.22"
-sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]

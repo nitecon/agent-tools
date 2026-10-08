@@ -372,7 +372,7 @@ agent-tools tasks builds --repo nitecon/agent-tools
 ```
 
 `agent-tools session` reports the calling provider actor: session UUID, machine
-instance UUID, provider, OS, native session ID and executor generation. Add
+instance UUID, provider, OS, native conversation ID and readable base-num. Add
 `--json` for structured output; optional `membership` describes a separately
 verified CMUX terminal association. `agent-tools session --peers` lists local
 CMUX peers. Actor discovery does not require gateway configuration.
@@ -380,16 +380,18 @@ CMUX peers. Actor discovery does not require gateway configuration.
 Task creation, delegation, claim/release/completion, comments and ranking attach
 the actor automatically. Codex uses its invocation's `CODEX_THREAD_ID` and/or
 `CODEX_SESSION_ID` (they must agree); Claude uses `CLAUDE_CODE_SESSION_ID`.
-The actual provider executor is verified in the command's own ancestry. A
-shared daemon can host multiple actors, distinguished by native session ID.
-Executor replacement changes identity; changing directories or reattaching a
-terminal does not. Missing native context retains legacy machine attribution;
-native context with an unverifiable executor rejects mutations.
+Each native conversation registers automatically in a local OS-temp registry
+and reuses its numeric slot. A shared daemon can host distinct registrations;
+reconnecting or replacing the executor keeps the same conversation UUID.
+Task identity requires no executable path, process ancestry or launch flags.
+Conflicting or ambiguous native metadata rejects rather than selecting a peer.
+Missing native metadata retains existing plain-shell behavior.
 
 The stable UUIDv4 namespace is published atomically at
-`~/.agentic/agent-tools/actor-instance-id`. Actor UUIDv5 derives from the compact
-JSON array `["agent-tools-actor-v1", os, provider, native_session_id,
-executor_generation]`. Repository and terminal context do not enter that hash.
+`~/.agentic/agent-tools/actor-instance-id`. The v2 base UUID derives from canonical
+project path, normalized Git identity, provider and OS using that namespace.
+The conversation UUID derives from the base and native ID; its numeric display
+slot is excluded so temporary registry cleanup cannot alias old ownership.
 See the [exact contract](docs/actor-origin.md) and
 [UUID conformance vectors](docs/actor-origin-vectors.json).
 
@@ -397,8 +399,8 @@ CMUX enrollment is optional and cannot change actor provenance. Installed Codex
 and Claude hooks announce their actual hook session ID and consume dedicated
 CMUX enrollment prompts before notification filtering. Linux discovers the
 current user's runtime socket; Windows uses its SID-based native pipe. This
-Linux CMUX release advertises no automatic macOS bootstrap. Runtime adapters
-support direct provider CLI/hook subprocesses on Linux, macOS and Windows;
+Linux CMUX release advertises no automatic macOS bootstrap. Registration supports
+direct provider CLI/hook calls on Linux, macOS and Windows;
 remote, detached, environment-cleared or long-lived MCP tools without native
 invocation context cannot acquire inferred attribution.
 

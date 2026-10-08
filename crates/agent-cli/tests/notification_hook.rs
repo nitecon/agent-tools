@@ -24,30 +24,7 @@ async fn announce<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S) -> Actor {
 #[tokio::test]
 async fn notification_first_prompt_announces_actual_hook_without_context_output() {
     let directory = tempfile::tempdir().unwrap();
-    let fixture = directory.path().join(if cfg!(windows) {
-        "provider-fixture.exe"
-    } else {
-        "provider-fixture"
-    });
-    assert!(std::process::Command::new("rustc")
-        .arg("--edition=2021")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/provider_executor.rs"
-        ))
-        .arg("-o")
-        .arg(&fixture)
-        .status()
-        .unwrap()
-        .success());
-
     for provider in ["codex", "claude"] {
-        let executor = directory.path().join(if cfg!(windows) {
-            format!("{provider}.exe")
-        } else {
-            provider.to_owned()
-        });
-        std::fs::copy(&fixture, &executor).unwrap();
         #[cfg(unix)]
         let (endpoint, server) = {
             let endpoint = directory.path().join(format!("{provider}.sock"));
@@ -73,15 +50,10 @@ async fn notification_first_prompt_announces_actual_hook_without_context_output(
             (endpoint, server)
         };
         let native = format!("notification-first-{provider}");
-        let mut command = tokio::process::Command::new(&executor);
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_agent-tools"));
         command
-            .arg("app-server")
+            .args(["hook", "user-prompt-submit", "--agent", provider])
             .current_dir(directory.path())
-            .env(
-                "AGENT_TOOLS_RUNTIME_FIXTURE_HOOK",
-                env!("CARGO_BIN_EXE_agent-tools"),
-            )
-            .env("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER", provider)
             .env("HOME", directory.path())
             .env("USERPROFILE", directory.path())
             .env("CMUX_SOCKET", endpoint)
@@ -102,7 +74,6 @@ async fn notification_first_prompt_announces_actual_hook_without_context_output(
             command.env("CLAUDE_CODE_SESSION_ID", &native);
         }
         let mut child = command.spawn().unwrap();
-        let executor_pid = child.id().unwrap();
         let payload = json!({
             "session_id":native,
             "prompt":"<Start Agent Gateway Message Injection>\nDelegated task event\n</Stop AgentGateway Message injection>"
@@ -129,11 +100,8 @@ async fn notification_first_prompt_announces_actual_hook_without_context_output(
         assert!(output.stderr.is_empty(), "notification must stay silent");
         assert_eq!(actor.provider_session_id, native);
         assert_eq!(actor.origin.provider, provider);
-        let pid_index = if cfg!(target_os = "linux") { 2 } else { 1 };
-        assert_eq!(
-            actor.executor_generation[pid_index],
-            executor_pid.to_string()
-        );
+        assert_eq!(actor.version, 2);
+        assert!(actor.session_slot > 0);
         assert_eq!(
             actor,
             actor::derive(
@@ -141,7 +109,8 @@ async fn notification_first_prompt_announces_actual_hook_without_context_output(
                 std::env::consts::OS,
                 provider,
                 &native,
-                actor.executor_generation.clone(),
+                actor.base_id.parse().unwrap(),
+                actor.session_slot,
             )
             .unwrap()
         );

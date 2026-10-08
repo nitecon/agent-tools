@@ -153,12 +153,12 @@ agent-tools tasks comment <id> "<note>"  # append a note
 Use `agent-tools session --json` from the model's actual tool to inspect its
 native provider actor and optional CMUX membership. `agent-tools session --peers`
 inspects local CMUX peers. Task mutations attach actor identity automatically.
-The native provider session and verified executor generation distinguish peers
-under a shared daemon; directory changes and terminal reattachment keep the same
-actor. CMUX membership never selects or replaces that identity. No launch flags,
-configuration edits or model-copied UUIDs are needed. Native context with an
-unverifiable executor blocks mutations; ordinary tools with no native provider
-context retain legacy attribution. Do not infer a worker from its daemon creator.
+Native conversations register automatically with a canonical project/Git/provider/
+OS base and local numeric slot. Peers stay distinct under a shared daemon;
+reconnects and terminal reattachment reuse the registration. CMUX membership and
+executor paths/flags never select task identity. Ambiguous native metadata cannot
+select a peer. No configuration edits or copied UUIDs are needed; calls without
+native metadata retain existing plain-shell behavior.
 
 Read platform requirements and ownership, then successfully claim a task before
 working. Respect peer claims even when machine author names match. Agents choose
@@ -312,12 +312,12 @@ agent-tools tasks comment <id> "<note>"  # append a note
 Use `agent-tools session --json` from the model's actual tool to inspect its
 native provider actor and optional CMUX membership. `agent-tools session --peers`
 inspects local CMUX peers. Task mutations attach actor identity automatically.
-The native provider session and verified executor generation distinguish peers
-under a shared daemon; directory changes and terminal reattachment keep the same
-actor. CMUX membership never selects or replaces that identity. No launch flags,
-configuration edits or model-copied UUIDs are needed. Native context with an
-unverifiable executor blocks mutations; ordinary tools with no native provider
-context retain legacy attribution. Do not infer a worker from its daemon creator.
+Native conversations register automatically with a canonical project/Git/provider/
+OS base and local numeric slot. Peers stay distinct under a shared daemon;
+reconnects and terminal reattachment reuse the registration. CMUX membership and
+executor paths/flags never select task identity. Ambiguous native metadata cannot
+select a peer. No configuration edits or copied UUIDs are needed; calls without
+native metadata retain existing plain-shell behavior.
 
 Read platform requirements and ownership, then successfully claim a task before
 working. Respect peer claims even when machine author names match. Agents choose

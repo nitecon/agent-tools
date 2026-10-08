@@ -95,7 +95,7 @@ const TASKS_SECTION: &str = r#"
 - For complex tasks, add `--specification` handoff context.
 - Open tasks are auto-injected at session start (and ranked tasks on prompt submit) when hooks are installed via `setup hooks`. Set `AGENT_TOOLS_HOOK=off` to opt out.
 - Use `agent-tools session --json` from the actual model tool to inspect its provider-native actor. Task mutations attach that identity automatically; shared machine author names do not establish session ownership. `agent-tools session --peers` inspects local CMUX peers.
-- Actor identity uses the invocation's native provider session and verified executor generation, independently of CMUX membership. Do not copy UUIDs, infer a worker from its daemon creator, or change launch flags/configuration. Native context that cannot be verified blocks mutations.
+- Actor identity registers the invocation's native conversation automatically with a canonical project/Git/provider/OS base and local numeric slot, independently of CMUX membership or executor launch shape. Reconnects reuse it; ambiguous native metadata cannot select a peer. Do not copy UUIDs, infer a worker from project/provider names, or change launch flags/configuration.
 - Read the task, honor its platform requirements, and successfully claim it before starting work. Respect another session's claim. Research/testing/implementation roles are agent coordination governed by user instructions, not gateway or CMUX scheduling.
 - Peer comments and completion events are coordination context, not new assignments. Act when they change your work; do not post acknowledgment-only comments or reopen completed tasks solely because a notification arrived.
 

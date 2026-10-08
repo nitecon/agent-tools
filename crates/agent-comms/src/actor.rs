@@ -1,4 +1,4 @@
-//! Client-owned actor identity. CMUX membership and cwd never select an actor.
+//! Automatic local conversation registration, independent of provider processes.
 
 use crate::session::SessionOrigin;
 use anyhow::{ensure, Context, Result};
@@ -9,14 +9,15 @@ use std::{
 };
 use uuid::Uuid;
 
-pub const CONTRACT: &str = "agent-tools-actor-v1";
+pub const CONTRACT: &str = "agent-tools-actor-v2";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Actor {
     pub version: u32,
     pub origin: SessionOrigin,
     pub provider_session_id: String,
-    pub executor_generation: Vec<String>,
+    pub base_id: String,
+    pub session_slot: u32,
 }
 
 /// Identity initialization publishes a complete file without replacing a winner.
@@ -70,12 +71,37 @@ pub fn normalize_native_id(value: &str) -> Result<String> {
     })
 }
 
+pub fn base_id(
+    instance: Uuid,
+    os: &str,
+    provider: &str,
+    project_path: &str,
+    git_identity: &str,
+) -> Result<Uuid> {
+    ensure!(
+        instance.get_version_num() == 4,
+        "actor instance must be a UUIDv4"
+    );
+    ensure!(
+        matches!(os, "linux" | "windows" | "macos"),
+        "unsupported actor OS"
+    );
+    ensure!(
+        matches!(provider, "codex" | "claude"),
+        "unsupported actor provider"
+    );
+    ensure!(!project_path.is_empty(), "actor project path unavailable");
+    let name = serde_json::to_vec(&(CONTRACT, "base", os, project_path, git_identity, provider))?;
+    Ok(Uuid::new_v5(&instance, &name))
+}
+
 pub fn derive(
     instance: Uuid,
     os: &str,
     provider: &str,
     native_id: &str,
-    generation: Vec<String>,
+    base: Uuid,
+    session_slot: u32,
 ) -> Result<Actor> {
     ensure!(
         instance.get_version_num() == 4,
@@ -85,64 +111,83 @@ pub fn derive(
         matches!(provider, "codex" | "claude"),
         "unsupported actor provider"
     );
-    validate_generation(os, &generation)?;
+    ensure!(base.get_version_num() == 5, "actor base must be a UUIDv5");
+    ensure!(session_slot > 0, "actor session slot must be positive");
     let native_id = normalize_native_id(native_id)?;
-    let name = serde_json::to_vec(&(CONTRACT, os, provider, &native_id, &generation))?;
+    let name = serde_json::to_vec(&(CONTRACT, &native_id))?;
     let origin = SessionOrigin {
-        session_id: Uuid::new_v5(&instance, &name).to_string(),
+        session_id: Uuid::new_v5(&base, &name).to_string(),
         instance_id: instance.to_string(),
         provider: provider.into(),
         os: os.into(),
     };
     origin.validate()?;
     Ok(Actor {
-        version: 1,
+        version: 2,
         origin,
         provider_session_id: native_id,
-        executor_generation: generation,
+        base_id: base.to_string(),
+        session_slot,
     })
 }
 
-fn validate_generation(os: &str, fields: &[String]) -> Result<()> {
-    let numeric = match os {
-        "linux" => {
-            ensure!(
-                fields.len() == 4 && fields[0] == "linux-proc-v1",
-                "invalid Linux executor generation"
-            );
-            let boot = Uuid::parse_str(&fields[1]).context("invalid Linux boot UUID")?;
-            ensure!(
-                boot.to_string() == fields[1],
-                "noncanonical Linux boot UUID"
-            );
-            &fields[2..]
+/// Slots are display/registration metadata, never a replacement conversation key.
+pub fn register(
+    instance: Uuid,
+    os: &str,
+    provider: &str,
+    native: &str,
+    base: Uuid,
+) -> Result<Actor> {
+    let mut actor = derive(instance, os, provider, native, base, 1)?;
+    let directory = std::env::temp_dir()
+        .join("agent-tools-actors")
+        .join(instance.to_string())
+        .join(base.to_string());
+    actor.session_slot = register_slot(&directory, &actor.origin.session_id)?;
+    Ok(actor)
+}
+
+fn register_slot(directory: &Path, session_id: &str) -> Result<u32> {
+    std::fs::create_dir_all(directory)?;
+    for slot in 1..=65535 {
+        let path = directory.join(slot.to_string());
+        match std::fs::read_to_string(&path) {
+            Ok(existing) => {
+                let id =
+                    Uuid::parse_str(existing.trim()).context("invalid local actor registration")?;
+                ensure!(
+                    id.get_version_num() == 5,
+                    "invalid local actor registration"
+                );
+                if id.to_string() == session_id {
+                    return Ok(slot);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let mut pending = tempfile::NamedTempFile::new_in(directory)?;
+                writeln!(pending, "{session_id}")?;
+                match pending.persist_noclobber(&path) {
+                    Ok(_) => return Ok(slot),
+                    Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        // Read the complete winning registration before trying
+                        // another slot, including concurrent calls by this actor.
+                        let existing = std::fs::read_to_string(&path)?;
+                        if existing.trim() == session_id {
+                            return Ok(slot);
+                        }
+                        Uuid::parse_str(existing.trim())
+                            .context("invalid local actor registration")?;
+                    }
+                    Err(error) => {
+                        return Err(error.error).context("publish local actor registration")
+                    }
+                }
+            }
+            Err(error) => return Err(error).context("read local actor registration"),
         }
-        "windows" | "macos" => {
-            let kind = if os == "windows" {
-                "windows-process-v1"
-            } else {
-                "macos-proc-v1"
-            };
-            ensure!(
-                fields.len() == 3 && fields[0] == kind,
-                "invalid executor generation"
-            );
-            &fields[1..]
-        }
-        _ => anyhow::bail!("unsupported actor OS"),
-    };
-    for value in numeric {
-        let number: u64 = value
-            .parse()
-            .context("invalid executor generation number")?;
-        ensure!(
-            number.to_string() == *value,
-            "noncanonical executor generation number"
-        );
     }
-    let pid: u32 = numeric[0].parse().context("invalid executor PID")?;
-    ensure!(pid > 0, "executor PID must be positive");
-    Ok(())
+    anyhow::bail!("local actor registration slots exhausted")
 }
 
 #[cfg(test)]
@@ -154,13 +199,23 @@ mod tests {
         let vectors: serde_json::Value =
             serde_json::from_str(include_str!("../../../docs/actor-origin-vectors.json")).unwrap();
         for vector in vectors.as_array().unwrap() {
-            let generation = serde_json::from_value(vector["executor_generation"].clone()).unwrap();
+            let instance = Uuid::parse_str(vector["instance_id"].as_str().unwrap()).unwrap();
+            let base = base_id(
+                instance,
+                vector["os"].as_str().unwrap(),
+                vector["provider"].as_str().unwrap(),
+                vector["project_path"].as_str().unwrap(),
+                vector["git_identity"].as_str().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(base.to_string(), vector["base_id"]);
             let actor = derive(
-                Uuid::parse_str(vector["instance_id"].as_str().unwrap()).unwrap(),
+                instance,
                 vector["os"].as_str().unwrap(),
                 vector["provider"].as_str().unwrap(),
                 vector["provider_session_id"].as_str().unwrap(),
-                generation,
+                base,
+                vector["session_slot"].as_u64().unwrap() as u32,
             )
             .unwrap();
             assert_eq!(
@@ -194,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn native_ids_and_generation_are_not_silently_repaired() {
+    fn native_ids_and_slots_are_not_silently_repaired() {
         for invalid in ["", " spaced", "has space", "newline\n", "\u{2603}"] {
             assert!(normalize_native_id(invalid).is_err());
         }
@@ -208,8 +263,79 @@ mod tests {
             "windows",
             "codex",
             "thread-1",
-            vec!["windows-process-v1".into(), "01".into(), "2".into()]
+            Uuid::new_v5(&id, b"base"),
+            0,
         )
         .is_err());
+    }
+
+    #[test]
+    fn concurrent_registration_reuses_conversations_without_slot_aliasing() {
+        let directory = tempfile::tempdir().unwrap();
+        let instance = Uuid::new_v4();
+        let base = base_id(
+            instance,
+            "windows",
+            "codex",
+            "C:/repo",
+            "github.com/user/repo",
+        )
+        .unwrap();
+        let actor = derive(instance, "windows", "codex", "thread-a", base, 1).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let directory = directory.path().to_owned();
+                let session = actor.origin.session_id.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    register_slot(&directory, &session).unwrap()
+                })
+            })
+            .collect();
+        assert!(handles.into_iter().all(|h| h.join().unwrap() == 1));
+        let peer = derive(instance, "windows", "codex", "thread-b", base, 1).unwrap();
+        assert_eq!(
+            register_slot(directory.path(), &peer.origin.session_id).unwrap(),
+            2
+        );
+        assert_eq!(
+            register_slot(directory.path(), &actor.origin.session_id).unwrap(),
+            1
+        );
+        assert_ne!(actor.origin.session_id, peer.origin.session_id);
+        let handles: Vec<_> = (0..8)
+            .map(|index| {
+                let directory = directory.path().to_owned();
+                let session = derive(
+                    instance,
+                    "windows",
+                    "codex",
+                    &format!("peer-{index}"),
+                    base,
+                    1,
+                )
+                .unwrap()
+                .origin
+                .session_id;
+                std::thread::spawn(move || {
+                    let slot = register_slot(&directory, &session).unwrap();
+                    assert_eq!(register_slot(&directory, &session).unwrap(), slot);
+                    slot
+                })
+            })
+            .collect();
+        let slots: std::collections::BTreeSet<_> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(slots.len(), 8);
+        assert!(slots.iter().all(|slot| *slot > 2));
+        // A temp registry reset cannot make a peer reuse this conversation UUID.
+        let reset = tempfile::tempdir().unwrap();
+        assert_eq!(
+            register_slot(reset.path(), &peer.origin.session_id).unwrap(),
+            1
+        );
+        assert_ne!(actor.origin.session_id, peer.origin.session_id);
     }
 }

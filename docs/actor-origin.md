@@ -1,112 +1,112 @@
 # Provider actor origin
 
-`agent-tools-actor-v1` identifies the actual provider invocation independently
-of CMUX terminal membership. It is staged on `main`, pending integrated release.
+`agent-tools-actor-v2` registers the calling native conversation locally once
+and reuses that registration for ordinary task calls and provider hooks.
+Task identity does not require provider process ancestry, executable paths,
+launch flags, or CMUX membership. Terminal delivery generation is CMUX-owned.
 
 ## UUID inputs
 
-`instance_id` is a random UUIDv4 published atomically once at
-`~/.agentic/agent-tools/actor-instance-id`. Concurrent first callers read the
-same complete value. Corrupt or unreadable identities reject attribution.
-This namespace is separate from the display agent ID and CMUX transport ID.
+The existing persisted random UUIDv4 at
+`~/.agentic/agent-tools/actor-instance-id` is the machine-local namespace/salt.
+It remains separate from the display agent ID and CMUX transport identity.
+Concurrent first callers atomically publish one complete value. No new user
+configuration or manual identity input is required.
 
-`session_id` is RFC UUIDv5 with that instance UUID as namespace and the UTF-8
-bytes of this compact JSON array as its name:
+`base_id` is RFC UUIDv5 with that instance UUID as namespace and UTF-8 compact
+JSON array name bytes, in exactly this order:
 
 ```json
-["agent-tools-actor-v1", "os", "provider", "native_session_id", ["executor_generation"]]
+["agent-tools-actor-v2","base","os","canonical_project_path","git_identity","provider"]
 ```
 
-The displayed spaces above are explanatory; hashed JSON has no insignificant
-whitespace or trailing newline. Fields retain exactly this order. UUID strings
-are lowercase canonical hyphenated text. Ordinary JSON string escaping applies.
+The project path is the canonical Git top-level directory, or canonical current
+directory outside Git. Linux/macOS preserve its exact UTF-8 path. Windows
+replaces backslashes with `/`, removes a leading `//?/` extended path prefix,
+and folds ASCII letters to lowercase. Git identity is the normalized `origin`
+repository URL: remove HTTP(S)/SSH scheme and leading user, normalize SSH
+shorthand colon to slash, remove trailing slash and a final `.git` suffix.
+An absent Git remote contributes the empty string. Provider is `codex` or
+`claude`; OS is `linux`, `windows` or `macos`.
 
-| Field | Value |
-| --- | --- |
-| OS | `linux`, `macos`, or `windows` |
-| Provider | `codex` or `claude` |
-| Native session | 1–256 printable ASCII bytes with no whitespace; UUID IDs normalize to canonical lowercase, other IDs remain byte-for-byte |
-| Linux executor | `["linux-proc-v1", boot_id, pid, start_ticks]`, raw `/proc/PID/stat` field 22 |
-| Windows executor | `["windows-process-v1", pid, creation_FILETIME]`, raw `GetProcessTimes` u64 |
-| macOS executor | `["macos-proc-v1", pid, start_microseconds]`, `proc_bsdinfo` seconds × 1,000,000 + microseconds |
+`origin.session_id` is RFC UUIDv5 with `base_id` as namespace and UTF-8 compact
+JSON array name bytes:
 
-Numeric generation fields are decimal strings without leading zeroes. Linux
-boot ID is the canonical UUID from `/proc/sys/kernel/random/boot_id`. Repository,
-cwd, terminal, socket and CMUX instance never enter the actor hash. The
-[reference vectors](actor-origin-vectors.json) include exact names and UTF-8 bytes.
+```json
+["agent-tools-actor-v2","normalized_native_conversation_id"]
+```
 
-## Runtime verification
+JSON has no insignificant whitespace, BOM or trailing newline. UUIDs are
+lowercase canonical hyphenated strings. Native IDs contain 1–256 printable
+ASCII bytes without whitespace; UUID IDs normalize to lowercase canonical
+form, other IDs remain byte-for-byte. Ordinary JSON string escaping applies.
+The [reference vectors](actor-origin-vectors.json) include both exact JSON names.
+
+The gateway origin retains exactly `session_id`, `instance_id`, `provider` and
+`os`. A different project, Git identity, provider, OS or machine namespace
+changes the base. A different native conversation changes its session UUID.
+Executor restart/reconnection, terminal reattachment and slot renumbering do
+not change a conversation UUID. V2 changes identities once from generation-based
+v1; release or finish old-origin task claims legitimately before changing the
+installed client. There is no fallback that impersonates an older owner.
+
+## Automatic registration
 
 Codex direct tools use their own `CODEX_THREAD_ID` and/or `CODEX_SESSION_ID`;
-both must agree when present. Claude uses `CLAUDE_CODE_SESSION_ID`. Hooks use
-the installed provider and payload `session_id`, checked against any present
-same-provider environment. Other-provider environment cannot select an executor.
+both must agree when present. Claude uses `CLAUDE_CODE_SESSION_ID`. Direct
+calls with both providers' native contexts reject as ambiguous. Provider hooks
+use their installed provider and payload `session_id`, checked against present
+same-provider native IDs. No project/provider lookup selects a peer conversation.
+Calls without native conversation metadata retain existing plain-shell behavior.
 
-The CLI inspects only its own bounded ancestry (64 processes, two seconds),
-recognizes native provider executables or Claude's official Node entrypoint,
-and rechecks executable, command, parent and precise creation generation.
-Codex requires positive `app-server`, `exec`/`e`, `review`, bare `--no-daemon`,
-or `resume`/`fork` with `--no-daemon` execution evidence. Windows additionally
-accepts the confirmed bare native `codex` launch (no arguments) from an absolute
-path ending in `AppData/Local/Programs/OpenAI/Codex/bin/codex.exe`, compared
-case-insensitively. Codex 0.161 can run an embedded executor in this launch;
-the installation path and bare command are both required. PowerShell and
-`codex-code-mode-host.exe` descendants retain the Codex process generation;
-the host itself supplies neither provider identity nor native session identity.
-Other subcommands
-reject even with `--no-daemon`; help/version and missing option values reject
-too. App-server schema/proxy/daemon subcommands are rejected. A recognized daemon-connected frontend or official
-Codex Node launcher stops verification; the CLI cannot cross that boundary to
-select an older ancestor after backend exit. Normal shared-daemon launches
-resolve the actual `app-server` automatically; no user flags are required.
-Claude native versions under `.local/share/claude/versions` are recognized too.
-No ancestor supplies a thread ID or surface ID. Dead, replaced, reparented or
-unverifiable runtime context fails closed when native identity is present. No
-native provider context retains legacy machine attribution.
+The local registry is under the native OS temporary directory at
+`agent-tools-actors/<instance_id>/<base_id>/`. Each positive numeric slot file
+contains its conversation session UUID. Atomic no-clobber publication assigns
+the first available slot, including concurrent first callers; later calls with
+the same UUID reuse it. Slots are limited to 1–65535. The readable local identity
+is `<base_id>-<session_slot>`; it is display/registration metadata, not a gateway
+credential. Deleting temporary files may renumber slots but cannot make another
+native conversation reuse an earlier gateway UUID. Corrupt registration files
+reject rather than selecting a peer. No daemon, service or assignment policy
+is involved in local registration.
 
-Same native conversation and live executor retain one actor across terminal
-reattachment. Replacing the executor or starting another native conversation
-changes the actor. Supported paths are direct provider CLI and hook subprocesses;
-remote, detached or long-lived MCP paths without per-invocation native context
-are not assigned guessed identity. Platform adapters require platform CI.
-
-The Windows launch is covered by native CI process fixtures; live Windows
-hardware acceptance remains a separate check.
+SessionStart and UserPromptSubmit hooks register/announce automatically.
+Ordinary calls reuse the same registration and announce it when CMUX is
+available. CMUX absence, an older API or unbound membership cannot revoke task
+identity. Native platform CI covers registration concurrency, separate same-
+provider conversations, reconnect, temp reset, hooks and task origin headers;
+live Windows hardware acceptance remains separate.
 
 ## Optional CMUX membership
 
-Gateway mutations keep exactly the four origin fields `session_id`,
-`instance_id`, `provider`, and `os`. CMUX RPC absence or rejection never changes
-a correctly derived actor. CMUX owns peer validation and terminal membership.
+`gateway.session.announce` accepts `{version:2, origin, provider_session_id,
+base_id, session_slot, repository?, enrollment_token?}`.
+`gateway.session.resolve` uses the same fields without an enrollment token.
+There is no executor generation in v2 SDK registration. Success echoes origin,
+native conversation ID, base and slot with `binding_state` (`unbound` or `bound`).
+Bound context adds `surface_id`, `workspace_id` and `recipient_session_id`.
+Mismatched echoes reject membership without changing gateway provenance.
+CMUX must associate the exact native conversation with a unique live terminal;
+project/provider names alone never establish binding. CMUX independently retains
+its process/TUI generation fences for stale terminal delivery.
 
-`gateway.session.announce` accepts `{version:1, origin, provider_session_id,
-executor_generation, repository?, enrollment_token?}`. A call without a token
-requests registration/capability only. `gateway.session.resolve` uses the same
-fields without a token. Success echoes origin, native ID and generation with
-`binding_state` (`unbound` or `bound`); bound context adds `surface_id`,
-`workspace_id`, and `recipient_session_id`. Mismatched echoes reject membership.
-CMUX enables bootstrap only after observing an actual `agent-tools hook`
-SessionStart/UserPromptSubmit process through its kernel peer. An ordinary CLI
-announcement cannot prove installed, enabled hooks or grant enrollment readiness.
-UserPromptSubmit also makes this private announcement when its first prompt is a
-gateway or harness notification, then returns without any context output.
-
-The existing UserPromptSubmit hook consumes only a whole dedicated prompt:
+Existing provider hooks consume only a whole dedicated enrollment prompt:
 
 ```text
 <cmux-session-enrollment>{"version":1,"enrollment_token":"64 lowercase hex characters"}</cmux-session-enrollment>
 ```
 
-It derives identity from its actual hook session, announces before notification
-filtering, and exits successfully with a blocking decision even if enrollment
-fails. Normal user prompts remain fail-soft. Claude additionally suppresses the
-original prompt in its block message. Provider transcript/history may retain the
-prompt; the client never logs, caches, or includes its bearer token in context.
-CMUX observes binding success and owns safe-idle retries and readiness gating.
+This envelope version belongs to enrollment, separately from actor registration.
+The hook uses its own registration, announces before notification filtering,
+and exits with a blocking decision even if enrollment fails. Normal user prompts
+remain fail-soft. Claude suppresses the original prompt in its block message.
+The client never logs, caches or puts a bearer token in model context. Registration
+and ordinary task calls require no enrollment token.
 
-Linux discovery uses an absolute, private current-user `XDG_RUNTIME_DIR`,
-otherwise `/run/user/<realuid>`, followed by `cmux/cmux.sock` and an owner-only
-bounded `cmux/last-socket-path` marker. Inherited `CMUX_SOCKET`/`CMUX_SOCKET_PATH`
-are endpoint hints only. Windows uses `\\.\pipe\cmux-<current-user-SID>-control`.
-This Linux CMUX release advertises no macOS bootstrap endpoint. Native Unix and
-Windows transport have a two-second overall deadline and 64 KiB response bound.
+Linux discovery uses an absolute private current-user `XDG_RUNTIME_DIR`, otherwise
+`/run/user/<realuid>`, followed by `cmux/cmux.sock`, with a bounded owner-only
+`cmux/last-socket-path` marker. Inherited `CMUX_SOCKET`/`CMUX_SOCKET_PATH` are
+endpoint hints only. Windows uses `\\.\pipe\cmux-<current-user-SID>-control`.
+Native transports have a two-second overall deadline and 64 KiB response bound.
+Matching CMUX v2 integration must be validated and distributable before the SDK
+public rollout; old clients can use existing CMUX v1 support during that rollout.

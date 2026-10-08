@@ -678,7 +678,7 @@ fn actor_context(agent: &str, payload: &Value) -> Option<String> {
             None,
         ));
     }
-    Some(format!("Calling actor: session={} instance={} provider={} os={}. Task mutations attach this identity automatically; CMUX membership is separate.", actor.origin.session_id, actor.origin.instance_id, actor.origin.provider, actor.origin.os))
+    Some(format!("Calling actor: {}-{} session={} instance={} provider={} os={}. Ordinary task mutations reuse this registration automatically; CMUX membership is separate.", actor.base_id, actor.session_slot, actor.origin.session_id, actor.origin.instance_id, actor.origin.provider, actor.origin.os))
 }
 
 fn consume_enrollment(agent: &str, payload: &Value, token: Result<String>) {

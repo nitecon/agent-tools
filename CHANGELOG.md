@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.21.0 (prepared; coordinated CMUX v2 rollout pending)
+
+- Register native Codex/Claude conversations automatically from canonical
+  project path, Git identity, provider and OS with the existing machine salt.
+  Ordinary task identity no longer depends on executor ancestry, paths or flags.
+- Reuse a local numeric slot in the OS temporary registry and expose base-num.
+  Distinct native conversations retain distinct UUID origins, including after
+  temp cleanup; reconnects and executor restarts retain the same origin.
+- Keep gateway origin/owner-origin fields and task mutations independent of
+  CMUX membership. Add v2 registration payload/echo with base and slot; CMUX
+  retains its own terminal generation fences. Legitimately close/release v1
+  claims before switching installed clients.
+- Add platform Actions fixtures for concurrent registration, conversation
+  isolation, reconnect, project-root stability, ordinary PowerShell calls,
+  task headers and notification-first hooks. Live Windows acceptance is separate.
+
+Publication is held until matching CMUX v2 integration is validated and
+distributable. Existing CMUX v1 client support can remain during the rollout.
+
 ## v1.20.1
 
 - Recognize the confirmed Windows Codex 0.161 bare native launch from the

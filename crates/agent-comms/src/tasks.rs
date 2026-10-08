@@ -470,7 +470,8 @@ mod tests {
             row["os"].as_str().unwrap(),
             row["provider"].as_str().unwrap(),
             row["provider_session_id"].as_str().unwrap(),
-            serde_json::from_value(row["executor_generation"].clone()).unwrap(),
+            uuid::Uuid::parse_str(row["base_id"].as_str().unwrap()).unwrap(),
+            row["session_slot"].as_u64().unwrap() as u32,
         )
         .unwrap()
         .origin;
