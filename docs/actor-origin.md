@@ -108,5 +108,6 @@ Linux discovery uses an absolute private current-user `XDG_RUNTIME_DIR`, otherwi
 `cmux/last-socket-path` marker. Inherited `CMUX_SOCKET`/`CMUX_SOCKET_PATH` are
 endpoint hints only. Windows uses `\\.\pipe\cmux-<current-user-SID>-control`.
 Native transports have a two-second overall deadline and 64 KiB response bound.
-Matching CMUX v2 integration must be validated and distributable before the SDK
-public rollout; old clients can use existing CMUX v1 support during that rollout.
+SDK v1.21.0 is released with matching validated CMUX v0.6.8 integration. For paired
+coordination, update and restart CMUX first, then update the SDK and restart the
+provider; old clients can use existing CMUX v1 support during that rollout.

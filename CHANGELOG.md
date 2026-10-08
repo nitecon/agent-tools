@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.21.0 (prepared; coordinated CMUX v2 rollout pending)
+## v1.21.0
 
 - Register native Codex/Claude conversations automatically from canonical
   project path, Git identity, provider and OS with the existing machine salt.
@@ -16,8 +16,9 @@
   isolation, reconnect, project-root stability, ordinary PowerShell calls,
   task headers and notification-first hooks. Live Windows acceptance is separate.
 
-Publication is held until matching CMUX v2 integration is validated and
-distributable. Existing CMUX v1 client support can remain during the rollout.
+Released with matching validated CMUX v0.6.8 integration. For paired coordination,
+update and restart CMUX first, then update the SDK and restart the provider.
+Existing CMUX v1 client support remains available during the rollout.
 
 ## v1.20.1
 
