@@ -174,6 +174,21 @@ fn executor_role(process: &Process, provider: &str) -> bool {
         return false;
     }
     let args = &process.command;
+    // The installed Windows native TUI can own an embedded executor without
+    // --no-daemon. Limit this confirmed launch shape to its installation path;
+    // a provider basename alone must not turn a frontend into an executor.
+    #[cfg(windows)]
+    if args.len() == 1
+        && process.executable.is_absolute()
+        && process
+            .executable
+            .to_string_lossy()
+            .replace('\\', "/")
+            .to_ascii_lowercase()
+            .ends_with("/appdata/local/programs/openai/codex/bin/codex.exe")
+    {
+        return true;
+    }
     if args
         .iter()
         .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V"))
@@ -609,6 +624,145 @@ mod tests {
                 .unwrap();
             assert!(status.success());
             assert_eq!(std::fs::read_to_string(output).unwrap(), "rejected");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_installed_bare_codex_shell_and_code_mode_host_derive_actor() {
+        let directory = tempfile::tempdir().unwrap();
+        let executor = directory
+            .path()
+            .join("Users/nitec/AppData/Local/Programs/OpenAI/Codex/bin/codex.exe");
+        let host = directory.path().join(
+            "Users/nitec/.codex/packages/standalone/releases/0.161.0-x86_64-pc-windows-msvc/bin/codex-code-mode-host.exe",
+        );
+        std::fs::create_dir_all(executor.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(host.parent().unwrap()).unwrap();
+        assert!(std::process::Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/provider_executor.rs"
+            ))
+            .arg("-o")
+            .arg(&executor)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::copy(&executor, &host).unwrap();
+
+        let worker = std::env::current_exe().unwrap();
+        let mut runs: Vec<Vec<Actor>> = Vec::new();
+        for via_host in [false, true] {
+            let output = directory.path().join(format!("windows-{via_host}.json"));
+            // Match the reported bare `codex` command with a resolved native
+            // executable, then a real PowerShell child, optionally via the host.
+            let mut command = std::process::Command::new("codex");
+            command
+                .current_dir(executor.parent().unwrap())
+                .env(
+                    "PATH",
+                    std::env::join_paths(
+                        std::iter::once(executor.parent().unwrap().to_path_buf())
+                            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+                    )
+                    .unwrap(),
+                )
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "executor")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER", "codex")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &output)
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_WORKER", &worker)
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_SHELL", "powershell.exe");
+            if via_host {
+                command
+                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY", &host)
+                    .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY_ARG", "relay");
+            }
+            let mut child = command.spawn().unwrap();
+            let pid = child.id();
+            assert!(child.wait().unwrap().success());
+            let actors: Vec<Actor> =
+                serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(actors.len(), 2);
+            for actor in &actors {
+                assert_eq!(actor.origin.os, "windows");
+                assert_eq!(actor.executor_generation[0], "windows-process-v1");
+                assert_eq!(actor.executor_generation[1], pid.to_string());
+            }
+            assert_eq!(actors[0].executor_generation, actors[1].executor_generation);
+            assert_ne!(actors[0].origin.session_id, actors[1].origin.session_id);
+            runs.push(actors);
+        }
+        assert_ne!(
+            runs[0][0].executor_generation,
+            runs[1][0].executor_generation
+        );
+        assert_ne!(runs[0][0].origin.session_id, runs[1][0].origin.session_id);
+
+        // An installed utility or an unrelated bare codex.exe beneath a live
+        // app-server must reject instead of selecting that older executor.
+        let unrelated = directory.path().join("unrelated/codex.exe");
+        std::fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+        std::fs::copy(&executor, &unrelated).unwrap();
+        for (index, (boundary, argument)) in [(&executor, "exec-server"), (&unrelated, "")]
+            .into_iter()
+            .enumerate()
+        {
+            let output = directory.path().join(format!("windows-rejected-{index}"));
+            assert!(std::process::Command::new(&executor)
+                .arg("app-server")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_MODE", "worker")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_PROVIDER", "codex")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_OUTPUT", &output)
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_WORKER", &worker)
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_SHELL", "powershell.exe")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_REJECTED", "1")
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY", boundary)
+                .env("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY_ARG", argument)
+                .env("CODEX_THREAD_ID", "fixture-stale-thread")
+                .env("CODEX_SESSION_ID", "fixture-stale-thread")
+                .env_remove("CLAUDE_CODE_SESSION_ID")
+                .status()
+                .unwrap()
+                .success());
+            assert_eq!(std::fs::read_to_string(output).unwrap(), "rejected");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_bare_codex_role_requires_confirmed_installation_and_command() {
+        let mut process = Process {
+            pid: 59852,
+            parent: 10296,
+            executable: r"C:\Users\nitec\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe".into(),
+            command: vec!["codex".into()],
+            generation: vec![],
+        };
+        assert_eq!(provider(&process), Some("codex"));
+        assert!(executor_role(&process, "codex"));
+        for args in [
+            vec!["codex", "--help"],
+            vec!["codex", "--version"],
+            vec!["codex", "exec-server"],
+            vec!["codex", "login"],
+            vec!["codex", "--remote", "ws://localhost:1234"],
+            vec!["codex", "--config"],
+            vec!["codex", "--yolo"],
+        ] {
+            process.command = args.into_iter().map(String::from).collect();
+            assert!(!executor_role(&process, "codex"));
+        }
+        process.command = vec!["codex".into()];
+        for path in [
+            r"C:\unrelated\codex.exe",
+            r"AppData\Local\Programs\OpenAI\Codex\bin\codex.exe",
+            r"C:\Users\nitec\AppData\Local\Programs\OpenAI\Codex\bin\node.exe",
+            r"C:\Users\nitec\.codex\packages\standalone\releases\0.161.0-x86_64-pc-windows-msvc\bin\codex-code-mode-host.exe",
+        ] {
+            process.executable = path.into();
+            assert!(!executor_role(&process, "codex"));
         }
     }
 

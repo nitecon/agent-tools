@@ -46,7 +46,14 @@ The CLI inspects only its own bounded ancestry (64 processes, two seconds),
 recognizes native provider executables or Claude's official Node entrypoint,
 and rechecks executable, command, parent and precise creation generation.
 Codex requires positive `app-server`, `exec`/`e`, `review`, bare `--no-daemon`,
-or `resume`/`fork` with `--no-daemon` execution evidence. Other subcommands
+or `resume`/`fork` with `--no-daemon` execution evidence. Windows additionally
+accepts the confirmed bare native `codex` launch (no arguments) from an absolute
+path ending in `AppData/Local/Programs/OpenAI/Codex/bin/codex.exe`, compared
+case-insensitively. Codex 0.161 can run an embedded executor in this launch;
+the installation path and bare command are both required. PowerShell and
+`codex-code-mode-host.exe` descendants retain the Codex process generation;
+the host itself supplies neither provider identity nor native session identity.
+Other subcommands
 reject even with `--no-daemon`; help/version and missing option values reject
 too. App-server schema/proxy/daemon subcommands are rejected. A recognized daemon-connected frontend or official
 Codex Node launcher stops verification; the CLI cannot cross that boundary to
@@ -62,6 +69,9 @@ reattachment. Replacing the executor or starting another native conversation
 changes the actor. Supported paths are direct provider CLI and hook subprocesses;
 remote, detached or long-lived MCP paths without per-invocation native context
 are not assigned guessed identity. Platform adapters require platform CI.
+
+The Windows launch is covered by native CI process fixtures; live Windows
+hardware acceptance remains a separate check.
 
 ## Optional CMUX membership
 

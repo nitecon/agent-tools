@@ -16,8 +16,20 @@ fn main() {
     let mut command =
         if let Some(boundary) = std::env::var_os("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY") {
             let mut command = Command::new(boundary);
-            command.arg(std::env::var_os("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY_ARG").unwrap());
+            let argument = std::env::var_os("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY_ARG").unwrap();
+            if !argument.is_empty() {
+                command.arg(argument);
+            }
             command.env_remove("AGENT_TOOLS_RUNTIME_FIXTURE_BOUNDARY");
+            command
+        } else if let Some(shell) = std::env::var_os("AGENT_TOOLS_RUNTIME_FIXTURE_SHELL") {
+            let mut command = Command::new(shell);
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "& $env:AGENT_TOOLS_RUNTIME_FIXTURE_WORKER --exact actor_runtime::tests::runtime_child_fixture --nocapture; exit $LASTEXITCODE",
+            ]);
             command
         } else {
             let mut command =

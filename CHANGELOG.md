@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.20.1
+
+- Recognize the confirmed Windows Codex 0.161 bare native launch from the
+  OpenAI installation path when deriving automatic actor identity. This fixes
+  session and task mutations rejected before transport for that executor.
+- Keep utility, Node launcher and arbitrary-path frontend rejection, precise
+  process generation and bounded ancestry rechecks. Linux/macOS executor
+  recognition and the actor UUID contract are unchanged.
+- Cover PowerShell and standalone code-mode-host descendants with native
+  Windows CI fixtures, including hook/tool parity, mutation identity, distinct
+  conversations and executor replacement. Live Windows acceptance is separate.
+
 ## v1.20.0 (prepared; publication pending CMUX acceptance)
 
 - Derive automatic task provenance from the calling Codex or Claude native
