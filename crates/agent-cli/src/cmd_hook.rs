@@ -630,35 +630,6 @@ fn read_payload() -> Option<Value> {
     serde_json::from_str(&raw).ok()
 }
 
-const ENROLLMENT_OPEN: &str = "<cmux-session-enrollment>";
-const ENROLLMENT_CLOSE: &str = "</cmux-session-enrollment>";
-
-fn enrollment_token(prompt: &str) -> Option<Result<String>> {
-    let body = prompt
-        .strip_prefix(ENROLLMENT_OPEN)?
-        .strip_suffix(ENROLLMENT_CLOSE)?;
-    Some((|| {
-        anyhow::ensure!(prompt.len() <= 4096, "enrollment record exceeds bound");
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Record {
-            version: u32,
-            enrollment_token: String,
-        }
-        let record: Record = serde_json::from_str(body)?;
-        anyhow::ensure!(record.version == 1, "unsupported enrollment version");
-        anyhow::ensure!(
-            record.enrollment_token.len() == 64
-                && record
-                    .enrollment_token
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-            "invalid enrollment token"
-        );
-        Ok(record.enrollment_token)
-    })())
-}
-
 fn hook_actor(agent: &str, payload: &Value) -> Option<agent_comms::actor::Actor> {
     // Authoritative hook payload only: SessionMemory's legacy environment
     // fallback is not an actor selection mechanism.
@@ -668,45 +639,7 @@ fn hook_actor(agent: &str, payload: &Value) -> Option<agent_comms::actor::Actor>
 
 fn actor_context(agent: &str, payload: &Value) -> Option<String> {
     let actor = hook_actor(agent, payload)?;
-    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        let _ = rt.block_on(crate::cmd_session::membership(
-            &actor,
-            "gateway.session.announce",
-            None,
-        ));
-    }
     Some(format!("Calling actor: {} session={} instance={} provider={} os={}. Ordinary task mutations reuse this registration automatically; CMUX membership is separate.", actor.actor_id, actor.origin.session_id, actor.origin.instance_id, actor.origin.provider, actor.origin.os))
-}
-
-fn consume_enrollment(agent: &str, payload: &Value, token: Result<String>) {
-    // Consumption always exits 0 and never exposes the bearer token. CMUX
-    // observes its own binding state and retries failures at a safe idle point.
-    if let (Some(actor), Ok(token)) = (hook_actor(agent, payload), token) {
-        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            let _ = rt.block_on(crate::cmd_session::membership(
-                &actor,
-                "gateway.session.announce",
-                Some(&token),
-            ));
-        }
-    }
-    println!("{}", enrollment_output(agent));
-}
-
-fn enrollment_output(agent: &str) -> Value {
-    let mut output =
-        serde_json::json!({"decision":"block","reason":"CMUX identity enrollment consumed."});
-    if agent == "claude" {
-        output["hookSpecificOutput"] =
-            serde_json::json!({"hookEventName":"UserPromptSubmit","suppressOriginalPrompt":true});
-    }
-    output
 }
 
 fn run_session_start(agent: &str) -> Result<()> {
@@ -809,16 +742,10 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
 
     // Extract prompt; None => silent.
     let prompt = extract_prompt(&payload).ok_or_else(|| anyhow::anyhow!("no prompt"))?;
-    if let Some(token) = enrollment_token(&prompt) {
-        consume_enrollment(agent, &payload, token);
-        return Ok(());
-    }
-    // Private hook capability must be observed even when the first prompt is
-    // a gateway notification. Its rendered identity stays silent on that path.
-    let identity = actor_context(agent, &payload);
     if is_harness_notification(&prompt) {
         return Ok(());
     }
+    let identity = actor_context(agent, &payload);
 
     let root = std::env::current_dir()?;
     let mut session = SessionMemory::open(&root, extract_session_id(&payload).as_deref());
@@ -1024,34 +951,6 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn only_whole_enrollment_records_are_consumed_and_tokens_never_enter_output() {
-        let token = "a".repeat(64);
-        let prompt = format!(
-            "{ENROLLMENT_OPEN}{{\"version\":1,\"enrollment_token\":\"{token}\"}}{ENROLLMENT_CLOSE}"
-        );
-        assert_eq!(enrollment_token(&prompt).unwrap().unwrap(), token);
-        assert!(enrollment_token(&format!("Explain {prompt}")).is_none());
-        assert!(enrollment_token(&format!("{prompt} then continue")).is_none());
-        for invalid in [
-            prompt.replace("\"version\":1", "\"version\":2"),
-            prompt.replace(&token, &"A".repeat(64)),
-            prompt.replace(&token, "short"),
-            prompt.replace("\"version\":1", "\"version\":1,\"session_id\":\"other\""),
-        ] {
-            assert!(enrollment_token(&invalid).unwrap().is_err());
-        }
-        for provider in ["codex", "claude"] {
-            let output = enrollment_output(provider);
-            assert_eq!(output["decision"], "block");
-            assert!(!output.to_string().contains(&token));
-            assert!(!output.to_string().contains("enrollment_token"));
-        }
-        assert_eq!(
-            enrollment_output("claude")["hookSpecificOutput"]["suppressOriginalPrompt"],
-            true
-        );
-    }
     use serde_json::json;
 
     // -- env toggles ---------------------------------------------------------

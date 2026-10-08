@@ -80,8 +80,8 @@ live Windows hardware acceptance remains separate.
 ## Optional CMUX membership
 
 `gateway.session.announce` accepts `{version:2, origin, provider_session_id,
-base_id, session_slot, actor_id, repository?, enrollment_token?}`.
-`gateway.session.resolve` uses the same fields without an enrollment token.
+base_id, session_slot, actor_id, repository?}`.
+`gateway.session.resolve` uses the same fields.
 There is no executor generation in v2 SDK registration. Success echoes origin,
 native conversation ID, base, slot and actor_id with `binding_state` (`unbound` or `bound`).
 Bound context adds `surface_id`, `workspace_id` and `recipient_session_id`.
@@ -90,18 +90,11 @@ CMUX must associate the exact native conversation with a unique live terminal;
 project/provider names alone never establish binding. CMUX independently retains
 its process/TUI generation fences for stale terminal delivery.
 
-Existing provider hooks consume only a whole dedicated enrollment prompt:
-
-```text
-<cmux-session-enrollment>{"version":1,"enrollment_token":"64 lowercase hex characters"}</cmux-session-enrollment>
-```
-
-This envelope version belongs to enrollment, separately from actor registration.
-The hook uses its own registration, announces before notification filtering,
-and exits with a blocking decision even if enrollment fails. Normal user prompts
-remain fail-soft. Claude suppresses the original prompt in its block message.
-The client never logs, caches or puts a bearer token in model context. Registration
-and ordinary task calls require no enrollment token.
+Provider context hooks do not initiate CMUX membership requests, intercept
+identity enrollment records or block user prompts. Queued legacy enrollment
+records have no special handler. Existing memory/task context hooks remain
+fail-soft; gateway notifications return silently. Ordinary registration and
+task mutations operate independently of hooks and CMUX membership.
 
 Linux discovery uses an absolute private current-user `XDG_RUNTIME_DIR`, otherwise
 `/run/user/<realuid>`, followed by `cmux/cmux.sock`, with a bounded owner-only

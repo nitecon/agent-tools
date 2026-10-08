@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.21.1
+
+- Delete CMUX identity enrollment parsing, token forwarding, prompt consumption,
+  blocking decisions and original-prompt suppression.
+- Remove hook-driven CMUX membership announcements. Preserve ordinary v2
+  registration, numbered sessions, task origins and unrelated context hooks.
+- Queued legacy enrollment records cannot activate a blocking handler. Native
+  Actions regressions cover Codex and Claude valid/malformed records, normal
+  context output and silent gateway notifications without CMUX connections.
+
 ## v1.21.0
 
 - Register native Codex/Claude conversations automatically from canonical
@@ -43,13 +53,12 @@ Existing CMUX v1 client support remains available during the rollout.
 - Require positive Codex executor roles and stop at frontend, utility and Node
   launcher boundaries. Reject conflicting native IDs and unverifiable runtimes
   before sending task mutations; plain shells retain legacy attribution.
-- Add optional, independently verified CMUX actor membership and hook-consumed
-  enrollment. Gateway notifications privately announce enabled hook capability
-  before returning without context output, including the first delegated prompt.
-- Validate actor derivation, task headers, hook enrollment and notification-first
-  announcement with Linux, macOS and Windows CI process fixtures.
+- Add optional, independently verified CMUX actor membership. Identity enrollment
+  interception introduced in this release was removed in v1.21.1.
+- Validate actor derivation and task headers with Linux, macOS and Windows CI
+  process fixtures.
 
-CMUX Linux v0.6.5 supplies the coordinated terminal enrollment and delivery side;
+CMUX Linux v0.6.5 supplied the coordinated terminal delivery side;
 this client release remains held until its integrated packages are accepted.
 The older Windows CMUX preview lacks actor membership: valid provider task
 mutations no longer require that API, but verified terminal binding and exact

@@ -18,7 +18,8 @@ content:
     changing the matching CLI or gateway client contracts.
   actor_identity_contract:
     version: agent-tools-actor-v2
-    status: released
+    status: enrollment_removal_ci_pending
+    prepared_release: v1.21.1
     release: v1.21.0
     release_url: https://github.com/nitecon/agent-tools/releases/tag/v1.21.0
     source_revision: af92179ed831b3076c1334e4395c670eff245806
@@ -36,7 +37,8 @@ content:
         - Direct calls use own CODEX_THREAD_ID/SESSION_ID (both must agree) or CLAUDE_CODE_SESSION_ID; two-provider context is ambiguous and rejects. Hooks use installed provider plus own payload session_id and check same-provider native context. Never guess a peer from project/provider or terminal metadata. Plain-shell behavior without native metadata is unchanged.
         - Atomically allocate/reuse a positive local session_slot under native OS temp agent-tools-actors/instance_id/base_id using conversation UUID as key. Slots1-65535 are readable metadata; expose actor_id as base_id-session_slot. No service, daemon or assignment policy; corrupt local records do not select a peer.
         - All task mutations retain four gateway origin headers independently of CMUX absence/old API/unbound membership. Version2 CMUX announce/resolve sends origin, provider_session_id, base_id, session_slot, actor_id and optional repository; it has no executor_generation requirement. Validate exact origin/native/base/slot/actor_id echo and bound recipient context. CMUX alone correlates unique native terminal membership and keeps process/TUI generation fences for delivery.
-        - SessionStart/UserPromptSubmit and ordinary calls reuse and announce the registration. Notification-first hooks privately announce then return without context output. Existing whole-prompt version1 enrollment-token envelope is separate from actor registration; ordinary registration/mutations need no token. Endpoint discovery and bounded native transport are unchanged.
+        - Ordinary calls reuse and announce the registration independently of installed hooks. SessionStart/UserPromptSubmit context hooks retain local actor context but never initiate CMUX membership requests, parse/forward enrollment tokens, consume identity enrollment records, block prompts or suppress original prompts. Gateway notifications return silently; queued legacy enrollment records have no special handler. Endpoint discovery and bounded native transport are unchanged.
+        - SDKv1.21.1 deletes the unauthorized CMUX identity enrollment/token/hook-capability handshake. Preserve ordinary approved v2 registration and unrelated memory/task context hooks. No replacement handshake or membership design is authorized; do not edit user hook configurations.
         - SDKv1.21.0 is released with matching validated/distributable CMUXv0.6.8 integration. For paired coordination, update/restart CMUX first, then update the SDK and restart the provider. CMUX retains old client v1 support during rollout. New actor UUIDs require legitimate release/closure of old-origin claims before switching the installed client; never fall back to an old owner. Native Actions fixtures and live Windows acceptance remain distinct.
     - name: Author and retrieve unified OKF knowledge
       steps:

@@ -69,9 +69,9 @@ pub(crate) async fn mutation_origin() -> Result<Option<SessionOrigin>> {
     let actor = crate::actor_runtime::current()
         .context("register calling conversation; task mutation was not sent")?;
     if let Some(actor) = actor {
-        // Optional membership/capability requests may trigger safe-idle bootstrap.
+        // Optional membership is independent of hooks and cannot revoke provenance.
         // No RPC absence, old API, invalid binding or timeout revokes provenance.
-        let _ = membership(&actor, "gateway.session.announce", None).await;
+        let _ = membership(&actor, "gateway.session.announce").await;
         Ok(Some(actor.origin))
     } else {
         Ok(None)
@@ -107,9 +107,7 @@ async fn discover(peers: bool, json_output: bool) -> Result<()> {
     }
     let actor = crate::actor_runtime::current()?
         .context("no provider-native actor context in this invocation")?;
-    let bound = membership(&actor, "gateway.session.resolve", None)
-        .await
-        .ok();
+    let bound = membership(&actor, "gateway.session.resolve").await.ok();
     if json_output {
         let mut value = serde_json::to_value(&actor)?;
         if let Some(bound) = bound {
@@ -156,23 +154,9 @@ fn validate_peers(value: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn membership(
-    actor: &Actor,
-    method: &str,
-    token: Option<&str>,
-) -> Result<Membership> {
+async fn membership(actor: &Actor, method: &str) -> Result<Membership> {
     tokio::time::timeout(TIMEOUT, async {
         let mut params = serde_json::to_value(actor)?;
-        if let Some(token) = token {
-            ensure!(
-                token.len() == 64
-                    && token
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-                "invalid CMUX enrollment token"
-            );
-            params["enrollment_token"] = json!(token);
-        }
         // Announce an actual remote only, never project_ident's cwd fallback.
         // Async git stays inside the membership deadline and is killed on drop.
         if let Ok(output) = tokio::process::Command::new("git")
@@ -194,7 +178,7 @@ pub(crate) async fn membership(
         }
         for endpoint in endpoints()? {
             // Try only conventional/hinted endpoints. A server error does not
-            // authorize replacement provenance or token logging.
+            // authorize replacement provenance or logging request contents.
             if let Ok(result) = rpc(&endpoint, method, params.clone()).await {
                 return decode_membership(actor, result);
             }
@@ -253,7 +237,7 @@ fn endpoints() -> Result<Vec<String>> {
     if let Ok(sid) = user_sid() {
         paths.push(format!(r"\\.\pipe\cmux-{sid}-control"));
     }
-    // No well-known macOS enrollment endpoint is advertised by this release.
+    // No well-known macOS membership endpoint is advertised by this release.
     Ok(paths)
 }
 
@@ -368,8 +352,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         "CMUX RPC response ID mismatch"
     );
     if response.get("error").is_some_and(|value| !value.is_null()) {
-        // Never print a server-controlled error object that could contain token
-        // or other request contents.
+        // Never print a server-controlled error object containing request contents.
         bail!("CMUX rejected actor membership request");
     }
     response

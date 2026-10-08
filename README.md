@@ -71,32 +71,19 @@ agent-tools version
 
 The update rate-limit marker is stored at `~/.agentic/.agent-tools-update-check` and persists across reboots.
 
-Session provenance in agent-tools v1.19.0 requires a session-capable CMUX host
-(CMUX Linux v0.6.4 or later). Update and restart CMUX before explicitly updating
-agent-tools. The local `gateway.session` API must verify the current agent;
-older CMUX hosts cannot supply that identity and task mutations will fail rather
-than invent session provenance.
+The v1.21 series registers task identity automatically from the calling native
+conversation and canonical project/Git/provider/OS context. Task mutations do
+not require CMUX membership or installed hooks. Close or release existing
+v1-origin claims before switching from a pre-v1.21 client.
 
-The current native Windows CMUX preview does not provide this API. Keep
-agent-tools v1.18.0 on that Windows installation until a compatible preview is
-available; do not run `agent-tools update` there yet. Normal CLI, MCP and sync
-commands do not automatically update installed binaries, so publishing v1.19.0
-does not change the Windows client. The previous Windows archive remains
-available from the [v1.18.0 release](https://github.com/nitecon/agent-tools/releases/tag/v1.18.0).
+The v1.21.1 correction removes CMUX identity enrollment interception, token
+forwarding and prompt blocking. Context hooks remain fail-soft and do not
+initiate CMUX membership requests. Queued legacy enrollment records cannot
+activate a blocking handler. No user hook configuration changes are required.
 
-The prepared v1.20.0 release derives task provenance from the calling provider's
-native session and verified executor generation. It does not require CMUX
-environment inheritance, launch flags, or configuration changes. Unlike v1.19.0,
-valid provider task mutations continue when the local membership API is absent
-or unsupported. CMUX Linux v0.6.5 provides coordinated terminal enrollment and
-delivery; publication remains held until integrated distribution is approved.
-
-The older Windows preview cannot bind these actors to terminals or provide exact
-actor self-echo suppression. The new client's direct CLI/hook actor derivation
-is covered by Windows CI, but this does not establish live preview compatibility.
-No manual environment workaround supplies verified membership. Keep the existing
-preview deployment until coordinated distribution is approved. This Linux CMUX
-release advertises no automatic macOS bootstrap.
+Optional CMUX terminal membership remains separate from task identity. Native
+Actions fixtures verify the client behavior; destination Windows membership
+and live injection require observation on that machine.
 
 If an older update installed a binary that cannot start because of a glibc
 version error, recover without invoking that binary by rerunning the Linux
@@ -395,11 +382,11 @@ slot is excluded so temporary registry cleanup cannot alias old ownership.
 See the [exact contract](docs/actor-origin.md) and
 [UUID conformance vectors](docs/actor-origin-vectors.json).
 
-CMUX enrollment is optional and cannot change actor provenance. Installed Codex
-and Claude hooks announce their actual hook session ID and consume dedicated
-CMUX enrollment prompts before notification filtering. Linux discovers the
-current user's runtime socket; Windows uses its SID-based native pipe. This
-Linux CMUX release advertises no automatic macOS bootstrap. Registration supports
+CMUX membership is optional and cannot change actor provenance. Context hooks
+do not intercept identity enrollment records, block prompts or request CMUX
+membership. Ordinary task calls register independently of hooks. Linux discovers
+the current user's runtime socket; Windows uses its SID-based native pipe.
+Registration supports
 direct provider CLI/hook calls on Linux, macOS and Windows;
 remote, detached, environment-cleared or long-lived MCP tools without native
 invocation context cannot acquire inferred attribution.
