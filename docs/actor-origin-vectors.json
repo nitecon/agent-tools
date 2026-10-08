@@ -11,7 +11,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"linux\",\"/work/repo\",\"github.com/org/repo\",\"codex\"]",
     "base_id": "e443f9c2-dd60-5411-8ed4-0ad39c447bed",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a117a5-2240-7e00-be27-d42910e71473\"]",
-    "session_id": "77b87f84-242a-5f01-87a6-d58dd18448d8"
+    "session_id": "77b87f84-242a-5f01-87a6-d58dd18448d8",
+    "actor_id": "e443f9c2-dd60-5411-8ed4-0ad39c447bed-1"
   },
   {
     "name": "same_provider_peer",
@@ -25,7 +26,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"linux\",\"/work/repo\",\"github.com/org/repo\",\"codex\"]",
     "base_id": "e443f9c2-dd60-5411-8ed4-0ad39c447bed",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a11435-6625-7070-ae4d-668abecf45df\"]",
-    "session_id": "18d27bac-588e-586f-9ecb-aa0535ff550c"
+    "session_id": "18d27bac-588e-586f-9ecb-aa0535ff550c",
+    "actor_id": "e443f9c2-dd60-5411-8ed4-0ad39c447bed-2"
   },
   {
     "name": "executor_reconnect",
@@ -39,7 +41,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"linux\",\"/work/repo\",\"github.com/org/repo\",\"codex\"]",
     "base_id": "e443f9c2-dd60-5411-8ed4-0ad39c447bed",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a117a5-2240-7e00-be27-d42910e71473\"]",
-    "session_id": "77b87f84-242a-5f01-87a6-d58dd18448d8"
+    "session_id": "77b87f84-242a-5f01-87a6-d58dd18448d8",
+    "actor_id": "e443f9c2-dd60-5411-8ed4-0ad39c447bed-1"
   },
   {
     "name": "temp_slot_renumbered",
@@ -53,7 +56,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"linux\",\"/work/repo\",\"github.com/org/repo\",\"codex\"]",
     "base_id": "e443f9c2-dd60-5411-8ed4-0ad39c447bed",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a117a5-2240-7e00-be27-d42910e71473\"]",
-    "session_id": "77b87f84-242a-5f01-87a6-d58dd18448d8"
+    "session_id": "77b87f84-242a-5f01-87a6-d58dd18448d8",
+    "actor_id": "e443f9c2-dd60-5411-8ed4-0ad39c447bed-7"
   },
   {
     "name": "other_machine",
@@ -67,7 +71,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"linux\",\"/work/repo\",\"github.com/org/repo\",\"codex\"]",
     "base_id": "f58d85e1-7715-599f-8f99-2e0a7a83a982",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a117a5-2240-7e00-be27-d42910e71473\"]",
-    "session_id": "52af7dc1-7c0c-5523-81b3-d036e2f65943"
+    "session_id": "52af7dc1-7c0c-5523-81b3-d036e2f65943",
+    "actor_id": "f58d85e1-7715-599f-8f99-2e0a7a83a982-1"
   },
   {
     "name": "windows_claude",
@@ -81,7 +86,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"windows\",\"c:/work/repo\",\"github.com/org/repo\",\"claude\"]",
     "base_id": "53de1997-ea76-54c9-a6b9-1a0a1af5272a",
     "name_utf8": "[\"agent-tools-actor-v2\",\"opaque-native-id\"]",
-    "session_id": "327a6590-7b27-5ac7-b7eb-dd1c0c16b8bd"
+    "session_id": "327a6590-7b27-5ac7-b7eb-dd1c0c16b8bd",
+    "actor_id": "53de1997-ea76-54c9-a6b9-1a0a1af5272a-1"
   },
   {
     "name": "windows_codex",
@@ -95,7 +101,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"windows\",\"c:/work/repo\",\"github.com/org/repo\",\"codex\"]",
     "base_id": "6c865824-f7a0-5997-b58d-3505479e662a",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a117a5-2240-7e00-be27-d42910e71473\"]",
-    "session_id": "d9deace9-8fd8-5c98-9f21-c998d5fdf940"
+    "session_id": "d9deace9-8fd8-5c98-9f21-c998d5fdf940",
+    "actor_id": "6c865824-f7a0-5997-b58d-3505479e662a-1"
   },
   {
     "name": "macos_codex",
@@ -109,7 +116,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"macos\",\"/work/repo\",\"github.com/org/repo\",\"codex\"]",
     "base_id": "15675689-02fb-542e-bb40-8b126bda9477",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a117a5-2240-7e00-be27-d42910e71473\"]",
-    "session_id": "a732b3e1-113a-5daa-b7d5-dc501767a664"
+    "session_id": "a732b3e1-113a-5daa-b7d5-dc501767a664",
+    "actor_id": "15675689-02fb-542e-bb40-8b126bda9477-1"
   },
   {
     "name": "uuid_case_normalization",
@@ -123,7 +131,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"linux\",\"/work/repo\",\"github.com/org/repo\",\"codex\"]",
     "base_id": "e443f9c2-dd60-5411-8ed4-0ad39c447bed",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a117a5-2240-7e00-be27-d42910e71473\"]",
-    "session_id": "77b87f84-242a-5f01-87a6-d58dd18448d8"
+    "session_id": "77b87f84-242a-5f01-87a6-d58dd18448d8",
+    "actor_id": "e443f9c2-dd60-5411-8ed4-0ad39c447bed-1"
   },
   {
     "name": "other_project",
@@ -137,7 +146,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"linux\",\"/work/other\",\"github.com/org/repo\",\"codex\"]",
     "base_id": "178faa72-dd9b-560f-8ad3-fe59a54c72d5",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a117a5-2240-7e00-be27-d42910e71473\"]",
-    "session_id": "9fe59ffd-acc9-59b9-a899-e3d4996215d3"
+    "session_id": "9fe59ffd-acc9-59b9-a899-e3d4996215d3",
+    "actor_id": "178faa72-dd9b-560f-8ad3-fe59a54c72d5-1"
   },
   {
     "name": "other_git_identity",
@@ -151,7 +161,8 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"linux\",\"/work/repo\",\"github.com/org/other\",\"codex\"]",
     "base_id": "df83c405-98a2-54a2-88c6-213ee8f2789b",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a117a5-2240-7e00-be27-d42910e71473\"]",
-    "session_id": "cc943df7-f664-5c73-b4af-aa9a78ad8d5f"
+    "session_id": "cc943df7-f664-5c73-b4af-aa9a78ad8d5f",
+    "actor_id": "df83c405-98a2-54a2-88c6-213ee8f2789b-1"
   },
   {
     "name": "other_provider",
@@ -165,6 +176,7 @@
     "base_name_utf8": "[\"agent-tools-actor-v2\",\"base\",\"linux\",\"/work/repo\",\"github.com/org/repo\",\"claude\"]",
     "base_id": "ba673687-40d7-5566-b79c-663ce9191343",
     "name_utf8": "[\"agent-tools-actor-v2\",\"01a117a5-2240-7e00-be27-d42910e71473\"]",
-    "session_id": "0a8e38b6-b370-5098-93be-802b9f95c94a"
+    "session_id": "0a8e38b6-b370-5098-93be-802b9f95c94a",
+    "actor_id": "ba673687-40d7-5566-b79c-663ce9191343-1"
   }
 ]

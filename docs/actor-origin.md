@@ -64,7 +64,7 @@ The local registry is under the native OS temporary directory at
 contains its conversation session UUID. Atomic no-clobber publication assigns
 the first available slot, including concurrent first callers; later calls with
 the same UUID reuse it. Slots are limited to 1–65535. The readable local identity
-is `<base_id>-<session_slot>`; it is display/registration metadata, not a gateway
+is `actor_id`, formatted `<base_id>-<session_slot>`; it is display/registration metadata, not a gateway
 credential. Deleting temporary files may renumber slots but cannot make another
 native conversation reuse an earlier gateway UUID. Corrupt registration files
 reject rather than selecting a peer. No daemon, service or assignment policy
@@ -80,10 +80,10 @@ live Windows hardware acceptance remains separate.
 ## Optional CMUX membership
 
 `gateway.session.announce` accepts `{version:2, origin, provider_session_id,
-base_id, session_slot, repository?, enrollment_token?}`.
+base_id, session_slot, actor_id, repository?, enrollment_token?}`.
 `gateway.session.resolve` uses the same fields without an enrollment token.
 There is no executor generation in v2 SDK registration. Success echoes origin,
-native conversation ID, base and slot with `binding_state` (`unbound` or `bound`).
+native conversation ID, base, slot and actor_id with `binding_state` (`unbound` or `bound`).
 Bound context adds `surface_id`, `workspace_id` and `recipient_session_id`.
 Mismatched echoes reject membership without changing gateway provenance.
 CMUX must associate the exact native conversation with a unique live terminal;

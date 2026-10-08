@@ -18,6 +18,7 @@ pub struct Actor {
     pub provider_session_id: String,
     pub base_id: String,
     pub session_slot: u32,
+    pub actor_id: String,
 }
 
 /// Identity initialization publishes a complete file without replacing a winner.
@@ -128,6 +129,7 @@ pub fn derive(
         provider_session_id: native_id,
         base_id: base.to_string(),
         session_slot,
+        actor_id: format!("{base}-{session_slot}"),
     })
 }
 
@@ -145,6 +147,7 @@ pub fn register(
         .join(instance.to_string())
         .join(base.to_string());
     actor.session_slot = register_slot(&directory, &actor.origin.session_id)?;
+    actor.actor_id = format!("{base}-{}", actor.session_slot);
     Ok(actor)
 }
 

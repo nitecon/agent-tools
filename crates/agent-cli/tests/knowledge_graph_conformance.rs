@@ -304,7 +304,15 @@ fn prompt_hook_injects_bounded_local_knowledge_without_a_gateway() {
         br#"{"session_id":"kg-a010","prompt":"checkout recovery runbook"}"#,
     );
     assert!(again.status.success(), "{}", stderr(&again));
-    assert!(again.stdout.is_empty(), "{}", stdout(&again));
+    let again_envelope: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    let again_context = again_envelope["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(again_context.contains("Calling actor:"), "{again_context}");
+    assert!(
+        !again_context.contains("Relevant knowledge"),
+        "{again_context}"
+    );
 
     // A different session starts fresh.
     let other = run_agent_tools_with_input(
