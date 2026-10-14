@@ -124,26 +124,6 @@ agent-tools doc section <file.md> "<heading>"  # one section's body, by heading 
 ```
 "#;
 
-const MARKDOWN_CONTEXT_SECTION: &str = r#"
-### Markdown Context (gateway-backed)
-
-- Before code search or API work, look up existing gateway-backed markdown context.
-- Use `docs hierarchy --scope all` to find where local and global entries live and where new ones belong.
-- Treat `scope`, `global_rank`, `owner_project`, `wiki_path`, and artifact ids as gateway-provided metadata; do not infer priority from owner project names.
-- If context is missing, propose `.agent/api/<app>.yaml`.
-- After material API file changes, publish context and track the publish step.
-
-```bash
-agent-tools docs search "<topic-or-workflow>" [--scope local|global|all]
-agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
-agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
-agent-tools docs get <id>
-agent-tools docs chunks --query "<topic-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
-agent-tools docs validate --file .agent/api/<app>.yaml
-agent-tools docs publish --file .agent/api/<app>.yaml
-```
-"#;
-
 const PATTERNS_SECTION: &str = r#"
 ### Patterns (gateway-backed global guidance)
 
@@ -313,7 +293,6 @@ fn build_block(include_gateway_sections: bool) -> String {
     if include_gateway_sections {
         body.push_str(COMMS_SECTION);
         body.push_str(TASKS_SECTION);
-        body.push_str(MARKDOWN_CONTEXT_SECTION);
         body.push_str(PATTERNS_SECTION);
     }
     format!("{OPEN_MARKER}\n{body}{CLOSE_MARKER}\n")
@@ -450,9 +429,8 @@ mod tests {
         assert!(b.contains("agent-tools tasks list"));
         assert!(b.contains("agent-tools doc outline"));
         assert!(b.contains("agent-tools doc section"));
-        assert!(b.contains("agent-tools docs search"));
-        assert!(b.contains("agent-tools docs hierarchy"));
-        assert!(b.contains("publish context and track the publish step"));
+        assert!(!b.contains("agent-tools docs"));
+        assert!(!b.contains("Markdown Context"));
         assert!(b.contains("agent-tools patterns check"));
         // Markers appear exactly once each — the body text never repeats them.
         assert_eq!(b.matches(OPEN_MARKER).count(), 1);
@@ -470,8 +448,7 @@ mod tests {
         assert!(!b.contains("agent-tools comms"));
         assert!(!b.contains("agent-tools tasks"));
         assert!(!b.contains("agent-tools patterns"));
-        // Local markdown reading needs no gateway, so it ships either way;
-        // only the gateway-backed `docs` registry drops out.
+        // Local markdown reading needs no gateway, so it ships either way.
         assert!(b.contains("agent-tools doc outline"));
         assert!(!b.contains("agent-tools docs"));
     }
@@ -499,6 +476,27 @@ mod tests {
         // Block still bracketed exactly once after replacement.
         assert_eq!(out.matches(OPEN_MARKER).count(), 1);
         assert_eq!(out.matches(CLOSE_MARKER).count(), 1);
+    }
+
+    #[test]
+    fn refreshing_legacy_rules_removes_documentation_protocols() {
+        let existing = format!(
+            "# User instructions\n{OPEN_MARKER}\n### Markdown Context (gateway-backed)\n\
+             agent-tools docs search QUERY\nagent-tools docs publish --file PATH\n\
+             {CLOSE_MARKER}\n# Memory instructions\n"
+        );
+        for gateway_configured in [false, true] {
+            let block = build_block(gateway_configured);
+            let refreshed = compute_new_content(&existing, &block, true);
+            assert_eq!(
+                refreshed,
+                format!("# User instructions\n{block}# Memory instructions\n")
+            );
+            assert!(!refreshed.contains("Markdown Context"));
+            assert!(!refreshed.contains("agent-tools docs"));
+            assert!(refreshed.contains("agent-tools doc outline"));
+            assert_eq!(compute_new_content(&refreshed, &block, true), refreshed);
+        }
     }
 
     #[test]
@@ -531,8 +529,7 @@ mod tests {
         assert!(after_second.contains("agent-tools comms send"));
         assert!(!after_second.contains("agent-tools comms recv"));
         assert!(after_second.contains("agent-tools tasks list"));
-        assert!(after_second.contains("agent-tools docs search"));
-        assert!(after_second.contains("agent-tools docs hierarchy"));
+        assert!(!after_second.contains("agent-tools docs"));
         assert!(after_second.contains("agent-tools patterns check"));
         assert_eq!(after_second.matches(OPEN_MARKER).count(), 1);
         assert_eq!(after_second.matches(CLOSE_MARKER).count(), 1);

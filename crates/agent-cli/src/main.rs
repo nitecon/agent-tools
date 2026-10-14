@@ -1,10 +1,8 @@
 mod actor_runtime;
 mod cmd_comms;
-mod cmd_docs;
 mod cmd_docs_artifacts;
 mod cmd_gateway_context;
 mod cmd_hook;
-mod cmd_okf;
 mod cmd_patterns;
 mod cmd_read;
 mod cmd_session;
@@ -421,13 +419,7 @@ enum Commands {
         json: bool,
     },
 
-    /// Markdown context registry (gateway-backed)
-    Docs {
-        #[command(subcommand)]
-        command: cmd_docs::DocsCommands,
-    },
-
-    /// Agent-facing artifact substrate for docs, reviews, specs, and handoffs
+    /// Agent-facing artifact substrate for reviews, specs, and handoffs
     Artifacts {
         #[command(subcommand)]
         command: cmd_docs_artifacts::ArtifactsCommands,
@@ -483,17 +475,6 @@ enum OkfCommands {
         /// Also write the generated index.md projection
         #[arg(long)]
         with_index: bool,
-    },
-    /// Project a bundle one-way into gateway Documentation
-    Publish {
-        path: PathBuf,
-        /// Print deterministic publish decisions without contacting a gateway
-        #[arg(long)]
-        dry_run: bool,
-        #[arg(long)]
-        project: Option<String>,
-        #[arg(long)]
-        agent_id: Option<String>,
     },
 }
 
@@ -899,8 +880,6 @@ fn main_inner() -> Result<()> {
 
         Commands::Session { peers, json } => cmd_session::run(peers, json),
 
-        Commands::Docs { command } => cmd_docs::dispatch(command),
-
         Commands::Artifacts { command } => cmd_docs_artifacts::dispatch(command),
 
         Commands::Reviews { command } => cmd_docs_artifacts::dispatch_reviews(command),
@@ -1149,7 +1128,6 @@ fn cmd_search(
             std::process::exit(1);
         }
     }
-    maybe_print_api_context_hint(query);
     Ok(())
 }
 
@@ -1306,12 +1284,6 @@ fn cmd_okf(command: OkfCommands) -> Result<()> {
                 destination.display()
             );
         }
-        OkfCommands::Publish {
-            path,
-            dry_run,
-            project,
-            agent_id,
-        } => return cmd_okf::publish(path, dry_run, project, agent_id),
     }
     Ok(())
 }
@@ -1469,41 +1441,6 @@ fn render_graph_edges(edges: &[agent_symbols::TraversedEdge]) {
     }
 }
 
-fn maybe_print_api_context_hint(query: &str) {
-    if !looks_api_related(query) {
-        return;
-    }
-    eprintln!(
-        "hint: API-related search detected. Also check markdown context with \
-         `agent-tools docs search \"{query}\"`, \
-         `agent-tools docs hierarchy`, or \
-         `agent-tools docs chunks --query \"{query}\"`. If no docs exist, ask \
-         whether to create .agent/api/<app>.yaml or agent-api.yaml and publish \
-         it with `agent-tools docs publish --file PATH` for future agents."
-    );
-}
-
-fn looks_api_related(query: &str) -> bool {
-    query
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|part| {
-            let part = part.to_ascii_lowercase();
-            matches!(
-                part.as_str(),
-                "api"
-                    | "apis"
-                    | "endpoint"
-                    | "endpoints"
-                    | "route"
-                    | "routes"
-                    | "openapi"
-                    | "swagger"
-                    | "graphql"
-                    | "rest"
-            )
-        })
-}
-
 /// Build or rebuild the project file and symbol index.
 fn cmd_index(path: Option<PathBuf>, rebuild: bool) -> Result<()> {
     let root =
@@ -1584,18 +1521,25 @@ mod tests {
     use clap::error::ErrorKind;
 
     #[test]
-    fn api_hint_detects_api_search_terms() {
-        assert!(looks_api_related("billing api"));
-        assert!(looks_api_related("GET endpoints"));
-        assert!(looks_api_related("openapi.yaml"));
-        assert!(looks_api_related("GraphQL resolver"));
-    }
-
-    #[test]
-    fn api_hint_ignores_non_api_words() {
-        assert!(!looks_api_related("capitalization"));
-        assert!(!looks_api_related("happier path"));
-        assert!(!looks_api_related("config loader"));
+    fn documentation_commands_are_removed_and_local_readers_remain() {
+        for args in [
+            vec!["agent-tools", "docs", "search", "api"],
+            vec!["agent-tools", "okf", "publish", "bundle", "--dry-run"],
+        ] {
+            let error = Cli::try_parse_from(args).err().expect("retired command");
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+        }
+        assert!(Cli::try_parse_from(["agent-tools", "doc", "outline", "README.md"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["agent-tools", "doc", "section", "README.md", "Usage"]).is_ok()
+        );
+        for command in ["validate", "import"] {
+            assert!(Cli::try_parse_from(["agent-tools", "okf", command, "bundle"]).is_ok());
+        }
+        assert!(
+            Cli::try_parse_from(["agent-tools", "okf", "export", "--destination", "bundle"])
+                .is_ok()
+        );
     }
 
     #[test]

@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.22.0
+
+- Removed gateway-backed API/agent documentation commands, client endpoints, prompt-hook retrieval, and OKF documentation publishing. Local Markdown reading and local OKF tools remain available.
+- Setup rules and skills no longer require documentation lookup or publication; rerunning setup replaces legacy managed rules and skills.
+- Patterns and automated local OKF generation, indexing, search, graph traversal, detailed reads, and import/export remain available.
+
+After updating the binaries, refresh existing managed rules and installed skills:
+
+```bash
+agent-tools update
+agent-tools setup rules --all
+agent-tools setup skill
+```
+
 ## v1.21.1
 
 - Delete CMUX identity enrollment parsing, token forwarding, prompt consumption,

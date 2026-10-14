@@ -1,6 +1,6 @@
-//! Agent-facing artifact substrate commands for docs/reviews/spec handoff.
+//! Agent-facing artifact substrate commands for reviews/spec handoff.
 //!
-//! Keep this surface in the CLI/docs side of the tree. `agent-comms` is for
+//! Keep this surface in the CLI side of the tree. `agent-comms` is for
 //! human communication primitives; artifact operations are shared document
 //! substrate operations used by agents.
 

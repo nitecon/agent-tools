@@ -179,31 +179,6 @@ agent-tools doc outline <file.md>              # heading outline only, no body
 agent-tools doc section <file.md> "<heading>"  # one section's body, by heading text
 ```
 
-## Markdown Context (gateway-backed)
-
-Before searching code for API behavior or implementing API-related work, check
-the agent-facing markdown context registry. Use `docs hierarchy --scope all` to
-find where local and global entries live and where new ones belong. Treat `scope`,
-`global_rank`, `owner_project`, `wiki_path`, and artifact ids as
-gateway-provided metadata; do not infer priority from owner project names. If no
-context exists, tell the user that future agents will work faster if a
-docs-first file is created, and ask whether to add one.
-
-```bash
-agent-tools docs search "<topic-or-workflow>" [--scope local|global|all]
-agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
-agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
-agent-tools docs get <id>
-agent-tools docs chunks --query "<topic-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
-agent-tools docs validate --file .agent/api/<app>.yaml
-agent-tools docs publish --file .agent/api/<app>.yaml
-```
-
-When creating or materially changing API-related files, publish the
-corresponding markdown context with `agent-tools docs publish`; for substantial
-work, track that publish step as an `agent-tools tasks` subtask or checklist
-item.
-
 ## Comms (gateway-backed messaging)
 
 Project ident auto-derives from the cwd git remote; agent id is
@@ -337,31 +312,6 @@ stored concepts render as Markdown.
 agent-tools doc outline <file.md>              # heading outline only, no body
 agent-tools doc section <file.md> "<heading>"  # one section's body, by heading text
 ```
-
-## Markdown Context (gateway-backed)
-
-Before searching code for API behavior or implementing API-related work, check
-the agent-facing markdown context registry. Use `docs hierarchy --scope all` to
-find where local and global entries live and where new ones belong. Treat `scope`,
-`global_rank`, `owner_project`, `wiki_path`, and artifact ids as
-gateway-provided metadata; do not infer priority from owner project names. If no
-context exists, tell the user that future agents will work faster if a
-docs-first file is created, and ask whether to add one.
-
-```bash
-agent-tools docs search "<topic-or-workflow>" [--scope local|global|all]
-agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
-agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
-agent-tools docs get <id>
-agent-tools docs chunks --query "<topic-or-workflow>" [--app APP] [--label LABEL] [--scope local|global|all]
-agent-tools docs validate --file .agent/api/<app>.yaml
-agent-tools docs publish --file .agent/api/<app>.yaml
-```
-
-When creating or materially changing API-related files, publish the
-corresponding markdown context with `agent-tools docs publish`; for substantial
-work, track that publish step as an `agent-tools tasks` subtask or checklist
-item.
 
 ## Comms (gateway-backed messaging)
 
@@ -511,9 +461,8 @@ mod tests {
         assert!(body.contains("Task Board"));
         assert!(body.contains("Markdown (structure-aware reading)"));
         assert!(body.contains("agent-tools doc outline"));
-        assert!(body.contains("Markdown Context (gateway-backed)"));
-        assert!(body.contains("agent-tools docs hierarchy"));
-        assert!(body.contains("agent-tools docs publish"));
+        assert!(!body.contains("Markdown Context"));
+        assert!(!body.contains("agent-tools docs"));
         assert!(body.contains("Comms"));
         // Comms polling was removed; tasks are the normal work queue.
         assert!(body.contains("Use comms for explicit gateway or cronjob messages"));
@@ -538,9 +487,8 @@ mod tests {
         assert!(body.contains("Task Board"));
         assert!(body.contains("Markdown (structure-aware reading)"));
         assert!(body.contains("agent-tools doc outline"));
-        assert!(body.contains("Markdown Context (gateway-backed)"));
-        assert!(body.contains("agent-tools docs hierarchy"));
-        assert!(body.contains("agent-tools docs publish"));
+        assert!(!body.contains("Markdown Context"));
+        assert!(!body.contains("agent-tools docs"));
         assert!(body.contains("Comms"));
         // Comms polling was removed; tasks are the normal work queue.
         assert!(body.contains("Use comms for explicit gateway or cronjob messages"));

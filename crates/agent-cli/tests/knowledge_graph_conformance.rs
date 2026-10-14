@@ -22,7 +22,7 @@ const REQUIRED_COLUMNS: [&str; 9] = [
     "Platform",
 ];
 
-const REQUIRED_FIXTURES: [&str; 13] = [
+const REQUIRED_FIXTURES: [&str; 10] = [
     "knowledge_graph/code/",
     "knowledge_graph/code/rust/lib.rs",
     "knowledge_graph/markdown/architecture.md",
@@ -30,9 +30,6 @@ const REQUIRED_FIXTURES: [&str; 13] = [
     "knowledge_graph/okf/v01/legacy.md",
     "knowledge_graph/migration/files-v0.sql",
     "knowledge_graph/migration/symbols-v0.sql",
-    "knowledge_graph/gateways/default.json",
-    "knowledge_graph/gateways/additional.json",
-    "knowledge_graph/gateways/failure.json",
     "knowledge_graph/hostile/invalid-frontmatter.md",
     "knowledge_graph/hostile/attested-computation.md",
     "knowledge_graph/hostile/limits.md",
@@ -244,31 +241,6 @@ fn okf_incremental_edit_and_removal_expose_only_current_edges() {
 
     fs::remove_dir_all(state).unwrap();
     fs::remove_dir_all(project).unwrap();
-}
-
-#[test]
-fn okf_publish_dry_run_is_gateway_free_and_deterministic() {
-    let state = isolated_state_dir("okf-publish-dry-run");
-    let project = fixture_root().join("knowledge_graph");
-    let first = run_agent_tools(
-        &project,
-        &state,
-        &["okf", "publish", "okf/v02", "--dry-run"],
-    );
-    let second = run_agent_tools(
-        &project,
-        &state,
-        &["okf", "publish", "okf/v02", "--dry-run"],
-    );
-    assert!(first.status.success(), "{}", stderr(&first));
-    assert_eq!(first.stdout, second.stdout);
-    let output = stdout(&first);
-    assert_eq!(output.lines().count(), 3);
-    assert!(output
-        .lines()
-        .all(|line| line.contains("\"action\":\"create\"")));
-
-    fs::remove_dir_all(state).expect("remove isolated state");
 }
 
 #[test]

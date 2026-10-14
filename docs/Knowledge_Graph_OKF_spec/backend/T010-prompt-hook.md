@@ -5,7 +5,7 @@ pattern context.
 
 ## Requirements
 
-- Query local and authorized gateway sources using the unified retriever.
+- Query local knowledge using the unified retriever.
 - Inject compact segments with identity, origin, trust/lifecycle warnings, and
   commands for full reads rather than whole documents.
 - Bound time, tokens, results, segment size, and graph expansion.
@@ -15,4 +15,4 @@ pattern context.
 ## Validation
 
 Golden tests cover ranking, source labels, lifecycle/trust handling, token
-budgets, deterministic output, unavailable stores, gateway timeouts, and hostile data.
+budgets, deterministic output, unavailable stores, and hostile data.

@@ -1,4 +1,3 @@
-pub mod federation;
 pub mod knowledge;
 pub mod okf;
 mod store;

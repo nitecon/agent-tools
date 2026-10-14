@@ -10,7 +10,6 @@
 
 use crate::cmd_gateway_context::{ensure_all_registered, resolve_context, resolve_context_for};
 use crate::hook_session::SessionMemory;
-use agent_comms::docs::ApiDocFilters;
 use agent_comms::patterns::PatternFilters;
 use anyhow::Result;
 use clap::Subcommand;
@@ -757,14 +756,13 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
 
     let task_ctx = resolve_context(None).ok();
     let agent_id = task_ctx.as_ref().map(|ctx| ctx.agent_id.clone());
-    let patterns_ctx = resolve_context_for("patterns", agent_id.clone()).ok();
-    let docs_ctx = resolve_context_for("docs", agent_id).ok();
+    let patterns_ctx = resolve_context_for("patterns", agent_id).ok();
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
 
-    let (patterns, tasks, gateway_knowledge) = rt.block_on(async {
+    let (patterns, tasks) = rt.block_on(async {
         tokio::time::timeout(Duration::from_millis(hook_timeout_ms()), async {
             let filters = PatternFilters {
                 query: Some(prompt.as_str()),
@@ -803,61 +801,11 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
                     }
                 }
             }
-            let mut knowledge = Vec::new();
-            if let Some(ctx) = &docs_ctx {
-                let _ = ensure_all_registered(ctx).await;
-                let filters = ApiDocFilters {
-                    query: Some(prompt.as_str()),
-                    scope: Some("all"),
-                    ..ApiDocFilters::default()
-                };
-                for target in &ctx.gateways {
-                    if let Ok(chunks) = target
-                        .gateway
-                        .api_doc_chunks(&ctx.ident, &filters, Some(&ctx.agent_id))
-                        .await
-                    {
-                        knowledge.extend(chunks.into_iter().take(k).map(|chunk| {
-                            KnowledgeSnippet {
-                                identity: chunk
-                                    .doc_id
-                                    .clone()
-                                    .or(chunk.id.clone())
-                                    .unwrap_or_else(|| "unknown".to_owned()),
-                                title: chunk
-                                    .title
-                                    .unwrap_or_else(|| "Gateway knowledge".to_owned()),
-                                text: compact_text(
-                                    chunk.text.as_deref().unwrap_or(""),
-                                    KNOWLEDGE_SEGMENT_CHARS,
-                                ),
-                                origin: format!("gateway:{}", target.profile),
-                                authority: "gateway".to_owned(),
-                                lifecycle: chunk.freshness.unwrap_or_else(|| "current".to_owned()),
-                                trust: if chunk.accepted_version_id.is_some() {
-                                    "accepted"
-                                } else {
-                                    "unverified"
-                                }
-                                .to_owned(),
-                                read_command: format!(
-                                    "agent-tools docs get {}",
-                                    chunk
-                                        .doc_id
-                                        .or(chunk.id)
-                                        .unwrap_or_else(|| "<id>".to_owned())
-                                ),
-                            }
-                        }));
-                    }
-                }
-            }
-            (p, t, knowledge)
+            (p, t)
         })
         .await
         .unwrap_or_default()
     });
-    knowledge.extend(gateway_knowledge);
     knowledge.sort_by(|left, right| {
         left.origin
             .cmp(&right.origin)

@@ -1,6 +1,5 @@
 pub mod actor;
 pub mod config;
-pub mod docs;
 pub mod gateway;
 pub mod hooks;
 pub mod identity;

@@ -71,6 +71,16 @@ agent-tools version
 
 The update rate-limit marker is stored at `~/.agentic/.agent-tools-update-check` and persists across reboots.
 
+The v1.22 release removes gateway-backed API/agent documentation. Patterns and
+automated local OKF code knowledge remain available. Binary updates do not
+refresh existing rule files or installed skills; run these commands afterward
+to remove legacy documentation instructions from the managed content:
+
+```bash
+agent-tools setup rules --all
+agent-tools setup skill
+```
+
 The v1.21 series registers task identity automatically from the calling native
 conversation and canonical project/Git/provider/OS context. Task mutations do
 not require CMUX membership or installed hooks. Close or release existing
@@ -115,7 +125,7 @@ Commands:
   refs      Show callers and callees for a symbol
   imports   Show import relationships
   impls     Show inheritance and implementation relationships
-  okf       Validate, import, export, or publish an OKF bundle
+  okf       Validate, import, or export an OKF bundle
   grep      Portable, deterministic text search
   sed       Portable, deterministic stream-editor preview/rewrite
   index     Build or update the project index
@@ -127,7 +137,6 @@ Commands:
   rm        Remove a file or directory
   comms     Send / receive messages via the gateway
   tasks     Per-project task board via the gateway
-  docs      Markdown context registry via the gateway
   patterns  Global pattern library and .patterns tracking via the gateway
   setup     Setup and configuration commands
   init      Configure gateway connection (alias for `setup gateway`)
@@ -217,15 +226,13 @@ substitute for reading the source.
 
 Repository-authored OKF is still first-class: a bundle in `.agents/knowledge/`
 is discovered by `agent-tools index`, and explicit bundles can be validated,
-imported, materialized, or published:
+imported, or materialized:
 
 ```bash
 agent-tools okf validate .agents/knowledge
 agent-tools okf import path/to/bundle
 agent-tools okf export path/to/bundle --destination /tmp/normalized-okf
 agent-tools okf export --destination /tmp/synth --with-index   # materialize the stored bundle
-agent-tools okf publish path/to/bundle --dry-run
-agent-tools okf publish path/to/bundle
 ```
 
 Files on disk and documents in the index are read the same way: `read`,
@@ -243,7 +250,7 @@ source; the database is a rebuildable search/graph projection. Results expose
 canonical identity, origin, authority, lifecycle, and trust rather than
 silently treating draft, stale, unresolved, or unverified knowledge as equal.
 
-The complete authoring, query, federation, migration, and recovery workflow is
+The complete authoring, query, migration, and recovery workflow is
 in [docs/okf-knowledge.md](docs/okf-knowledge.md). The model contract and
 executable conformance evidence are in
 [docs/knowledge-graph-okf.md](docs/knowledge-graph-okf.md) and
@@ -337,9 +344,9 @@ agent-tools tasks add \
 # Delegate cross-project work; all handoff fields are required
 agent-tools tasks add-delegated \
   --target-project "agent-gateway" \
-  --title "Expose delegated task creation in API docs" \
-  --description "agent-tools needs the endpoint documented for generated agent rules." \
-  --specification "Document required request fields, response ids, and target-project nudge behavior."
+  --title "Verify delegated task creation behavior" \
+  --description "agent-tools needs the current gateway request and response contract." \
+  --specification "Inspect required request fields, response ids, and target-project nudge behavior; share findings in this task."
 
 # Pick up, discuss, and complete work
 agent-tools tasks claim <id>
@@ -407,54 +414,6 @@ task tools are disabled in favour of this gateway board. The reminder fires only
 on `done` (never on `claim`/`release`/`comment`) and only after the transition
 succeeds. Set `AGENT_TOOLS_MEMORY_REMINDER=off` to suppress it if you don't run
 agent-memory.
-
-### Markdown Context (CLI)
-
-Gateway-backed markdown context gives agents context for services and apps: intent,
-workflows, auth expectations, safety constraints, cross-app relationships,
-copyable examples, operations, and schemas. OpenAPI/Swagger can feed this
-registry, but it is not required.
-
-```bash
-# Look up markdown context before searching code for API behavior
-agent-tools docs search "billing refunds"
-agent-tools docs hierarchy --scope all
-agent-tools docs search QUERY --scope global
-agent-tools docs chunks --query QUERY --scope all
-
-# Validate and publish a docs-first file, optionally with wiki placement
-agent-tools docs validate --file .agent/api/billing.yaml
-agent-tools docs publish --file .agent/api/billing.yaml --space apis --parent-id PAGE_ID --slug billing
-
-# Create a starter file, optionally from OpenAPI/Swagger
-agent-tools docs bootstrap --app billing --output .agent/api/billing.yaml
-agent-tools docs bootstrap --app billing --openapi openapi.yaml --output .agent/api/billing.yaml
-```
-
-Use `--scope local|global|all` where supported. `local` searches the current
-project, `global` searches globally visible markdown context from owner projects,
-and `all` combines both. Global precedence is provided by the gateway rank
-configured in the gateway UI as Global 1, Global 2, and so on; it is not tied to
-SRE, security, platform, or any `owner_project` naming convention. Results may
-show `scope`, `global_rank`, `owner_project`, `wiki_path`, `artifact_id`, and
-`artifact_version_id` metadata.
-
-Example output:
-
-```text
-$ agent-tools docs hierarchy --scope all
-Documentation hierarchy for project agent-gateway (scope=all)
-  space agent-tools: Agent Tools
-    scope=global global_rank=1 owner_project=agent-tools wiki_path=/Agent Tools
-    - page [doc-1] Documentation CLI
-      scope=global global_rank=1 owner_project=agent-tools wiki_path=/Agent Tools/Documentation CLI
-
-$ agent-tools docs search QUERY --scope global
-  [doc-1] agent-tools / Documentation CLI kind=agent_context
-       artifact_id: art-1
-       artifact_version_id: ver-1
-       scope=global global_rank=1 owner_project=agent-tools wiki_path=/Agent Tools/Documentation CLI
-```
 
 ### Patterns (CLI)
 
@@ -530,9 +489,9 @@ agent-tools setup rules --print
 
 Detection is by **agent home directory** rather than rule-file existence, so a fresh Codex install (with `~/.codex/` present but no `AGENTS.md`) still picks up the block on the first setup run. For Codex, `$CODEX_HOME` is honored with a fallback to `~/.codex`, matching Codex's own skill-install convention.
 
-The injected block is wrapped in `<agent-tools-rules>...</agent-tools-rules>` markers; re-runs replace the block in place rather than duplicating it. A `<file>.bak` sibling is written before each destructive modification so changes are recoverable (brand-new files skip the backup to avoid zero-byte `.bak` clutter).
+The injected block is wrapped in `<agent-tools-rules>...</agent-tools-rules>` markers; re-runs replace the block in place rather than duplicating it, removing retired gateway documentation rules from earlier installations. A `<file>.bak` sibling is written before each destructive modification so changes are recoverable (brand-new files skip the backup to avoid zero-byte `.bak` clutter).
 
-When the gateway is configured, the injected block includes code-exploration + markdown + comms + tasks + markdown context + patterns. When the gateway is not configured, only the code-exploration section is injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
+When the gateway is configured, the injected block includes code-exploration + markdown + comms + tasks + patterns. When the gateway is not configured, only the code-exploration and local Markdown sections are injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
 
 ### Automated install: `agent-tools setup hooks`
 
@@ -650,38 +609,6 @@ Prefer symbol-level tools over raw file reads whenever possible.
 ```
 </code_exploration_protocol>
 
-<api_context_protocol>
-## Markdown Context (MANDATORY when API-related)
-
-Before searching code for API behavior or implementing API-related work, look
-up gateway-backed markdown context and its hierarchy:
-
-```bash
-/opt/agentic/bin/agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
-/opt/agentic/bin/agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
-/opt/agentic/bin/agent-tools docs chunks --query "<api-or-workflow>" [--scope local|global|all]
-/opt/agentic/bin/agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
-```
-
-Use `--scope global` for globally visible shared docs and `--scope all` when
-local plus global context is useful. Treat `scope`, `global_rank`,
-`owner_project`, `wiki_path`, and artifact ids as gateway-provided metadata;
-do not infer priority from owner project names.
-
-If no markdown context exists, tell the user that future agents will work faster if
-one is created, and ask whether to add `.agent/api/<app>.yaml` or
-`agent-api.yaml`. When creating or materially changing API-related files,
-publish the corresponding context with:
-
-```bash
-/opt/agentic/bin/agent-tools docs validate --file .agent/api/<app>.yaml
-/opt/agentic/bin/agent-tools docs publish --file .agent/api/<app>.yaml
-```
-
-For substantial API work, track the publish step as an `agent-tools tasks`
-subtask or checklist item.
-</api_context_protocol>
-
 <comms_protocol>
 ## Communication Tools (MANDATORY — CLI only)
 
@@ -798,38 +725,6 @@ Prefer symbol-level tools over raw file reads whenever possible.
 /opt/agentic/bin/agent-tools rm <path>
 ```
 </code_exploration_protocol>
-
-<api_context_protocol>
-## Markdown Context (MANDATORY when API-related)
-
-Before searching code for API behavior or implementing API-related work, look
-up gateway-backed markdown context and its hierarchy:
-
-```bash
-/opt/agentic/bin/agent-tools docs search "<api-or-workflow>" [--scope local|global|all]
-/opt/agentic/bin/agent-tools docs hierarchy [--app APP] [--space SPACE] [--scope local|global|all]
-/opt/agentic/bin/agent-tools docs chunks --query "<api-or-workflow>" [--scope local|global|all]
-/opt/agentic/bin/agent-tools docs list [--app APP] [--label LABEL] [--kind KIND] [--query Q] [--scope local|global|all]
-```
-
-Use `--scope global` for globally visible shared docs and `--scope all` when
-local plus global context is useful. Treat `scope`, `global_rank`,
-`owner_project`, `wiki_path`, and artifact ids as gateway-provided metadata;
-do not infer priority from owner project names.
-
-If no markdown context exists, tell the user that future agents will work faster if
-one is created, and ask whether to add `.agent/api/<app>.yaml` or
-`agent-api.yaml`. When creating or materially changing API-related files,
-publish the corresponding context with:
-
-```bash
-/opt/agentic/bin/agent-tools docs validate --file .agent/api/<app>.yaml
-/opt/agentic/bin/agent-tools docs publish --file .agent/api/<app>.yaml
-```
-
-For substantial API work, track the publish step as an `agent-tools tasks`
-subtask or checklist item.
-</api_context_protocol>
 
 <comms_protocol>
 ## Communication Tools (MANDATORY — CLI only)
@@ -960,7 +855,7 @@ The MCP server includes 6 communication tools (`set_identity`, `send_message`, `
 
 ### Project upstream gateways
 
-A repository can declare read sources for tasks, patterns, and markdown context in
+A repository can declare read sources for tasks and patterns in
 `.agents/alternate-gateways.yml`. Credentials never belong in that file; each
 developer binds the declared profile locally through setup. Set
 `replace_default: true` when the repository's declared gateways must be used
@@ -975,7 +870,6 @@ gateways:
     read:
       - tasks
       - patterns
-      - docs
 ```
 
 When a default gateway is already configured, `agent-tools setup gateway`

@@ -72,7 +72,7 @@ fn gateway_file_version() -> u32 {
 }
 
 fn default_read_capabilities() -> Vec<String> {
-    vec!["tasks".into(), "patterns".into(), "docs".into()]
+    vec!["tasks".into(), "patterns".into()]
 }
 
 // -- Path helpers -------------------------------------------------------------
@@ -793,7 +793,7 @@ mod tests {
         )
         .unwrap();
         assert!(!parsed.replace_default);
-        assert_eq!(parsed.gateways[0].read, vec!["tasks", "patterns", "docs"]);
+        assert_eq!(parsed.gateways[0].read, vec!["tasks", "patterns"]);
     }
 
     #[test]

@@ -39,9 +39,9 @@ T011 and the specification definition of done.
 | `KG-A006` | T006 | Import, deterministic export, and re-import | `knowledge_graph/okf/v02/` | 0 | Re-imported canonical graph equals the imported graph and preserves unknown metadata, provenance, trust, lifecycle, links, and body | Second export is byte-identical after normalized generation fields | byte-exact | all |
 | `KG-A007` | T002, T004, T008 | Migrate previous indexes and run existing file/symbol commands | `knowledge_graph/migration/`, `knowledge_graph/code/` | 0 | Migrated/rebuilt resources are unique and old file/symbol results are equivalent | Existing file search, symbol search, `symbols`, and `symbol` output remains compatible | normalized | all |
 | `KG-A008` | T008 | Unified lexical search plus bounded graph expansion | `knowledge_graph/code/`, `knowledge_graph/markdown/`, `knowledge_graph/okf/v02/` | 0 | One query returns ranked code and knowledge resources with typed neighbors and filters | Results include canonical URI, kind, origin, authority, version/hash, lifecycle/trust, and full-read command | normalized | all |
-| `KG-A009` | T009 | Query local, default, additional, and failing gateway sources | `knowledge_graph/gateways/` | 0 | Exact identities deduplicate; equal hashes group distinct authorities; unauthorized entries are absent; successful sources survive one failure | Results label every origin and include a stable partial-failure diagnostic | normalized | all |
-| `KG-A010` | T010 | Submit a prompt matching local and federated knowledge | `knowledge_graph/gateways/`, `knowledge_graph/okf/v02/services/runbook.md` | 0 | Hook selection is relevance-first with bounded graph context and no data mutation | Output is deterministic, token-bounded, source-labelled, lifecycle/trust-aware, and includes deeper-read commands | byte-exact | all |
-| `KG-A011` | T006, T007, T009, T010, T011 | Parse/index/query hostile knowledge inputs | `knowledge_graph/hostile/` | 2 | No escaped path, URL fetch, HTML/script execution, SQL injection, YAML expansion, or computation execution occurs; limits are enforced | Stable diagnostics separate fatal invalid input from bounded warnings; hooks fail open | normalized | all |
+| `KG-A009` | CLI retirement | Reject retired documentation and OKF publish commands | `knowledge_graph/okf/v02/` | 2 | No documentation retrieval or publication occurs | CLI rejects retired commands; local Markdown and OKF commands remain available | normalized | all |
+| `KG-A010` | T010 | Submit a prompt matching local knowledge | `knowledge_graph/okf/v02/services/runbook.md` | 0 | Hook selection is relevance-first with bounded graph context and no data mutation | Output is deterministic, token-bounded, source-labelled, lifecycle/trust-aware, and includes deeper-read commands | byte-exact | all |
+| `KG-A011` | T006, T007, T010, T011 | Parse/index/query hostile knowledge inputs | `knowledge_graph/hostile/` | 2 | No escaped path, URL fetch, HTML/script execution, SQL injection, YAML expansion, or computation execution occurs; limits are enforced | Stable diagnostics separate fatal invalid input from bounded warnings; hooks fail open | normalized | all |
 | `KG-A012` | T011 | Run full conformance suite on Linux, macOS, and Windows | `knowledge_graph/` | 0 | Canonical URIs and graph state are equivalent across hosts | Deterministic output after documented path/timestamp/port normalization | normalized | platform |
 
 ## Fixture Inventory
@@ -57,9 +57,6 @@ All paths are relative to `crates/agent-cli/tests/fixtures/`.
 | `knowledge_graph/okf/v01/legacy.md` | OKF 0.1 timestamp and Citations compatibility | KG-A005 |
 | `knowledge_graph/migration/files-v0.sql` | Previous file-index schema/data seed | KG-A007 |
 | `knowledge_graph/migration/symbols-v0.sql` | Previous symbol-index schema/data seed | KG-A007 |
-| `knowledge_graph/gateways/default.json` | Default-gateway results and authority | KG-A009, KG-A010 |
-| `knowledge_graph/gateways/additional.json` | Additional upstream duplicates and production-only knowledge | KG-A009, KG-A010 |
-| `knowledge_graph/gateways/failure.json` | Deterministic simulated gateway failure | KG-A009, KG-A010 |
 | `knowledge_graph/hostile/invalid-frontmatter.md` | Missing required type and unsafe references | KG-A011 |
 | `knowledge_graph/hostile/attested-computation.md` | Retained but never executed computation contract | KG-A011 |
 | `knowledge_graph/hostile/limits.md` | Limit-test seed expanded in a temporary test directory | KG-A011 |
@@ -73,7 +70,7 @@ All paths are relative to `crates/agent-cli/tests/fixtures/`.
 | T003-T005 | KG-A001, KG-A002, KG-A003, KG-A007 | `agent-symbols` unit/integration tests plus CLI graph cases |
 | T006-T007 | KG-A001, KG-A002, KG-A004, KG-A005, KG-A006, KG-A011 | OKF/Markdown unit tests and conformance cases |
 | T008 | KG-A007, KG-A008 | CLI and MCP retrieval tests |
-| T009 | KG-A009 | mocked gateway integration tests |
+| CLI retirement | KG-A009 | `documentation_commands_are_removed_and_local_readers_remain` CLI parser test |
 | T010 | KG-A010 | prompt-hook golden tests |
 | T011 | KG-A001..KG-A012 | full workspace and platform matrix |
 

@@ -3,8 +3,9 @@
 ## Status
 
 - Specification version: 1
-- Target: `agent-tools` and its gateway-backed knowledge workflows
+- Target: `agent-tools` local knowledge workflows
 - Baseline revision: `7201491`
+- Gateway documentation requirements are retired; see Gateway Documentation Retirement.
 - OKF compatibility target: Google Open Knowledge Format 0.2
 
 ## Summary
@@ -27,8 +28,7 @@ The internal model is a semantic superset of OKF:
   same graph;
 - OKF import and export preserve path identities, raw frontmatter, unknown
   fields, Markdown bodies, links, trust, lifecycle, and provenance;
-- local, default-gateway, and additional-upstream-gateway results are merged
-  without losing origin or authority.
+- local knowledge retains its origin and authority.
 
 ## Goals
 
@@ -254,7 +254,7 @@ are not fetched.
 
 ### Gateway records
 
-Documentation, tasks, patterns, and artifacts are normalized into resources,
+Tasks, patterns, and artifacts can be normalized into resources,
 versions, segments, and typed edges while retaining gateway IDs, scope,
 artifact versions, wiki paths, ranks, and source gateway. Gateway access
 controls remain enforced at retrieval time and are never inferred from OKF
@@ -346,47 +346,26 @@ agent-tools knowledge get <RESOURCE>
 agent-tools okf validate [BUNDLE]
 agent-tools okf import [BUNDLE]
 agent-tools okf export [TARGET] [--dry-run]
-agent-tools okf publish [BUNDLE] [--gateway NAME] [--dry-run]
 ```
 
 MCP exposes equivalent read operations for search, get, graph traversal,
-backlinks/references, OKF validation, and origin metadata. Mutating publish or
-export operations require explicit CLI/user action and are not performed by
+backlinks/references, OKF validation, and origin metadata. Mutating export
+operations require explicit CLI/user action and are not performed by
 prompt hooks.
 
 Existing `search --type symbol|file`, `symbols`, `symbol`, and `index` behavior
 remains compatible unless a separately documented versioned change is accepted.
 
-## Gateway Projection And Federation
+## Gateway Documentation Retirement
 
-An OKF concept projects to gateway Documentation without replacing its OKF ID:
-
-```text
-type                -> kind
-title               -> title
-description         -> summary
-tags                -> labels
-concept ID/path     -> source_ref
-OKF version         -> source_format (okf/0.2)
-body/frontmatter    -> structured content.okf
-resolved links      -> linked artifact/resource identities
-```
-
-Publishing is initially one-way, hash-based, idempotent, and supports
-`--dry-run`. Two-way synchronization is deferred until rename, deletion,
-tombstone, and conflict semantics are specified.
-
-Federated reads query the local graph, configured default gateway, and
-repository-configured additional upstream gateways. They preserve origin and
-authorization boundaries. Exact canonical URI matches deduplicate; matching
-content hashes group equivalent results but do not erase distinct authority.
-Partial gateway failure returns labelled partial results and does not hide
-successful local or gateway results.
+Gateway API/agent documentation, OKF documentation publication, and federated
+knowledge retrieval have been removed. Knowledge retrieval now uses the local
+project index. Task and pattern upstream reads remain supported.
 
 ## Prompt-Hook Integration
 
 `user-prompt-submit` adds bounded knowledge retrieval after existing task and
-pattern context. It queries local and authorized gateway sources, injects
+pattern context. It queries local knowledge, injects
 compact segments rather than full documents, and includes origin, lifecycle,
 trust, and commands for deeper reads. A failure or unavailable gateway must not
 block the user prompt.
@@ -467,7 +446,7 @@ The implementation is not complete until automated tests cover:
 - `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`, and `cargo build --workspace` pass.
 - OKF conformance and round-trip fixtures pass without network access.
-- End-to-end CLI, MCP, hook, and gateway-federation tests pass.
-- User documentation describes authoring, indexing, querying, publishing,
+- End-to-end CLI, MCP, hook, and retired-command regression tests pass.
+- User documentation describes authoring, indexing, querying,
   diagnostics, trust/lifecycle labels, and recovery.
 - No separate OKF datastore or duplicate full-text corpus has been introduced.

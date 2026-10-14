@@ -159,36 +159,24 @@ not a guessed target.
 Equivalent MCP reads are available as `search_knowledge`, `get_knowledge`,
 `knowledge_graph`, and `knowledge_refs`.
 
-## Export and publish
+## Export
 
 ```bash
 # Deterministic normalized OKF export; re-import is graph-equivalent
 agent-tools okf export .agents/knowledge --destination /tmp/knowledge-export
-
-# Inspect the one-way gateway projection without gateway access or side effects
-agent-tools okf publish .agents/knowledge --dry-run
-
-# Publish create/update operations to default-gateway Documentation
-agent-tools okf publish .agents/knowledge
 ```
-
-Publishing uses the OKF canonical identity as `source_ref` and the content hash
-as `version`. An identical accepted projection is reused; a changed hash is an
-update. The structured content retains raw frontmatter, normalized metadata,
-Markdown body, links, path identity, and provenance. Publishing is one-way:
-gateway edits are not synchronized back into repository files.
 
 ## Default and project upstream gateways
 
-The default gateway remains the target for creates. Read operations also query
-eligible repository-configured upstreams in `.agents/alternate-gateways.yml`:
+The default gateway remains the target for creates. Task and pattern reads also
+query eligible repository-configured upstreams in `.agents/alternate-gateways.yml`:
 
 ```yaml
 version: 1
 gateways:
   - profile: prod-sre
     url: https://prod-gateway.example.com
-    read: [tasks, patterns, docs]
+    read: [tasks, patterns]
 ```
 
 Configure credentials outside Git:
@@ -198,17 +186,14 @@ agent-tools setup gateway --add-upstream prod-sre
 agent-tools setup gateway --list
 ```
 
-Federated reads preserve the gateway/origin and authority, deduplicate exact
-canonical identities, and group equal hashes without erasing distinct
-authoritative records. Unauthorized results are never reintroduced locally.
-If an additional gateway times out, successful local/default results remain and
+Task and pattern reads retain their source gateway when querying multiple
+upstreams. If an additional gateway times out, successful local/default results remain and
 the failure is labelled; a default-gateway failure remains an error for
 gateway-only commands.
 
 ## Authority, lifecycle, and prompt hooks
 
 - Git files and repository OKF are authoritative at the repository.
-- Gateway Documentation is authoritative at its source gateway.
 - Tree-sitter symbols, segments, resolved edges, and the local SQLite database
   are derived and rebuildable.
 - `draft`, `deprecated`, and `stale_after` are lifecycle signals, not access
@@ -217,15 +202,14 @@ gateway-only commands.
 
 Prompt hooks add only compact, bounded excerpts after relevant patterns and
 tasks. Every excerpt is labelled `[authority · lifecycle · trust]` and names the
-URI to pass to `agent-tools get` (or `agent-tools docs get`) for a deeper read.
+URI to pass to `agent-tools get` for a deeper read.
 Gateway work is time-bounded and fail-open; local knowledge still works without
 a gateway. Set `AGENT_TOOLS_HOOK=off` to disable all hook injection.
 
 Injection is gated so it earns its tokens. Prompt words are reduced to
 discriminating terms (stopwords, bare numbers, and the project's own name are
-dropped, and so is any term that hits most candidate titles). Repository- and
-gateway-authored knowledge is injected on any genuine hit, because it carries
-intent the source cannot express. Derived concepts summarize code the agent can
+dropped, and so is any term that hits most candidate titles). Repository-authored
+knowledge is injected on any genuine hit, because it carries intent the source cannot express. Derived concepts summarize code the agent can
 read directly, so they are injected only when the prompt names them (a title
 hit) and either a second term corroborates it or the agent has read the concept
 before; relationship and export listings never qualify, and near-empty excerpts
@@ -259,6 +243,6 @@ OKF Attested Computation executors or attesters. Attested Computation metadata
 and bodies are retained as inert knowledge. File/frontmatter/link/result/depth
 limits and symlink/path checks bound hostile inputs.
 
-Two-way gateway synchronization and Attested Computation execution are not
-implemented. A future feature must define separate authorization, sandboxing,
-attestation, and conflict-resolution contracts before enabling either.
+Attested Computation execution is not implemented. A future feature must
+define separate authorization, sandboxing, and attestation contracts before
+enabling it.
