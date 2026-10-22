@@ -1,4 +1,4 @@
-//! Register the invocation's native conversation without inspecting executors.
+//! Register the invocation's native conversation independently of terminal membership.
 
 use agent_comms::actor::{self, Actor};
 use anyhow::{bail, ensure, Context, Result};
@@ -54,14 +54,81 @@ impl NativeIds {
         }
     }
 
+    #[cfg(test)]
     fn conversation(&self) -> Result<Option<(&'static str, String)>> {
+        self.conversation_with_ancestors(std::iter::empty())
+    }
+
+    fn conversation_with_ancestors(
+        &self,
+        ancestors: impl IntoIterator<Item = Result<Self>>,
+    ) -> Result<Option<(&'static str, String)>> {
         match (self.for_provider("codex")?, self.for_provider("claude")?) {
-            (Some(_), Some(_)) => bail!("ambiguous provider-native conversation context"),
+            (Some(codex), Some(claude)) => {
+                // Native tools can inherit an enclosing provider's ID. Select only
+                // the ID introduced at a strictly nearer environment boundary.
+                // A shared executor introducing both IDs remains ambiguous.
+                for ancestor in ancestors {
+                    let ancestor = ancestor?;
+                    match (
+                        ancestor.for_provider("codex")?.as_ref() == Some(&codex),
+                        ancestor.for_provider("claude")?.as_ref() == Some(&claude),
+                    ) {
+                        (true, true) => continue,
+                        (false, true) => return Ok(Some(("codex", codex))),
+                        (true, false) => return Ok(Some(("claude", claude))),
+                        (false, false) => break,
+                    }
+                }
+                bail!("ambiguous provider-native conversation context")
+            }
             (Some(native), None) => Ok(Some(("codex", native))),
             (None, Some(native)) => Ok(Some(("claude", native))),
             (None, None) => Ok(None),
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn native_ancestors() -> impl Iterator<Item = Result<NativeIds>> {
+    let mut pid = std::process::id();
+    (0..256).map_while(move |_| {
+        if pid <= 1 {
+            return None;
+        }
+        let result: Result<NativeIds> = (|| {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+            // comm may contain spaces and parentheses; fields after its final ')'
+            // start with state and ppid.
+            pid = stat
+                .rsplit_once(')')
+                .and_then(|(_, fields)| fields.split_whitespace().nth(1))
+                .context("native ancestor parent unavailable")?
+                .parse()?;
+            let environment = std::fs::read(format!("/proc/{pid}/environ"))?;
+            let read = |name: &[u8]| -> Result<Option<String>> {
+                environment
+                    .split(|byte| *byte == 0)
+                    .find_map(|entry| entry.strip_prefix(name))
+                    .map(|value| {
+                        String::from_utf8(value.to_vec())
+                            .context("non-Unicode ancestor native identity")
+                    })
+                    .transpose()
+            };
+            Ok(NativeIds {
+                codex_thread: read(b"CODEX_THREAD_ID=")?,
+                codex_session: read(b"CODEX_SESSION_ID=")?,
+                claude_session: read(b"CLAUDE_CODE_SESSION_ID=")?,
+            })
+        })();
+        Some(result.context("ambiguous provider-native conversation context: read native ancestry"))
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn native_ancestors() -> impl Iterator<Item = Result<NativeIds>> {
+    std::iter::empty()
 }
 
 fn git_value(cwd: &Path, args: &[&str]) -> Option<String> {
@@ -114,7 +181,7 @@ fn register(provider: &str, native: &str) -> Result<Actor> {
 
 pub(crate) fn current() -> Result<Option<Actor>> {
     NativeIds::from_env()?
-        .conversation()?
+        .conversation_with_ancestors(native_ancestors())?
         .map(|(provider, native)| register(provider, &native))
         .transpose()
 }
@@ -150,6 +217,48 @@ mod tests {
         assert!(ids.conversation().is_err());
         assert_eq!(ids.for_provider("codex").unwrap(), Some("thread-a".into()));
         assert_eq!(ids.for_provider("claude").unwrap(), Some("claude-c".into()));
+    }
+
+    #[test]
+    fn nested_native_context_requires_a_strictly_nearer_boundary() {
+        let mixed = || NativeIds {
+            codex_thread: Some("codex-parent".into()),
+            claude_session: Some("claude-child".into()),
+            ..Default::default()
+        };
+        let claude = mixed()
+            .conversation_with_ancestors([
+                Ok(mixed()), // tool shell
+                Ok(NativeIds {
+                    codex_thread: Some("codex-parent".into()),
+                    ..Default::default()
+                }), // Claude process inherited Codex, before Claude tool injection
+            ])
+            .unwrap();
+        assert_eq!(claude, Some(("claude", "claude-child".into())));
+        let codex = mixed()
+            .conversation_with_ancestors([Ok(NativeIds {
+                claude_session: Some("claude-child".into()),
+                codex_thread: Some("older-codex".into()),
+                ..Default::default()
+            })])
+            .unwrap();
+        assert_eq!(codex, Some(("codex", "codex-parent".into())));
+
+        // Both injected at the same boundary, no boundary, or inaccessible
+        // evidence must never pick a provider based on a fixed preference.
+        assert!(mixed()
+            .conversation_with_ancestors([Ok(NativeIds::default())])
+            .is_err());
+        assert!(mixed().conversation_with_ancestors([Ok(mixed())]).is_err());
+        assert!(mixed()
+            .conversation_with_ancestors([Err(anyhow::anyhow!("unreadable"))])
+            .is_err());
+        let mut conflicting = mixed();
+        conflicting.codex_session = Some("other-codex".into());
+        assert!(conflicting
+            .conversation_with_ancestors([Ok(NativeIds::default())])
+            .is_err());
     }
 
     #[test]
