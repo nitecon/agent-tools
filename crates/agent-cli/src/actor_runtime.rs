@@ -346,7 +346,17 @@ mod tests {
                 .env_remove("CODEX_SESSION_ID")
                 .env_remove("CLAUDE_CODE_SESSION_ID")
                 .env_remove("CMUX_SOCKET")
-                .env_remove("CMUX_SOCKET_PATH");
+                .env_remove("CMUX_SOCKET_PATH")
+                .env_remove("AMUX_CLI_PATH");
+            // A rejecting amux CLI (absent/stale context) must not revoke provenance.
+            #[cfg(unix)]
+            if index == 1 {
+                use std::os::unix::fs::PermissionsExt;
+                let amux = directory.path().join("amux");
+                std::fs::write(&amux, "#!/bin/sh\nexit 1\n").unwrap();
+                std::fs::set_permissions(&amux, std::fs::Permissions::from_mode(0o700)).unwrap();
+                command.env("AMUX_CLI_PATH", &amux);
+            }
             command.env(
                 if provider == "codex" {
                     "CODEX_THREAD_ID"

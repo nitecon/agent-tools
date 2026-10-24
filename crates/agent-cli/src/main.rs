@@ -1,4 +1,5 @@
 mod actor_runtime;
+mod amux_actor;
 mod cmd_comms;
 mod cmd_docs_artifacts;
 mod cmd_gateway_context;
@@ -411,7 +412,7 @@ enum Commands {
         command: cmd_tasks::TasksCommands,
     },
 
-    /// Inspect the calling provider actor or local CMUX peers (no gateway needed).
+    /// Inspect the calling provider actor or local CMUX or amux peers (no gateway needed).
     Session {
         #[arg(long)]
         peers: bool,
