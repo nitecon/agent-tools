@@ -1,4 +1,4 @@
-//! Actor discovery and optional CMUX or amux membership. A local terminal never supplies
+//! Actor discovery and optional CMUX membership. A local terminal never supplies
 //! actor identity; it can only validate/bind the independently derived origin.
 
 use agent_comms::{
@@ -71,10 +71,7 @@ pub(crate) async fn mutation_origin() -> Result<Option<SessionOrigin>> {
     if let Some(actor) = actor {
         // Optional membership is independent of hooks and cannot revoke provenance.
         // No RPC absence, old API, invalid binding or timeout revokes provenance.
-        let _ = tokio::join!(
-            membership(&actor, "gateway.session.announce"),
-            amux_announce(&actor)
-        );
+        let _ = membership(&actor, "gateway.session.announce").await;
         Ok(Some(actor.origin))
     } else {
         Ok(None)
@@ -88,27 +85,7 @@ pub(crate) fn run(peers: bool, json_output: bool) -> Result<()> {
     rt.block_on(discover(peers, json_output))
 }
 
-/// Best-effort amux announcement, only inside an amux-launched terminal.
-async fn amux_announce(actor: &Actor) -> Option<Value> {
-    if !crate::amux_actor::available() {
-        return None;
-    }
-    crate::amux_actor::announce(actor).await.ok()
-}
-
 async fn discover(peers: bool, json_output: bool) -> Result<()> {
-    if peers && crate::amux_actor::available() {
-        // Inside amux, list its terminals; never fall back to an unrelated CMUX.
-        let peers = crate::amux_actor::peers()
-            .await
-            .context("amux peer discovery unavailable")?;
-        if json_output {
-            println!("{}", serde_json::to_string(&peers)?);
-        } else {
-            println!("{}", serde_json::to_string_pretty(&peers)?);
-        }
-        return Ok(());
-    }
     if peers {
         let peers = tokio::time::timeout(TIMEOUT, async {
             for endpoint in endpoints()? {
@@ -130,18 +107,11 @@ async fn discover(peers: bool, json_output: bool) -> Result<()> {
     }
     let actor = crate::actor_runtime::current()?
         .context("no provider-native actor context in this invocation")?;
-    let (bound, amux) = tokio::join!(
-        membership(&actor, "gateway.session.resolve"),
-        amux_announce(&actor)
-    );
-    let bound = bound.ok();
+    let bound = membership(&actor, "gateway.session.resolve").await.ok();
     if json_output {
         let mut value = serde_json::to_value(&actor)?;
         if let Some(bound) = bound {
             value["membership"] = serde_json::to_value(bound)?;
-        }
-        if let Some(amux) = amux {
-            value["amux"] = amux;
         }
         println!("{}", serde_json::to_string(&value)?);
     } else {
@@ -160,14 +130,6 @@ async fn discover(peers: bool, json_output: bool) -> Result<()> {
         );
         if let Some(surface) = bound.and_then(|m| m.surface_id) {
             println!("surface={surface}");
-        }
-        if let Some(amux) = amux {
-            println!(
-                "amux={} workspace={} terminal={}",
-                amux["binding_state"].as_str().unwrap_or_default(),
-                amux["workspace"].as_str().unwrap_or_default(),
-                amux["terminal"]
-            );
         }
     }
     Ok(())

@@ -105,17 +105,3 @@ SDK v1.21.1 removes identity enrollment interception and hook-driven membership.
 Ordinary v2 UUID derivation is unchanged. This handler-removal release operates
 independently of a new CMUX membership design. Update the SDK and restart the
 provider to load the corrected binary.
-
-## Optional amux membership
-
-Inside an amux-launched terminal, amux sets `AMUX_CLI_PATH` (its sibling CLI) and
-`AMUX_DELIVERY_DIRECTORY`. When `AMUX_CLI_PATH` names an absolute file,
-`agent-tools session` and task mutations run `amux actor announce` directly (no
-shell) with the same v2 actor JSON on stdin, alongside any CMUX request. The call
-is bounded to 2 seconds and 64 KiB of output; stderr is discarded and amux output
-is never printed except by `session`. A reply is accepted only if it echoes the
-exact actor on a valid attachment with `bound` or `ambiguous` state. amux
-absence, stale context, rejection or mismatch leaves the actor valid and unbound.
-`session --json` adds the verified reply as `amux`. `session --peers` inside amux
-lists `amux actor peers` (validated, never selected from) instead of CMUX peers.
-Named goals are not announced; the actor carries no goal field.
