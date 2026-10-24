@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.23.0
+
+- Announce native actors to amux terminals. When amux sets `AMUX_CLI_PATH` to an
+  absolute file, `agent-tools session` and task mutations run
+  `amux actor announce` directly (no shell, 2s/64 KiB bound) with the v2 actor
+  JSON and accept only an exact echo. Failure never revokes provenance; the
+  actor stays valid and unbound. `session --peers` inside amux lists validated
+  amux peers. See `docs/actor-origin.md`.
+- Resolve nested native identity from environment boundaries.
+
 ## v1.22.0
 
 - Removed gateway-backed API/agent documentation commands, client endpoints, prompt-hook retrieval, and OKF documentation publishing. Local Markdown reading and local OKF tools remain available.
