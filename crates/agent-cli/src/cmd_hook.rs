@@ -8,7 +8,7 @@
 //! A non-zero exit on UserPromptSubmit blocks the user's prompt in Claude.
 //! Every Err path silently returns Ok(()). Unconfigured gateway => silent.
 
-use crate::cmd_gateway_context::{ensure_all_registered, resolve_context, resolve_context_for};
+use crate::cmd_gateway_context::{ensure_all_registered, resolve_context_for};
 use crate::hook_session::SessionMemory;
 use agent_comms::patterns::PatternFilters;
 use anyhow::Result;
@@ -20,13 +20,13 @@ use std::time::Duration;
 
 #[derive(Subcommand)]
 pub enum HookCommands {
-    /// Hook for agent session start — injects open tasks as context.
+    /// Hook for agent session start — announces provider identity.
     SessionStart {
         /// Agent name (claude, codex, gemini). Defaults to claude.
         #[arg(long, default_value = "claude")]
         agent: Option<String>,
     },
-    /// Hook for user prompt submit — injects relevant patterns and tasks.
+    /// Hook for user prompt submit — injects relevant patterns and knowledge.
     UserPromptSubmit {
         /// Agent name (claude, codex, gemini). Defaults to claude.
         #[arg(long, default_value = "claude")]
@@ -140,7 +140,7 @@ pub(crate) fn render_envelope(event: &str, additional_context: &str) -> String {
     envelope.to_string()
 }
 
-/// Extract prompt tokens for task ranking: split on non-alphanumeric,
+/// Extract prompt tokens for knowledge matching: split on non-alphanumeric,
 /// lowercase, drop tokens shorter than 2 chars.
 pub(crate) fn prompt_tokens(prompt: &str) -> Vec<String> {
     prompt
@@ -148,24 +148,6 @@ pub(crate) fn prompt_tokens(prompt: &str) -> Vec<String> {
         .map(|t| t.to_ascii_lowercase())
         .filter(|t| t.len() >= 2)
         .collect()
-}
-
-/// Score a task by counting how many prompt tokens appear in its searchable text.
-pub(crate) fn score_task(tokens: &[String], title: &str, labels: &[String]) -> usize {
-    let haystack = format!(
-        "{} {}",
-        title.to_ascii_lowercase(),
-        labels.join(" ").to_ascii_lowercase()
-    );
-    tokens
-        .iter()
-        .filter(|t| haystack.contains(t.as_str()))
-        .count()
-}
-
-/// First 8 chars of an id (or the whole id when shorter) for compact display.
-fn short_id(id: &str) -> &str {
-    &id[..8.min(id.len())]
 }
 
 /// Session id from the hook payload, falling back to the env vars some CLIs
@@ -200,11 +182,6 @@ pub(crate) fn is_harness_notification(prompt: &str) -> bool {
     ];
     MARKERS.iter().any(|marker| head.starts_with(marker))
         || head.contains("[SYSTEM NOTIFICATION - NOT USER INPUT]")
-}
-
-/// Stable dedupe key for a task: a status change makes it new again.
-fn task_key(id: &str, status: &str) -> String {
-    format!("{id}:{status}")
 }
 
 /// Longest excerpt injected for authored (repository/gateway) knowledge.
@@ -638,94 +615,21 @@ fn hook_actor(agent: &str, payload: &Value) -> Option<agent_comms::actor::Actor>
 
 fn actor_context(agent: &str, payload: &Value) -> Option<String> {
     let actor = hook_actor(agent, payload)?;
-    Some(format!("Calling actor: {} session={} instance={} provider={} os={}. Ordinary task mutations reuse this registration automatically; CMUX membership is separate.", actor.actor_id, actor.origin.session_id, actor.origin.instance_id, actor.origin.provider, actor.origin.os))
+    Some(format!(
+        "Calling actor: {} session={} instance={} provider={} os={}. CMUX membership is separate.",
+        actor.actor_id,
+        actor.origin.session_id,
+        actor.origin.instance_id,
+        actor.origin.provider,
+        actor.origin.os
+    ))
 }
 
 fn run_session_start(agent: &str) -> Result<()> {
     let payload = read_payload();
-    let identity = payload.as_ref().and_then(|p| actor_context(agent, p));
-    let session_id = payload.as_ref().and_then(extract_session_id);
-    let root = std::env::current_dir()?;
-    let mut session = SessionMemory::open(&root, session_id.as_deref());
-
-    let ctx = match resolve_context(None) {
-        Ok(ctx) => ctx,
-        Err(_) => {
-            if let Some(identity) = identity {
-                println!("{}", render_envelope(event_name(true, agent), &identity));
-            }
-            return Ok(());
-        }
-    };
-    let k = hook_limit();
-
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
-    let tasks = rt
-        .block_on(async {
-            ensure_all_registered(&ctx).await?;
-            let mut tasks = Vec::new();
-            for target in &ctx.gateways {
-                if let Ok(mut found) = target
-                    .gateway
-                    .list_tasks(
-                        &ctx.ident,
-                        Some(&["todo", "in_progress"]),
-                        false,
-                        Some(&ctx.agent_id),
-                    )
-                    .await
-                {
-                    tasks.append(&mut found);
-                }
-            }
-            Ok::<_, anyhow::Error>(tasks)
-        })
-        .unwrap_or_default();
-
-    if tasks.is_empty() {
-        if let Some(identity) = identity {
-            println!("{}", render_envelope(event_name(true, agent), &identity));
-        }
-        return Ok(());
+    if let Some(identity) = payload.as_ref().and_then(|p| actor_context(agent, p)) {
+        println!("{}", render_envelope(event_name(true, agent), &identity));
     }
-
-    let displayed: Vec<_> = tasks.iter().take(k).collect();
-
-    let mut lines = vec!["Open tasks for this session:".to_string()];
-    if let Some(identity) = identity {
-        lines.insert(0, identity);
-    }
-    for t in &displayed {
-        let owner = t.owner_agent_id.as_deref().unwrap_or("—");
-        let owner_session = t
-            .owner_origin
-            .as_ref()
-            .map(|origin| {
-                format!(
-                    ", owner_session={} owner_instance={}",
-                    origin.session_id, origin.instance_id
-                )
-            })
-            .unwrap_or_default();
-        lines.push(format!(
-            "[{}] {} ({}, owner={owner}{owner_session})",
-            short_id(&t.id),
-            t.title,
-            t.status
-        ));
-        // The prompt hook must not repeat what the session already opened with.
-        session.state.tasks.insert(task_key(&t.id, &t.status));
-    }
-    lines.push("Pull full detail + spec before starting: agent-tools tasks get <id>".to_string());
-
-    let additional_context = lines.join("\n");
-    let event = event_name(true, agent);
-    let envelope = render_envelope(event, &additional_context);
-    println!("{envelope}");
-    session.save();
     Ok(())
 }
 
@@ -750,19 +654,16 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
     let mut session = SessionMemory::open(&root, extract_session_id(&payload).as_deref());
 
     let k = hook_limit();
-    let tokens = prompt_tokens(&prompt);
     let mut knowledge =
         local_knowledge_snippets(&prompt, k, &session.state.knowledge).unwrap_or_default();
 
-    let task_ctx = resolve_context(None).ok();
-    let agent_id = task_ctx.as_ref().map(|ctx| ctx.agent_id.clone());
-    let patterns_ctx = resolve_context_for("patterns", agent_id).ok();
+    let patterns_ctx = resolve_context_for("patterns", None).ok();
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
 
-    let (patterns, tasks) = rt.block_on(async {
+    let patterns = rt.block_on(async {
         tokio::time::timeout(Duration::from_millis(hook_timeout_ms()), async {
             let filters = PatternFilters {
                 query: Some(prompt.as_str()),
@@ -783,25 +684,7 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
                     }
                 }
             }
-            let mut t = Vec::new();
-            if let Some(ctx) = &task_ctx {
-                let _ = ensure_all_registered(ctx).await;
-                for target in &ctx.gateways {
-                    if let Ok(mut found) = target
-                        .gateway
-                        .list_tasks(
-                            &ctx.ident,
-                            Some(&["todo", "in_progress"]),
-                            false,
-                            Some(&ctx.agent_id),
-                        )
-                        .await
-                    {
-                        t.append(&mut found);
-                    }
-                }
-            }
-            (p, t)
+            p
         })
         .await
         .unwrap_or_default()
@@ -822,24 +705,7 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
         .take(k)
         .collect();
 
-    // Rank tasks by prompt token overlap, skipping ones this session has seen
-    // in their current status.
-    let mut scored_tasks: Vec<_> = tasks
-        .into_iter()
-        .filter(|t| !session.state.tasks.contains(&task_key(&t.id, &t.status)))
-        .filter_map(|t| {
-            let s = score_task(&tokens, &t.title, &t.labels);
-            if s > 0 {
-                Some((s, t))
-            } else {
-                None
-            }
-        })
-        .collect();
-    scored_tasks.sort_by_key(|b| std::cmp::Reverse(b.0));
-    let top_tasks: Vec<_> = scored_tasks.into_iter().take(3).map(|(_, t)| t).collect();
-
-    if patterns.is_empty() && top_tasks.is_empty() && knowledge.is_empty() && identity.is_none() {
+    if patterns.is_empty() && knowledge.is_empty() && identity.is_none() {
         return Ok(());
     }
 
@@ -848,9 +714,6 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
     }
     for pattern in &patterns {
         session.state.patterns.insert(pattern.id.clone());
-    }
-    for task in &top_tasks {
-        session.state.tasks.insert(task_key(&task.id, &task.status));
     }
 
     let mut sections = Vec::new();
@@ -868,15 +731,6 @@ fn run_user_prompt_submit(agent: &str) -> Result<()> {
             // `patterns get` accepts the slug or the id; the slug is the
             // stabler, human-readable handle so we surface it first.
             lines.push(format!("  fetch: agent-tools patterns get {}", p.slug));
-        }
-        sections.push(lines.join("\n"));
-    }
-
-    if !top_tasks.is_empty() {
-        let mut lines = vec!["Possibly-relevant open tasks:".to_string()];
-        for t in &top_tasks {
-            lines.push(format!("  [{}] {}", short_id(&t.id), t.title));
-            lines.push(format!("  agent-tools tasks get {}", t.id));
         }
         sections.push(lines.join("\n"));
     }
@@ -1296,33 +1150,6 @@ mod tests {
         assert!(tokens.contains(&"bug".to_string()));
         // single-char tokens dropped
         assert!(!tokens.contains(&"a".to_string()));
-    }
-
-    #[test]
-    fn score_task_counts_matching_tokens() {
-        let tokens: Vec<String> = vec!["auth".to_string(), "login".to_string()];
-        let score = score_task(&tokens, "Fix auth login flow", &[]);
-        assert_eq!(score, 2);
-    }
-
-    #[test]
-    fn score_task_zero_for_no_overlap() {
-        let tokens: Vec<String> = vec!["payment".to_string()];
-        let score = score_task(&tokens, "Fix auth login flow", &[]);
-        assert_eq!(score, 0);
-    }
-
-    #[test]
-    fn score_task_includes_labels() {
-        let tokens: Vec<String> = vec!["backend".to_string()];
-        let score = score_task(&tokens, "Fix something", &["backend".to_string()]);
-        assert_eq!(score, 1);
-    }
-
-    #[test]
-    fn short_id_truncates_and_handles_short() {
-        assert_eq!(short_id("019dbaf9-2527-7782"), "019dbaf9");
-        assert_eq!(short_id("abc"), "abc");
     }
 
     // -- fail-soft -----------------------------------------------------------

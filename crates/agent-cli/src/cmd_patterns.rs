@@ -9,7 +9,6 @@ use agent_comms::patterns::{
     AddPatternCommentRequest, CreatePatternRequest, Pattern, PatternComment, PatternFilters,
     PatternSummary, UpdatePatternRequest,
 };
-use agent_comms::tasks::{CreateTaskRequest, TaskSummary};
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
@@ -205,8 +204,6 @@ struct PatternCheck {
     usage: PatternUsage,
     pattern: Pattern,
     replacement: Option<String>,
-    task_created: Option<String>,
-    task_existing: Option<String>,
 }
 
 struct CreatePatternArgs {
@@ -765,82 +762,17 @@ async fn check_usages(
             .await
             .with_context(|| format!("fetch pattern {}", usage.id))?;
         let replacement = superseded_replacement(&pattern);
-        let mut task_created = None;
-        let mut task_existing = None;
-        if let Some(next) = replacement.as_deref() {
-            match ensure_superseded_task(ctx, &pattern, next, &usage).await? {
-                SupersededTask::Created(id) => task_created = Some(id),
-                SupersededTask::Existing(id) => task_existing = Some(id),
-            }
-        }
         checks.push(PatternCheck {
             usage,
             pattern,
             replacement,
-            task_created,
-            task_existing,
         });
     }
     Ok(checks)
 }
 
-enum SupersededTask {
-    Created(String),
-    Existing(String),
-}
-
-async fn ensure_superseded_task(
-    ctx: &PatternsContext,
-    pattern: &Pattern,
-    replacement: &str,
-    usage: &PatternUsage,
-) -> Result<SupersededTask> {
-    ensure_registered(ctx).await?;
-    let title = format!("Migrate pattern {} to {}", pattern.id, replacement);
-    let statuses = ["todo", "in_progress"];
-    let existing: Vec<TaskSummary> = ctx
-        .gateway
-        .list_tasks(&ctx.ident, Some(&statuses), false, Some(&ctx.agent_id))
-        .await
-        .context("list tasks before creating superseded-pattern task")?;
-    if let Some(task) = existing.iter().find(|task| task.title == title) {
-        return Ok(SupersededTask::Existing(task.id.clone()));
-    }
-
-    let path_text = if usage.paths.is_empty() {
-        "No paths are recorded in .patterns.".to_string()
-    } else {
-        format!("Recorded paths:\n{}", usage.paths.join("\n"))
-    };
-    let details = format!(
-        "Pattern `{}` ({}) is superseded by `{}`.\n\n{}",
-        pattern.id, pattern.title, replacement, path_text
-    );
-    let labels = vec!["patterns".to_string(), "migration".to_string()];
-    let hostname = local_hostname();
-    let req = CreateTaskRequest {
-        title: &title,
-        description: Some("Update repository usage from a superseded pattern to its replacement."),
-        specification: Some(&details),
-        details: None,
-        labels: Some(&labels),
-        hostname: hostname.as_deref(),
-        reporter: Some(&ctx.agent_id),
-    };
-    let response = ctx
-        .gateway
-        .create_task(&ctx.ident, &req, Some(&ctx.agent_id))
-        .await
-        .context("create superseded-pattern migration task")?;
-    Ok(SupersededTask::Created(response.task.id))
-}
-
 fn resolve_context(agent_id_override: Option<String>) -> Result<PatternsContext> {
     resolve_context_for("patterns", agent_id_override)
-}
-
-async fn ensure_registered(ctx: &PatternsContext) -> Result<()> {
-    ensure_all_registered(ctx).await
 }
 
 async fn find_pattern<'a>(
@@ -1279,11 +1211,7 @@ fn render_checks_text(checks: &[PatternCheck]) {
                 "[superseded] {} ({}) -> {}{}",
                 check.pattern.id, check.pattern.title, replacement, path_suffix
             );
-            if let Some(task_id) = check.task_created.as_deref() {
-                println!("  created migration task {task_id}");
-            } else if let Some(task_id) = check.task_existing.as_deref() {
-                println!("  migration task already exists {task_id}");
-            }
+            println!("  {}", agent_comms::tasks::TASK_MIGRATION);
         } else if check.pattern.state == "active" || check.pattern.version == "latest" {
             println!(
                 "[active] {} ({}, version={}, state={}){}",
@@ -1421,18 +1349,6 @@ where
         if !item.trim().is_empty() && seen.insert(item.clone()) {
             values.push(item);
         }
-    }
-}
-
-fn local_hostname() -> Option<String> {
-    let host = gethostname::gethostname()
-        .to_string_lossy()
-        .trim()
-        .to_string();
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
     }
 }
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retire generated task protocols, queue injections and nudges; task CLI/API and permission setup now return non-mutating amux migration errors. Preserve unrelated context, manual instructions and separate amux blocks on regeneration; existing sessions must reload. Unpublished goal/profile source remains preserved.
+
 - Resolve nested native identity from environment boundaries.
 
 ## v1.22.0

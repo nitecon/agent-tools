@@ -1,8 +1,7 @@
 //! Shared JSON settings-file helpers used across setup subcommands.
 //!
-//! Provides generic I/O and parse utilities that both `cmd_setup_perms` and
-//! the hook-install machinery in `cmd_setup_hooks` need, so neither has to
-//! duplicate the serde round-trip, atomic write, or backup logic.
+//! Provides hook-install utilities for `cmd_setup_hooks`, preserving unrelated
+//! settings and native task permissions managed by amux.
 
 use anyhow::{Context, Result};
 pub(crate) use serde_json::{Map, Value};
@@ -10,52 +9,12 @@ use std::path::{Path, PathBuf};
 
 // --- Path helpers ---
 
-/// Canonical path for the Claude Code settings file.
-pub(crate) fn claude_settings_path() -> PathBuf {
-    agent_comms::config::home_dir()
-        .join(".claude")
-        .join("settings.json")
-}
-
 /// Generic path: `<agent_home>/settings.json`.
 pub(crate) fn agent_settings_path(agent_home: &Path) -> PathBuf {
     agent_home.join("settings.json")
 }
 
 // --- I/O helpers ---
-
-/// Read the file text. Returns empty string if file is absent (not an error).
-pub(crate) fn read_settings_text(path: &Path) -> Result<String> {
-    match std::fs::read_to_string(path) {
-        Ok(s) => Ok(s),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
-    }
-}
-
-/// Parse text as a JSON Value. Blank text becomes an empty object.
-pub(crate) fn parse_or_empty(text: &str) -> Result<Value> {
-    if text.trim().is_empty() {
-        return Ok(Value::Object(Map::new()));
-    }
-    Ok(serde_json::from_str(text)?)
-}
-
-/// Serialize Value to 2-space-indented JSON with a trailing newline.
-pub(crate) fn render_pretty(v: &Value) -> Result<String> {
-    let mut out = serde_json::to_string_pretty(v).context("serialize settings to JSON")?;
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    Ok(out)
-}
-
-/// `.bak` sibling path.
-pub(crate) fn backup_path(path: &Path) -> PathBuf {
-    let mut s = path.as_os_str().to_owned();
-    s.push(".bak");
-    PathBuf::from(s)
-}
 
 /// Human-readable JSON type name for error messages.
 pub(crate) fn type_name(v: &Value) -> &'static str {
@@ -410,24 +369,5 @@ mod tests {
         let path = dir.path.join("settings.json");
         let out = remove_hook_group(&path, "UserPromptSubmit", MARKER).unwrap();
         assert_eq!(out, SettingsOutcome::AlreadyAbsent);
-    }
-
-    #[test]
-    fn parse_or_empty_blank_input() {
-        let v = parse_or_empty("   \n  ").unwrap();
-        assert_eq!(v, Value::Object(Map::new()));
-    }
-
-    #[test]
-    fn render_pretty_ends_with_newline() {
-        let v = serde_json::json!({"a": 1});
-        let s = render_pretty(&v).unwrap();
-        assert!(s.ends_with('\n'));
-    }
-
-    #[test]
-    fn claude_settings_path_ends_correctly() {
-        let p = claude_settings_path();
-        assert!(p.ends_with(".claude/settings.json"));
     }
 }

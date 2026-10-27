@@ -804,29 +804,6 @@ struct SpecAcceptRequest<'a> {
     actor_display_name: Option<&'a str>,
 }
 
-#[derive(Debug, Serialize)]
-struct GenerateSpecTasksRequest<'a> {
-    confirmed: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    manifest_item_ids: Option<&'a [String]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reporter: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    hostname: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    actor_display_name: Option<&'a str>,
-}
-
-#[derive(Debug, Serialize)]
-struct LinkSpecTaskRequest<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    version_id: Option<&'a str>,
-    manifest_item_id: &'a str,
-    task_id: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    actor_display_name: Option<&'a str>,
-}
-
 pub fn dispatch(cmd: ArtifactsCommands) -> Result<()> {
     ensure_gateway_configured()?;
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -846,6 +823,12 @@ pub fn dispatch_reviews(cmd: ReviewsCommands) -> Result<()> {
 }
 
 pub fn dispatch_specs(cmd: SpecsCommands) -> Result<()> {
+    if matches!(
+        cmd,
+        SpecsCommands::GenerateTasks { .. } | SpecsCommands::LinkTask { .. }
+    ) {
+        anyhow::bail!(agent_comms::tasks::TASK_MIGRATION);
+    }
     ensure_gateway_configured()?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -2042,93 +2025,31 @@ async fn cmd_spec_manifest_item(
 
 #[allow(clippy::too_many_arguments)]
 async fn cmd_spec_generate_tasks(
-    artifact_id: String,
-    manifest_item_ids: Vec<String>,
-    confirmed: bool,
-    reporter: Option<String>,
-    hostname: Option<String>,
-    actor_display_name: Option<String>,
-    mutation: MutationOptions,
-    project: Option<String>,
-    agent_id: Option<String>,
+    _artifact_id: String,
+    _manifest_item_ids: Vec<String>,
+    _confirmed: bool,
+    _reporter: Option<String>,
+    _hostname: Option<String>,
+    _actor_display_name: Option<String>,
+    _mutation: MutationOptions,
+    _project: Option<String>,
+    _agent_id: Option<String>,
 ) -> Result<()> {
-    require_nonempty("artifact_id", &artifact_id)?;
-    let ctx = resolve_context(project, agent_id)?;
-    ensure_registered(&ctx).await?;
-    let url = format!(
-        "{}/v1/projects/{}/specs/{}/generate-tasks",
-        ctx.gateway_url,
-        ctx.ident,
-        encode_query_component(&artifact_id)
-    );
-    let selected = if manifest_item_ids.is_empty() {
-        None
-    } else {
-        Some(manifest_item_ids.as_slice())
-    };
-    let req = GenerateSpecTasksRequest {
-        confirmed,
-        manifest_item_ids: selected,
-        reporter: reporter.as_deref(),
-        hostname: hostname.as_deref(),
-        actor_display_name: actor_display_name.as_deref(),
-    };
-    let resp = mutation_request(
-        &ctx,
-        ctx.client.post(&url).json(&req),
-        "task.generate_from_spec workflow_run.start link.write",
-        mutation,
-    )
-    .send()
-    .await
-    .context("POST /v1/projects/:ident/specs/:artifact_id/generate-tasks")?;
-    let data: ArtifactMutationResponse<Value> =
-        decode_or_bail(resp, "decode spec task generation response").await?;
-    print_spec_mutation("generated spec tasks", &data.data, &data.provenance);
-    Ok(())
+    anyhow::bail!(agent_comms::tasks::TASK_MIGRATION)
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn cmd_spec_link_task(
-    artifact_id: String,
-    manifest_item_id: String,
-    task_id: String,
-    version_id: Option<String>,
-    actor_display_name: Option<String>,
-    mutation: MutationOptions,
-    project: Option<String>,
-    agent_id: Option<String>,
+    _artifact_id: String,
+    _manifest_item_id: String,
+    _task_id: String,
+    _version_id: Option<String>,
+    _actor_display_name: Option<String>,
+    _mutation: MutationOptions,
+    _project: Option<String>,
+    _agent_id: Option<String>,
 ) -> Result<()> {
-    require_nonempty("artifact_id", &artifact_id)?;
-    require_nonempty("manifest_item_id", &manifest_item_id)?;
-    require_nonempty("task_id", &task_id)?;
-    let ctx = resolve_context(project, agent_id)?;
-    ensure_registered(&ctx).await?;
-    let url = format!(
-        "{}/v1/projects/{}/specs/{}/link-task",
-        ctx.gateway_url,
-        ctx.ident,
-        encode_query_component(&artifact_id)
-    );
-    let req = LinkSpecTaskRequest {
-        version_id: version_id.as_deref(),
-        manifest_item_id: &manifest_item_id,
-        task_id: &task_id,
-        actor_display_name: actor_display_name.as_deref(),
-    };
-    let resp = mutation_request(
-        &ctx,
-        ctx.client.post(&url).json(&req),
-        "task.generate_from_spec workflow_run.start link.write",
-        mutation,
-    )
-    .send()
-    .await
-    .context("POST /v1/projects/:ident/specs/:artifact_id/link-task")?;
-    let data: ArtifactMutationResponse<Value> =
-        decode_or_bail(resp, "decode spec task link response").await?;
-    print_spec_mutation("linked spec task", &data.data, &data.provenance);
-    Ok(())
+    anyhow::bail!(agent_comms::tasks::TASK_MIGRATION)
 }
 
 #[allow(clippy::too_many_arguments)]

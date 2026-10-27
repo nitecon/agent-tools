@@ -2,18 +2,16 @@
 //! `agent-tools setup all` (non-interactive sweep).
 //!
 //! The components are intentionally executed in a fixed order:
-//!   1. gateway  — supplies the URL/key that rules+comms+tasks all depend on
+//!   1. gateway  — supplies the URL/key that rules+comms all depend on
 //!   2. hooks    — syncs app-scoped hook files from the gateway when present
 //!   3. rules    — injects the mandatory-protocols block into rule files
 //!   4. skill    — installs the Claude Code skill (independent of gateway)
-//!   5. perms    — denies native Task* so agents are forced onto the board
 //!
 //! Putting rules before skill keeps humans reading a freshly-updated
 //! CLAUDE.md able to see the new rules ahead of the model discovering the
-//! skill. Perms is intentionally last so a partial failure still leaves the
-//! positive instructions (rules+skill) in place without the blocking denies.
+//! skill. Native task settings are managed by amux.
 
-use crate::{cmd_setup_hooks, cmd_setup_perms, cmd_setup_rules, cmd_setup_skill};
+use crate::{cmd_setup_hooks, cmd_setup_rules, cmd_setup_skill};
 use agent_comms::config::{load_config, project_gateway_statuses, user_gateway_conf_path};
 use anyhow::{Context, Result};
 use std::io::{self, BufRead, Write};
@@ -25,16 +23,14 @@ pub enum Component {
     Hooks,
     Rules,
     Skill,
-    Perms,
 }
 
 impl Component {
-    pub const ALL: [Component; 5] = [
+    pub const ALL: [Component; 4] = [
         Component::Gateway,
         Component::Hooks,
         Component::Rules,
         Component::Skill,
-        Component::Perms,
     ];
 
     fn label(self) -> &'static str {
@@ -43,7 +39,6 @@ impl Component {
             Component::Hooks => "Hooks",
             Component::Rules => "Rules",
             Component::Skill => "Skill",
-            Component::Perms => "Perms",
         }
     }
 }
@@ -88,7 +83,7 @@ pub fn run_interactive() -> Result<()> {
 /// confirmation prompt; useful for scripted installs.
 pub fn run_all(assume_yes: bool) -> Result<()> {
     if !assume_yes {
-        println!("Will install: gateway, hooks, rules, skill, perms.");
+        println!("Will install: gateway, hooks, rules, skill.");
         print!("Proceed? [y/N]: ");
         io::stdout().flush().context("flush stdout")?;
         let mut input = String::new();
@@ -117,7 +112,6 @@ fn probe(c: Component) -> ComponentState {
         Component::Hooks => probe_hooks(),
         Component::Rules => probe_rules(),
         Component::Skill => probe_skill(),
-        Component::Perms => probe_perms(),
     }
 }
 
@@ -247,26 +241,6 @@ fn probe_skill() -> ComponentState {
     ComponentState { installed, detail }
 }
 
-fn probe_perms() -> ComponentState {
-    if cmd_setup_perms::is_fully_installed() {
-        ComponentState {
-            installed: true,
-            detail: format!(
-                "Task* denies present in {}",
-                cmd_setup_perms::settings_path().display()
-            ),
-        }
-    } else {
-        ComponentState {
-            installed: false,
-            detail: format!(
-                "Task* denies missing from {}",
-                cmd_setup_perms::settings_path().display()
-            ),
-        }
-    }
-}
-
 fn detect_rule_files() -> Vec<PathBuf> {
     // Delegate to the rules module so detection stays in lockstep between
     // the interactive menu and the direct subcommand. This picks up agents
@@ -291,7 +265,6 @@ fn run_components(components: &[Component]) -> Result<()> {
             Component::Hooks => cmd_setup_hooks::run(Vec::new(), false, false),
             Component::Rules => cmd_setup_rules::run(None, true, false, false),
             Component::Skill => cmd_setup_skill::run(false, false),
-            Component::Perms => cmd_setup_perms::run(false, false, false),
         };
         if let Err(e) = result {
             eprintln!("{} failed: {e:#}", c.label());
@@ -390,8 +363,7 @@ mod tests {
 
     #[test]
     fn component_all_order_matches_execution_contract() {
-        // Pin the order so future contributors don't accidentally reorder and
-        // end up installing perms before the rules that explain them.
+        // Task permission setup is retired; keep the remaining install order.
         assert_eq!(
             Component::ALL,
             [
@@ -399,7 +371,6 @@ mod tests {
                 Component::Hooks,
                 Component::Rules,
                 Component::Skill,
-                Component::Perms
             ]
         );
     }

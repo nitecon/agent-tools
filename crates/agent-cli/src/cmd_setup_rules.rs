@@ -21,7 +21,7 @@ const CLOSE_MARKER: &str = "</agent-tools-rules>";
 // exploration is always included; the gateway-backed sections are only added
 // when the local gateway config is present, so agents on un-configured
 // machines still get the symbol/tree directives without false references to
-// comms or tasks they can't actually reach.
+// comms they can't actually reach.
 //
 // Keep these in lockstep with the README's "Manual rules install" section —
 // `setup rules --print` is the single source of truth.
@@ -60,7 +60,7 @@ agent-tools index --rebuild                    # refresh after large changes
 - `agent-tools index` synthesizes OKF concepts from the code index into the project database. Nothing is written to the repository; there are no knowledge files to author.
 - Concepts are `derived` authority — they rank below repository- and gateway-authored knowledge and never replace reading the source.
 - Read a concept URI with `read`/`doc` exactly like a path; a real path always reads from disk.
-- Tool use feeds the graph: reads/greps record access signals, and `tasks done` writes a draft Observation linked to what the work touched. `AGENT_TOOLS_OBSERVE=off` disables.
+- Tool use feeds the graph: reads/greps record access signals. `AGENT_TOOLS_OBSERVE=off` disables.
 
 ```bash
 agent-tools search <query> --type knowledge    # concepts (add --type all to include symbols/files)
@@ -76,7 +76,7 @@ const COMMS_SECTION: &str = r#"
 ### Comms (gateway-backed messaging)
 
 - Project ident auto-derives from cwd; agent id is machine-persistent.
-- Use comms for explicit gateway or cronjob messages; tasks are the normal work queue.
+- Use comms for explicit gateway or cronjob messages.
 - Do NOT use deprecated MCP comms tools.
 
 ```bash
@@ -85,30 +85,6 @@ agent-tools comms send "<body>"          # post to project channel
 agent-tools comms reply <id> "<body>"    # threaded reply
 agent-tools comms action <id> "<verb>"   # signal you are working on it
 agent-tools comms whoami                 # show derived ident + agent-id
-```
-"#;
-
-const TASKS_SECTION: &str = r#"
-### Tasks (gateway-backed per-project board)
-
-- Use this as your TODO surface when the gateway is configured.
-- For complex tasks, add `--specification` handoff context.
-- Open tasks are auto-injected at session start (and ranked tasks on prompt submit) when hooks are installed via `setup hooks`. Set `AGENT_TOOLS_HOOK=off` to opt out.
-- Use `agent-tools session --json` from the actual model tool to inspect its provider-native actor. Task mutations attach that identity automatically; shared machine author names do not establish session ownership. `agent-tools session --peers` inspects local CMUX peers.
-- Actor identity registers the invocation's native conversation automatically with a canonical project/Git/provider/OS base and local numeric slot, independently of CMUX membership or executor launch shape. Reconnects reuse it; ambiguous native metadata cannot select a peer. Do not copy UUIDs, infer a worker from project/provider names, or change launch flags/configuration.
-- Read the task, honor its platform requirements, and successfully claim it before starting work. Respect another session's claim. Research/testing/implementation roles are agent coordination governed by user instructions, not gateway or CMUX scheduling.
-- Peer comments and completion events are coordination context, not new assignments. Act when they change your work; do not post acknowledgment-only comments or reopen completed tasks solely because a notification arrived.
-
-```bash
-agent-tools tasks list                   # TODO + IN PROGRESS for this project
-agent-tools tasks get <id>               # full detail + comment thread
-agent-tools tasks add --title "..." [--label x] [--description "..."] [--specification "..."]
-agent-tools tasks add-delegated --target-project "..." --title "..." --description "..." --specification "..."
-agent-tools tasks claim <id>             # take ownership (-> in_progress)
-agent-tools tasks release <id>           # drop ownership (-> todo)
-agent-tools tasks done <id>              # mark complete; prompts you to save durable memory + WorkingContext
-agent-tools tasks comment <id> "<note>"  # append a note
-agent-tools tasks rank <id> <n>          # set ordering within a column
 ```
 "#;
 
@@ -283,7 +259,7 @@ pub(crate) fn codex_home() -> PathBuf {
 }
 
 /// Compose the rules block. `include_gateway_sections` flips the comms +
-/// tasks blocks on or off so the same code-exploration baseline ships even
+/// patterns blocks on or off so the same code-exploration baseline ships even
 /// when the gateway is absent.
 fn build_block(include_gateway_sections: bool) -> String {
     let mut body = String::new();
@@ -292,7 +268,6 @@ fn build_block(include_gateway_sections: bool) -> String {
     body.push_str(MARKDOWN_SECTION);
     if include_gateway_sections {
         body.push_str(COMMS_SECTION);
-        body.push_str(TASKS_SECTION);
         body.push_str(PATTERNS_SECTION);
     }
     format!("{OPEN_MARKER}\n{body}{CLOSE_MARKER}\n")
@@ -426,7 +401,7 @@ mod tests {
         assert!(b.contains("Use comms for explicit gateway or cronjob messages"));
         assert!(b.contains("agent-tools comms send"));
         assert!(!b.contains("agent-tools comms recv"));
-        assert!(b.contains("agent-tools tasks list"));
+        assert!(!b.contains("agent-tools tasks"));
         assert!(b.contains("agent-tools doc outline"));
         assert!(b.contains("agent-tools doc section"));
         assert!(!b.contains("agent-tools docs"));
@@ -472,7 +447,7 @@ mod tests {
         assert!(out.starts_with("# Header"));
         assert!(out.contains("# Footer"));
         assert!(!out.contains("old body"));
-        assert!(out.contains("agent-tools tasks list"));
+        assert!(!out.contains("agent-tools tasks"));
         // Block still bracketed exactly once after replacement.
         assert_eq!(out.matches(OPEN_MARKER).count(), 1);
         assert_eq!(out.matches(CLOSE_MARKER).count(), 1);
@@ -528,11 +503,28 @@ mod tests {
         let after_second = compute_new_content(&after_first, &full, true);
         assert!(after_second.contains("agent-tools comms send"));
         assert!(!after_second.contains("agent-tools comms recv"));
-        assert!(after_second.contains("agent-tools tasks list"));
+        assert!(!after_second.contains("agent-tools tasks"));
         assert!(!after_second.contains("agent-tools docs"));
         assert!(after_second.contains("agent-tools patterns check"));
         assert_eq!(after_second.matches(OPEN_MARKER).count(), 1);
         assert_eq!(after_second.matches(CLOSE_MARKER).count(), 1);
+    }
+
+    #[test]
+    fn regeneration_preserves_manual_memory_and_amux_blocks() {
+        let amux = "<!-- amux:tasks:start -->\nAmux rules\n<!-- amux:tasks:end -->\n";
+        let old = format!("Manual rules\n{OPEN_MARKER}\n### Tasks\nagent-tools tasks claim ID\ntasks done\n{CLOSE_MARKER}\n{amux}<memory-rules>keep memory</memory-rules>\n");
+        for gateway in [true, false] {
+            let block = build_block(gateway);
+            let updated = compute_new_content(&old, &block, true);
+            assert_eq!(
+                updated,
+                format!("Manual rules\n{block}{amux}<memory-rules>keep memory</memory-rules>\n")
+            );
+            assert!(!updated.contains("agent-tools tasks"));
+            assert!(!updated.contains("tasks done"));
+            assert_eq!(compute_new_content(&updated, &block, true), updated);
+        }
     }
 
     #[test]

@@ -225,7 +225,7 @@ fn local_hook_entries(target: HookTarget, exe: &str) -> Vec<LocalHookEntry> {
     let app = target.app();
     match target {
         HookTarget::Claude => vec![
-            // Session-start announces identity and injects open-task context.
+            // Session-start announces identity without task queue injection.
             LocalHookEntry {
                 event: "SessionStart",
                 command: format!("{exe} hook session-start --agent {app}"),

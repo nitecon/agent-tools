@@ -1,9 +1,7 @@
-//! Tasks API client — companion to `gateway.rs`.
+//! Retired task API compatibility types and non-networking stubs.
 //!
-//! Wire shapes mirror the gateway's per-project task board (see
-//! `tasks-system.md` at the repo root for the full contract). Methods live
-//! in an `impl GatewayClient` block so callers reuse the same client they
-//! already use for `comms` traffic.
+//! Task operations have moved to amux. Legacy wire types remain available;
+//! client methods return a migration error before contacting a gateway.
 
 // Response structs mirror the full server schema; not every field is consumed
 // by the current tool set, but they should be kept for completeness.
@@ -11,9 +9,13 @@
 
 use crate::gateway::GatewayClient;
 use crate::session::SessionOrigin;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Retirement message shared by task compatibility entry points.
+pub const TASK_MIGRATION: &str =
+    "All task capabilities have migrated to amux; see https://github.com/nitecon/amux";
 
 // -- Domain types ------------------------------------------------------------
 
@@ -227,226 +229,78 @@ pub struct AddCommentRequest<'a> {
 // -- Client methods ----------------------------------------------------------
 
 impl GatewayClient {
-    /// List tasks on a project. `statuses` is comma-joined into a single
-    /// `status` query param so callers stay decoupled from the gateway's
-    /// repeat-vs-csv preference.
+    /// Retired compatibility entry point; returns TASK_MIGRATION without I/O.
     pub async fn list_tasks(
         &self,
-        ident: &str,
-        statuses: Option<&[&str]>,
-        include_stale: bool,
-        agent_id: Option<&str>,
+        _ident: &str,
+        _statuses: Option<&[&str]>,
+        _include_stale: bool,
+        _agent_id: Option<&str>,
     ) -> Result<Vec<TaskSummary>> {
-        // Build the URL by hand: reqwest is configured with
-        // `default-features = false` so the optional `serde_urlencoded` based
-        // `RequestBuilder::query` helper isn't available. The values we send
-        // are short, ASCII-safe tokens (status names + booleans), so a manual
-        // join keeps things simple without pulling extra deps.
-        let mut url = format!("{}/v1/projects/{}/tasks", self.base_url(), ident);
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(list) = statuses {
-            if !list.is_empty() {
-                parts.push(format!("status={}", list.join(",")));
-            }
-        }
-        if include_stale {
-            parts.push("include_stale=true".to_string());
-        }
-        if !parts.is_empty() {
-            url.push('?');
-            url.push_str(&parts.join("&"));
-        }
-
-        let builder = self
-            .http_client()
-            .get(&url)
-            .header("Authorization", self.auth());
-        let resp = Self::add_agent_id(builder, agent_id)
-            .send()
-            .await
-            .context("GET /v1/projects/:ident/tasks")?;
-        decode_or_bail(resp).await
+        anyhow::bail!(TASK_MIGRATION)
     }
 
-    /// Fetch a single task with its comment thread.
+    /// Retired compatibility entry point; returns TASK_MIGRATION without I/O.
     pub async fn get_task(
         &self,
-        ident: &str,
-        task_id: &str,
-        agent_id: Option<&str>,
+        _ident: &str,
+        _task_id: &str,
+        _agent_id: Option<&str>,
     ) -> Result<TaskDetail> {
-        let url = format!(
-            "{}/v1/projects/{}/tasks/{}",
-            self.base_url(),
-            ident,
-            task_id
-        );
-        let builder = self
-            .http_client()
-            .get(&url)
-            .header("Authorization", self.auth());
-        let resp = Self::add_agent_id(builder, agent_id)
-            .send()
-            .await
-            .context("GET /v1/projects/:ident/tasks/:id")?;
-        decode_or_bail(resp).await
+        anyhow::bail!(TASK_MIGRATION)
     }
 
-    /// Create a new task.
+    /// Retired compatibility entry point; returns TASK_MIGRATION without I/O.
     pub async fn create_task(
         &self,
-        ident: &str,
-        req: &CreateTaskRequest<'_>,
-        agent_id: Option<&str>,
+        _ident: &str,
+        _req: &CreateTaskRequest<'_>,
+        _agent_id: Option<&str>,
     ) -> Result<TaskCreateResponse> {
-        let url = format!("{}/v1/projects/{}/tasks", self.base_url(), ident);
-        let builder = self
-            .http_client()
-            .post(&url)
-            .header("Authorization", self.auth())
-            .json(req);
-        let resp = self
-            .add_task_origin(Self::add_agent_id(builder, agent_id))
-            .send()
-            .await
-            .context("POST /v1/projects/:ident/tasks")?;
-        decode_or_bail(resp).await
+        anyhow::bail!(TASK_MIGRATION)
     }
 
-    /// Create a target-project task plus a source-project delegated tracker.
+    /// Retired compatibility entry point; returns TASK_MIGRATION without I/O.
     pub async fn delegate_task(
         &self,
-        source_ident: &str,
-        req: &DelegateTaskRequest<'_>,
-        agent_id: Option<&str>,
+        _source_ident: &str,
+        _req: &DelegateTaskRequest<'_>,
+        _agent_id: Option<&str>,
     ) -> Result<TaskDelegationResponse> {
-        let url = format!(
-            "{}/v1/projects/{}/tasks/delegate",
-            self.base_url(),
-            source_ident
-        );
-        let builder = self
-            .http_client()
-            .post(&url)
-            .header("Authorization", self.auth())
-            .json(req);
-        let resp = self
-            .add_task_origin(Self::add_agent_id(builder, agent_id))
-            .send()
-            .await
-            .context("POST /v1/projects/:source_ident/tasks/delegate")?;
-        decode_or_bail(resp).await
+        anyhow::bail!(TASK_MIGRATION)
     }
 
-    /// Patch a task. The server enforces transition rules and reclaim logic.
+    /// Retired compatibility entry point; returns TASK_MIGRATION without I/O.
     pub async fn update_task(
         &self,
-        ident: &str,
-        task_id: &str,
-        patch: &UpdateTaskRequest<'_>,
-        agent_id: Option<&str>,
+        _ident: &str,
+        _task_id: &str,
+        _patch: &UpdateTaskRequest<'_>,
+        _agent_id: Option<&str>,
     ) -> Result<Task> {
-        let url = format!(
-            "{}/v1/projects/{}/tasks/{}",
-            self.base_url(),
-            ident,
-            task_id
-        );
-        let builder = self
-            .http_client()
-            .patch(&url)
-            .header("Authorization", self.auth())
-            .json(patch);
-        let resp = self
-            .add_task_origin(Self::add_agent_id(builder, agent_id))
-            .send()
-            .await
-            .context("PATCH /v1/projects/:ident/tasks/:id")?;
-        decode_or_bail(resp).await
+        anyhow::bail!(TASK_MIGRATION)
     }
 
-    /// Append a comment to a task. `author_type = "system"` is rejected
-    /// server-side; callers must use `agent` or `user`.
+    /// Retired compatibility entry point; returns TASK_MIGRATION without I/O.
     pub async fn add_task_comment(
         &self,
-        ident: &str,
-        task_id: &str,
-        req: &AddCommentRequest<'_>,
-        agent_id: Option<&str>,
+        _ident: &str,
+        _task_id: &str,
+        _req: &AddCommentRequest<'_>,
+        _agent_id: Option<&str>,
     ) -> Result<TaskComment> {
-        let url = format!(
-            "{}/v1/projects/{}/tasks/{}/comments",
-            self.base_url(),
-            ident,
-            task_id
-        );
-        let builder = self
-            .http_client()
-            .post(&url)
-            .header("Authorization", self.auth())
-            .json(req);
-        let resp = self
-            .add_task_origin(Self::add_agent_id(builder, agent_id))
-            .send()
-            .await
-            .context("POST /v1/projects/:ident/tasks/:id/comments")?;
-        decode_or_bail(resp).await
+        anyhow::bail!(TASK_MIGRATION)
     }
 
-    /// Fetch Eventic build status for the project. The endpoint is project
-    /// scoped, so it lives beside the task board API even though it surfaces
-    /// build metadata rather than task rows.
+    /// Retired compatibility entry point; returns TASK_MIGRATION without I/O.
     pub async fn get_build_status(
         &self,
-        ident: &str,
-        repo: Option<&str>,
-        agent_id: Option<&str>,
+        _ident: &str,
+        _repo: Option<&str>,
+        _agent_id: Option<&str>,
     ) -> Result<Value> {
-        let url = build_eventic_status_url(self.base_url(), ident, repo);
-        let builder = self
-            .http_client()
-            .get(&url)
-            .header("Authorization", self.auth());
-        let resp = Self::add_agent_id(builder, agent_id)
-            .send()
-            .await
-            .context("GET /v1/projects/:ident/eventic")?;
-        decode_or_bail(resp).await
+        anyhow::bail!(TASK_MIGRATION)
     }
-}
-
-/// Shared response handler: bail with a useful message on non-2xx, decode JSON otherwise.
-async fn decode_or_bail<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("gateway error {status}: {body}");
-    }
-    resp.json::<T>().await.context("decode tasks response")
-}
-
-fn encode_query_component(raw: &str) -> String {
-    let mut out = String::new();
-    for b in raw.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(char::from(b));
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
-fn build_eventic_status_url(base_url: &str, ident: &str, repo: Option<&str>) -> String {
-    let mut url = format!("{base_url}/v1/projects/{ident}/eventic");
-    if let Some(repo) = repo {
-        if !repo.trim().is_empty() {
-            url.push_str("?repo=");
-            url.push_str(&encode_query_component(repo));
-        }
-    }
-    url
 }
 
 #[cfg(test)]
@@ -454,115 +308,73 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn every_task_mutation_sends_exact_origin_over_http() {
-        use std::io::{BufRead, BufReader, Read, Write};
+    async fn retired_methods_return_migration_without_network_requests() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let task = serde_json::json!({"id":"task-1","project_ident":"demo","title":"Demo","status":"todo","rank":1,"reporter":"agent","created_at":1,"updated_at":1});
-        let delegated = serde_json::json!({"delegation":{"id":"delegation-1","source_project_ident":"demo","source_task_id":"source","target_project_ident":"other","target_task_id":"target","created_at":1},"source_task":task,"target_task":task,"message_id":1});
-        let comment = serde_json::json!({"id":"comment-1","task_id":"task-1","author":"machine-agent","author_type":"agent","content":"result","created_at":1});
-        let responses = [task.clone(), delegated, task, comment];
-        let vectors: serde_json::Value =
-            serde_json::from_str(include_str!("../../../docs/actor-origin-vectors.json")).unwrap();
-        let row = &vectors[0];
-        let origin = crate::actor::derive(
-            uuid::Uuid::parse_str(row["instance_id"].as_str().unwrap()).unwrap(),
-            row["os"].as_str().unwrap(),
-            row["provider"].as_str().unwrap(),
-            row["provider_session_id"].as_str().unwrap(),
-            uuid::Uuid::parse_str(row["base_id"].as_str().unwrap()).unwrap(),
-            row["session_slot"].as_u64().unwrap() as u32,
+        listener.set_nonblocking(true).unwrap();
+        let client = GatewayClient::new(
+            format!("http://{}", listener.local_addr().unwrap()),
+            "test-key".into(),
+            100,
         )
-        .unwrap()
-        .origin;
-        let expected_origin = origin.clone();
-        let fixture = std::thread::spawn(move || {
-            for (index, response) in responses.into_iter().enumerate() {
-                let (stream, _) = listener.accept().unwrap();
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                    .unwrap();
-                let mut reader = BufReader::new(stream);
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                assert!(line.starts_with(if index == 2 { "PATCH " } else { "POST " }));
-                let mut headers = std::collections::HashMap::new();
-                loop {
-                    line.clear();
-                    reader.read_line(&mut line).unwrap();
-                    if line == "\r\n" {
-                        break;
-                    }
-                    let (key, value) = line.split_once(':').unwrap();
-                    headers.insert(key.to_ascii_lowercase(), value.trim().to_string());
-                }
-                assert_eq!(headers["x-agent-id"], "machine-agent");
-                assert_eq!(headers["x-agent-session-id"], expected_origin.session_id);
-                assert_eq!(headers["x-agent-instance-id"], expected_origin.instance_id);
-                assert_eq!(headers["x-agent-provider"], "codex");
-                assert_eq!(headers["x-agent-os"], "linux");
-                let mut request_body = vec![0; headers["content-length"].parse::<usize>().unwrap()];
-                reader.read_exact(&mut request_body).unwrap();
-                assert!(serde_json::from_slice::<serde_json::Value>(&request_body).is_ok());
-                let body = serde_json::to_vec(&response).unwrap();
-                let stream = reader.get_mut();
-                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
-                stream.write_all(&body).unwrap();
-            }
-        });
-        let mut client =
-            GatewayClient::new(format!("http://{address}"), "test-key".into(), 5000).unwrap();
-        client.set_session_origin(origin).unwrap();
-        client
-            .create_task(
-                "demo",
-                &CreateTaskRequest {
-                    title: "Demo",
-                    ..Default::default()
-                },
-                Some("machine-agent"),
-            )
-            .await
-            .unwrap();
-        client
-            .delegate_task(
-                "demo",
-                &DelegateTaskRequest {
-                    target_project_ident: "other",
-                    title: "Demo",
-                    description: "description",
-                    specification: "specification",
-                    ..Default::default()
-                },
-                Some("machine-agent"),
-            )
-            .await
-            .unwrap();
-        client
-            .update_task(
-                "demo",
-                "task-1",
-                &UpdateTaskRequest {
-                    status: Some("in_progress"),
-                    ..Default::default()
-                },
-                Some("machine-agent"),
-            )
-            .await
-            .unwrap();
-        client
-            .add_task_comment(
-                "demo",
-                "task-1",
-                &AddCommentRequest {
-                    content: "result",
-                    ..Default::default()
-                },
-                Some("machine-agent"),
-            )
-            .await
-            .unwrap();
-        fixture.join().unwrap();
+        .unwrap();
+        let create = CreateTaskRequest {
+            title: "t",
+            ..Default::default()
+        };
+        let delegate = DelegateTaskRequest {
+            target_project_ident: "other",
+            title: "t",
+            description: "d",
+            specification: "s",
+            reporter: None,
+            labels: None,
+            hostname: None,
+        };
+        let patch = UpdateTaskRequest {
+            status: Some("done"),
+            ..Default::default()
+        };
+        let comment = AddCommentRequest {
+            content: "c",
+            ..Default::default()
+        };
+        let errors = [
+            client
+                .list_tasks("demo", None, false, Some("agent"))
+                .await
+                .unwrap_err(),
+            client
+                .get_task("demo", "id", Some("agent"))
+                .await
+                .unwrap_err(),
+            client
+                .create_task("demo", &create, Some("agent"))
+                .await
+                .unwrap_err(),
+            client
+                .delegate_task("demo", &delegate, Some("agent"))
+                .await
+                .unwrap_err(),
+            client
+                .update_task("demo", "id", &patch, Some("agent"))
+                .await
+                .unwrap_err(),
+            client
+                .add_task_comment("demo", "id", &comment, Some("agent"))
+                .await
+                .unwrap_err(),
+            client
+                .get_build_status("demo", None, Some("agent"))
+                .await
+                .unwrap_err(),
+        ];
+        for error in errors {
+            assert_eq!(error.to_string(), TASK_MIGRATION);
+        }
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
     }
 
     #[test]
@@ -688,33 +500,5 @@ mod tests {
         assert_eq!(json["content"], "hi");
         assert!(json.get("author").is_none());
         assert!(json.get("author_type").is_none());
-    }
-
-    #[test]
-    fn encode_query_component_escapes_repo_override() {
-        assert_eq!(
-            encode_query_component("github.com/nitecon/agent-tools.git"),
-            "github.com%2Fnitecon%2Fagent-tools.git"
-        );
-        assert_eq!(
-            encode_query_component("owner/repo#main"),
-            "owner%2Frepo%23main"
-        );
-    }
-
-    #[test]
-    fn build_eventic_status_url_uses_deployed_endpoint() {
-        assert_eq!(
-            build_eventic_status_url("https://gateway.example", "agent-tools", None),
-            "https://gateway.example/v1/projects/agent-tools/eventic"
-        );
-        assert_eq!(
-            build_eventic_status_url(
-                "https://gateway.example",
-                "agent-tools",
-                Some("nitecon/agent-tools")
-            ),
-            "https://gateway.example/v1/projects/agent-tools/eventic?repo=nitecon%2Fagent-tools"
-        );
     }
 }

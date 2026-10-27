@@ -1,9 +1,8 @@
-//! `agent-tools tasks` subcommands.
-//!
-//! Mirrors `cmd_comms.rs`: derives the project ident from the current working
-//! directory, the agent id from the persistent machine file, and surfaces the
-//! gateway-not-configured case with a friendly message rather than an opaque
-//! "missing config" error.
+//! Retired task CLI compatibility parser and preserved unpublished goal helpers.
+//! Dispatch returns a migration error before configuration or actor discovery.
+
+// Legacy parser and goal helpers are retained for source compatibility.
+#![allow(dead_code)]
 
 use crate::cmd_gateway_context::{
     ensure_all_registered, ensure_registered, print_gateway_warnings, resolve_context,
@@ -33,6 +32,7 @@ struct TaskSelector {
 #[derive(Subcommand)]
 pub enum TasksCommands {
     /// List tasks on the current project (default: TODO + IN PROGRESS).
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     List {
         /// Comma-separated status filter. Default `todo,in_progress`.
         #[arg(long, default_value = "todo,in_progress")]
@@ -46,6 +46,7 @@ pub enum TasksCommands {
     },
 
     /// Show a single task plus its comment thread.
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     Get {
         /// Full task id returned by `list`.
         task_id: String,
@@ -54,6 +55,7 @@ pub enum TasksCommands {
     },
 
     /// Create a new task on the current project.
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     Add {
         /// Required short title.
         #[arg(long)]
@@ -78,6 +80,7 @@ pub enum TasksCommands {
     },
 
     /// Create a delegated task for another project and track it here.
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     AddDelegated {
         /// Required target project ident.
         #[arg(long = "target-project")]
@@ -105,6 +108,7 @@ pub enum TasksCommands {
     },
 
     /// Move a task to IN PROGRESS and claim it for the current agent.
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     Claim {
         task_id: String,
         #[arg(long)]
@@ -112,6 +116,7 @@ pub enum TasksCommands {
     },
 
     /// Move a task back to TODO and clear its owner.
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     Release {
         task_id: String,
         #[arg(long)]
@@ -119,6 +124,7 @@ pub enum TasksCommands {
     },
 
     /// Move a task to DONE.
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     Done {
         task_id: String,
         #[arg(long)]
@@ -126,6 +132,7 @@ pub enum TasksCommands {
     },
 
     /// Append a comment to a task.
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     Comment {
         task_id: String,
         /// Comment body.
@@ -138,6 +145,7 @@ pub enum TasksCommands {
     },
 
     /// Set a task's absolute rank (lower = higher priority within column).
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     Rank {
         task_id: String,
         rank: i64,
@@ -146,6 +154,7 @@ pub enum TasksCommands {
     },
 
     /// Show Eventic build status for the current project.
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     Builds {
         /// Override the repo mapping to inspect.
         #[arg(long)]
@@ -157,15 +166,10 @@ pub enum TasksCommands {
 
 // -- Entry -------------------------------------------------------------------
 
-/// Dispatch a tasks subcommand. Short-circuits with a friendly message when
-/// the gateway hasn't been set up so the agent knows to ask the user.
+/// Non-mutating compatibility stub for retired task commands.
 pub fn dispatch(cmd: TasksCommands) -> Result<()> {
-    ensure_gateway_configured()?;
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("build tokio runtime")?;
-    rt.block_on(run(cmd))
+    let _ = cmd;
+    anyhow::bail!(agent_comms::tasks::TASK_MIGRATION)
 }
 
 fn ensure_gateway_configured() -> Result<()> {

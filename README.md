@@ -136,7 +136,7 @@ Commands:
   mkdir     Create directories recursively
   rm        Remove a file or directory
   comms     Send / receive messages via the gateway
-  tasks     Per-project task board via the gateway
+  tasks     Retired: migration notice pointing to amux
   patterns  Global pattern library and .patterns tracking via the gateway
   setup     Setup and configuration commands
   init      Configure gateway connection (alias for `setup gateway`)
@@ -240,9 +240,8 @@ Files on disk and documents in the index are read the same way: `read`,
 path. A real path always reads from disk.
 
 Normal tool use then feeds the graph back: reads and greps record bounded access
-signals, and `agent-tools tasks done` writes a draft `Observation` concept linked
-to the code concepts the work touched. Observations are `draft`/`derived`, capped
-at the 200 most recent, and `AGENT_TOOLS_OBSERVE=off` disables recording.
+signals. `AGENT_TOOLS_OBSERVE=off` disables recording. Task completion no longer
+creates an Observation through this CLI; explicit memory handoff remains available.
 
 Files, symbols, Markdown, OKF concepts, and typed relationships share one local
 `project.db`. Repository and gateway content remain authoritative at their
@@ -315,105 +314,41 @@ agent-tools comms action 1234 \
 
 The gateway accepts either the new structured payload or the legacy single-`content` shape, so older `agent-tools` builds and the new structured CLI can coexist against the same gateway during rollout.
 
-### Tasks (CLI)
+### Tasks (retired)
 
-Gateway-backed tasks are the durable TODO surface for agents working in the
-current project. For complex tasks, include a specification with enough handoff
-context for a disconnected or new agent to resume the work. A gateway-backed
-task specification is more durable than a local plan file because it survives a
-full system crash.
+All task capabilities have migrated to amux; see https://github.com/nitecon/amux .
+`agent-tools tasks` and task-specific internal API methods are non-mutating
+compatibility stubs: they return a migration error, make no gateway requests,
+and leave gateway task data intact. They do not forward requests to amux.
+`setup perms` is also retired and leaves existing settings unchanged. Pattern
+checks still report superseded patterns, but no longer create migration tasks.
+Spec task generation/linking entry points return the same migration error.
 
-When hooks are installed via `agent-tools setup hooks`, open tasks are
-auto-injected as context at session start, and prompt-relevant open tasks are
-surfaced on each prompt submit — so agents see live work without running
-`tasks list` manually. Set `AGENT_TOOLS_HOOK=off` to opt out.
+Use the bundled amux CLI with your actual assigned identity. Verify
+`amux --version` and `amux tasks --help` in each provider environment before
+using its replacement workflow. Do not copy another session's identity.
 
-```bash
-# List open work for the current project
-agent-tools tasks list
+| Previous operation | Replacement |
+| --- | --- |
+| list / get | `amux tasks list` / `amux tasks get` |
+| add --title T | `amux tasks create T` |
+| add-delegated --target-project P --title T | `amux tasks delegate T --target-project P` |
+| claim / release / done / comment / rank | Corresponding `amux tasks` operation |
 
-# Create a simple task
-agent-tools tasks add --title "Fix failing Windows path test" --label tests
+Regenerate managed rules with `agent-tools setup rules --all` and skills with
+`agent-tools setup skill`, then reload or restart existing agent sessions.
+This removes the old managed task protocols for Claude, Codex, Gemini and
+explicit `--target` harnesses; it preserves manual instructions, memory guidance
+and the separate `<!-- amux:tasks:start -->` / `<!-- amux:tasks:end -->` block.
+Hooks retain identity, pattern and knowledge context without querying task queues;
+the task nudge is disabled. Amux owns replacement task rules and native task
+settings, including Claude denies and Codex local-task configuration. Host rollout
+is separate from this source change; this installer does not install amux.
 
-# Create a complex task with durable handoff context
-agent-tools tasks add \
-  --title "Refactor task API client" \
-  --description "Match the latest gateway task wire format." \
-  --specification "Use specification for long-form handoff context; keep legacy details compatibility."
-
-# Delegate cross-project work; all handoff fields are required
-agent-tools tasks add-delegated \
-  --target-project "agent-gateway" \
-  --title "Verify delegated task creation behavior" \
-  --description "agent-tools needs the current gateway request and response contract." \
-  --specification "Inspect required request fields, response ids, and target-project nudge behavior; share findings in this task."
-
-# Pick up, discuss, and complete work
-agent-tools tasks claim <id>
-agent-tools tasks get <id>
-agent-tools tasks comment <id> "Verified against gateway commit 6980730."
-agent-tools tasks done <id>
-
-# Drop ownership back to TODO (clears the owner) if you can't finish
-agent-tools tasks release <id>
-
-# Reorder within a column (lower rank = higher priority)
-agent-tools tasks rank <id> 0
-
-# Inspect Eventic build status for the current project
-agent-tools tasks builds
-agent-tools tasks builds --repo nitecon/agent-tools
-```
-
-`agent-tools session` reports the calling provider actor: session UUID, machine
-instance UUID, provider, OS, native conversation ID and readable base-num. Add
-`--json` for structured output; optional `membership` describes a separately
-verified CMUX terminal association. `agent-tools session --peers` lists local
-CMUX peers. Actor discovery does not require gateway configuration.
-
-Task creation, delegation, claim/release/completion, comments and ranking attach
-the actor automatically. Codex uses its invocation's `CODEX_THREAD_ID` and/or
-`CODEX_SESSION_ID` (they must agree); Claude uses `CLAUDE_CODE_SESSION_ID`.
-Each native conversation registers automatically in a local OS-temp registry
-and reuses its numeric slot. A shared daemon can host distinct registrations;
-reconnecting or replacing the executor keeps the same conversation UUID.
-Task identity requires no executable path, process ancestry or launch flags.
-Conflicting or ambiguous native metadata rejects rather than selecting a peer.
-Missing native metadata retains existing plain-shell behavior.
-
-The stable UUIDv4 namespace is published atomically at
-`~/.agentic/agent-tools/actor-instance-id`. The v2 base UUID derives from canonical
-project path, normalized Git identity, provider and OS using that namespace.
-The conversation UUID derives from the base and native ID; its numeric display
-slot is excluded so temporary registry cleanup cannot alias old ownership.
-See the [exact contract](docs/actor-origin.md) and
-[UUID conformance vectors](docs/actor-origin-vectors.json).
-
-CMUX membership is optional and cannot change actor provenance. Context hooks
-do not intercept identity enrollment records, block prompts or request CMUX
-membership. Ordinary task calls register independently of hooks. Linux discovers
-the current user's runtime socket; Windows uses its SID-based native pipe.
-Registration supports
-direct provider CLI/hook calls on Linux, macOS and Windows;
-remote, detached, environment-cleared or long-lived MCP tools without native
-invocation context cannot acquire inferred attribution.
-
-Agents coordinate through their AGENTS.md/CLAUDE.md instructions: read platform
-requirements and ownership, claim successfully before working, and respect peer
-claims. Comments/completions inform coordination rather than assign new work.
-The gateway broadcasts provenance and enforces task ownership; it does not select
-agents. CMUX handles local delivery and exact-session self-echo suppression.
-`setup rules` and `setup skill` include this guidance for subsequent installation.
-
-Completing a task with `tasks done` is the natural memory-save moment, so it
-prints a short reminder (to stderr) to persist durable learnings and update
-WorkingContext via the [`memory`](https://github.com/nitecon/agent-memory) CLI.
-This makes gateway task-completion the save trigger that the native Claude Code
-`TaskCompleted` hook would otherwise provide — but cannot, because the native
-task tools are disabled in favour of this gateway board. The reminder fires only
-on `done` (never on `claim`/`release`/`comment`) and only after the transition
-succeeds. Set `AGENT_TOOLS_MEMORY_REMINDER=off` to suppress it if you don't run
-agent-memory.
+Unpublished goal/profile work is preserved in source and local state, but is
+not an active task workflow or a claim of amux parity. Shared actor/session and
+knowledge APIs remain available. Durable learnings and WorkingContext can still
+be saved explicitly with the `memory` CLI.
 
 ### Patterns (CLI)
 
@@ -445,7 +380,7 @@ agent-tools patterns get 01JZEXAMPLEPATTERNID
 agent-tools patterns comments 01JZEXAMPLEPATTERNID
 agent-tools patterns update 01JZEXAMPLEPATTERNID --body-file /tmp/pattern.md
 
-# Validate $PWD/.patterns. Superseded patterns create migration tasks.
+# Validate $PWD/.patterns. Superseded patterns report the replacement without creating tasks.
 agent-tools patterns check
 
 # Record use of a pattern with relevant paths
@@ -489,15 +424,15 @@ agent-tools setup rules --print
 
 Detection is by **agent home directory** rather than rule-file existence, so a fresh Codex install (with `~/.codex/` present but no `AGENTS.md`) still picks up the block on the first setup run. For Codex, `$CODEX_HOME` is honored with a fallback to `~/.codex`, matching Codex's own skill-install convention.
 
-The injected block is wrapped in `<agent-tools-rules>...</agent-tools-rules>` markers; re-runs replace the block in place rather than duplicating it, removing retired gateway documentation rules from earlier installations. A `<file>.bak` sibling is written before each destructive modification so changes are recoverable (brand-new files skip the backup to avoid zero-byte `.bak` clutter).
+The injected block is wrapped in `<agent-tools-rules>...</agent-tools-rules>` markers; re-runs replace the block in place rather than duplicating it, removing retired task and gateway documentation rules from earlier installations. A `<file>.bak` sibling is written before each destructive modification so changes are recoverable (brand-new files skip the backup to avoid zero-byte `.bak` clutter).
 
-When the gateway is configured, the injected block includes code-exploration + markdown + comms + tasks + patterns. When the gateway is not configured, only the code-exploration and local Markdown sections are injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
+When the gateway is configured, the injected block includes code-exploration + markdown + comms + patterns. When the gateway is not configured, only the code-exploration and local Markdown sections are injected (with a notice on stderr) — agents on unconfigured machines still get the symbol-aware tooling directives without false references to gateway-only surfaces.
 
 ### Automated install: `agent-tools setup hooks`
 
 Does two things for detected clients:
 
-1. Installs the **local context-injection hook entries** that wire each agent CLI to `agent-tools hook ...`. These drive the auto-injection of open tasks (session start) and prompt-relevant tasks + patterns (prompt submit). They merge idempotently into the agent's own settings: `~/.claude/settings.json` and `~/.gemini/settings.json` (JSON), and `$CODEX_HOME/config.toml` (TOML, comment/format-preserving). Existing user hooks are preserved; re-runs are no-ops.
+1. Installs the **local context-injection hook entries** that wire each agent CLI to `agent-tools hook ...`. These announce provider identity (session start) and inject prompt-relevant patterns and knowledge (prompt submit). They merge idempotently into the agent's own settings: `~/.claude/settings.json` and `~/.gemini/settings.json` (JSON), and `$CODEX_HOME/config.toml` (TOML, comment/format-preserving). Existing user hooks are preserved; re-runs are no-ops.
 2. Syncs **app-scoped hook files** published by the gateway for detected clients, written only under that client's local hook directory.
 
 ```bash
@@ -513,7 +448,7 @@ The local hook entries are installed even when the gateway is unconfigured (a mi
 
 Installs the agent-tools skill file (advertises the CLI to the session so the model picks it up automatically):
 
-- Claude Code — `~/.claude/skills/agent-tools/SKILL.md` (includes `allowed-tools` frontmatter and flags the disabled native `TaskCreate*` tools).
+- Claude Code — `~/.claude/skills/agent-tools/SKILL.md` (includes `allowed-tools` frontmatter).
 - Codex CLI — `$CODEX_HOME/skills/agent-tools/SKILL.md` (defaults to `~/.codex/skills/agent-tools/SKILL.md`). Body is tuned for Codex: no `allowed-tools` frontmatter (Codex doesn't read it), no references to Claude-only disabled task tools.
 
 ```bash
@@ -524,13 +459,12 @@ agent-tools setup skill --print      # dump the Claude body to stdout
 
 ### Automated install: `agent-tools setup perms`
 
-Writes `TaskCreate*` / `TodoWrite` denies into `~/.claude/settings.json` so Claude-Code sessions can't route around the gateway-backed task board. **Claude-only** — Codex has no equivalent tool-deny facility in its config, so running `setup perms` is a no-op for Codex setups.
-
-If you'd rather inspect and paste the content yourself, the manual blocks below are kept in sync with the installer's output.
+Retired: returns the amux migration message without changing settings. Existing
+Claude denies are preserved; amux owns native task settings.
 
 ### One-shot bootstrap: `agent-tools setup all`
 
-The recommended way to bootstrap a fresh machine is the non-interactive `setup all`, which runs every installer in order — **gateway → rules → skill → perms** — in a single pass:
+The recommended way to bootstrap a fresh machine is the non-interactive `setup all`, which runs every installer in order — **gateway → hooks → rules → skill** — in a single pass:
 
 ```bash
 # Prompts once for confirmation, then runs all four installers
@@ -855,7 +789,7 @@ The MCP server includes 6 communication tools (`set_identity`, `send_message`, `
 
 ### Project upstream gateways
 
-A repository can declare read sources for tasks and patterns in
+A repository can declare read sources for patterns in
 `.agents/alternate-gateways.yml`. Credentials never belong in that file; each
 developer binds the declared profile locally through setup. Set
 `replace_default: true` when the repository's declared gateways must be used
@@ -868,7 +802,6 @@ gateways:
   - profile: prod-sre
     url: https://prod-gateway.example.com
     read:
-      - tasks
       - patterns
 ```
 
@@ -888,11 +821,8 @@ Profile credentials are stored at
 `~/.agentic/agent-tools/gateways/<profile>.conf`. Read commands fan out to the
 default and eligible project upstreams unless `replace_default: true` selects
 only matching project gateways. Results show their gateway when more than one
-source contributes. A task shown as `profile/<uuid>` can be passed
-back to `tasks get`, `claim`, `release`, `done`, `comment`, or `rank` to target
-that gateway explicitly; this is required when the same UUID exists on more
-than one gateway. Bare UUIDs remain supported and resolve in configured
-gateway order. Creates continue to use the default gateway.
+source contributes. Task/profile parser source remains preserved for unpublished
+work, but task operations are retired and are not forwarded to amux.
 
 3. **Verify the connection** — once configured, the MCP comms tools will connect automatically. Without configuration, they return a helpful error message instead of failing.
 

@@ -405,7 +405,8 @@ enum Commands {
         command: cmd_comms::CommsCommands,
     },
 
-    /// Per-project task board: list, claim, comment, complete (gateway-backed)
+    /// Retired task commands: migration notice pointing to amux
+    #[command(override_help = agent_comms::tasks::TASK_MIGRATION)]
     Tasks {
         #[command(subcommand)]
         command: cmd_tasks::TasksCommands,
@@ -525,10 +526,7 @@ enum SetupCommands {
         print: bool,
     },
 
-    /// Add (or remove) permission denies in ~/.claude/settings.json that
-    /// block the native task system (TaskCreate/TaskUpdate/TaskList/TaskGet,
-    /// plus the legacy TodoWrite) so agents are forced onto
-    /// `agent-tools tasks`.
+    /// Retired task permission setup: use amux. Existing settings are preserved.
     Perms {
         /// Remove the denies instead of adding them.
         #[arg(long)]
@@ -555,7 +553,7 @@ enum SetupCommands {
         remove: bool,
     },
 
-    /// Run gateway -> hooks -> rules -> skill -> perms non-interactively.
+    /// Run gateway -> hooks -> rules -> skill non-interactively.
     All {
         /// Skip the confirmation prompt.
         #[arg(short = 'y', long)]

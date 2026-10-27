@@ -75,22 +75,17 @@ impl SkillTarget {
     }
 }
 
-/// Claude Code variant. Description explicitly flags the **replacement** of
-/// the native Task* tools — Claude's built-in system prompt still says "Use
-/// TaskCreate to plan work," so we need an explicit override here for the
-/// model to route task tracking through `agent-tools`.
+/// Claude Code variant, with Claude-specific tool permissions.
 const SKILL_BODY_CLAUDE: &str = r#"---
 name: agent-tools
-description: Token-efficient code exploration (tree/symbols/search), gateway-backed task board (REQUIRED — native TaskCreate/TaskUpdate/TaskList/TaskGet are disabled in this setup), cross-project comms, and persistent memory via the `agent-tools` and `memory` CLIs. Prefer for bulk exploration and ALWAYS for task tracking.
+description: Token-efficient code exploration (tree/symbols/search), cross-project comms, and persistent memory via the `agent-tools` and `memory` CLIs. Prefer for bulk exploration.
 allowed-tools: Bash(agent-tools *), Bash(memory *)
 ---
 
 # agent-tools
 
-The `agent-tools` CLI and its companion `memory` CLI together replace several
-built-in capabilities. The native Claude Code task system
-(`TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet`) is **disabled** in this
-environment — task tracking MUST go through `agent-tools tasks`.
+The `agent-tools` CLI and its companion `memory` CLI provide code exploration,
+cross-project messaging and persistent memory.
 
 ## Code Exploration (token-efficient)
 
@@ -115,8 +110,7 @@ carry `derived` authority, so they rank below repository- and gateway-authored
 knowledge and never substitute for reading the source.
 
 Normal tool use feeds the graph without any extra step: reads and greps record
-access signals, and `agent-tools tasks done` writes a draft `Observation`
-concept linked to the resources the work touched. Set `AGENT_TOOLS_OBSERVE=off`
+access signals. Set `AGENT_TOOLS_OBSERVE=off`
 to disable.
 
 ```bash
@@ -127,45 +121,6 @@ agent-tools refs|imports|impls <symbol>        # resolved callers/callees (--all
 agent-tools read <okf-uri>                     # render a stored concept as Markdown
 agent-tools okf export --destination <dir>     # optional: materialize the stored bundle
 ```
-
-## Task Board (replaces native Task tools)
-
-Gateway-backed with three statuses, server-enforced ownership, 1h stale-claim
-reclaim, and 7d done falloff. Use this as your TODO surface — `TaskCreate` and
-friends will be refused. For complex tasks, add a specification with enough
-handoff context for a disconnected or new agent to resume the work; gateway-
-backed specifications are more durable than local plan files because they
-survive full system crashes.
-
-```bash
-agent-tools tasks list                   # TODO + IN PROGRESS for this project
-agent-tools tasks get <id>               # full detail + comment thread
-agent-tools tasks add --title "..." [--label x] [--description "..."] [--specification "..."]
-agent-tools tasks add-delegated --target-project "..." --title "..." --description "..." --specification "..."
-agent-tools tasks claim <id>             # take ownership (-> in_progress)
-agent-tools tasks release <id>           # drop ownership (-> todo)
-agent-tools tasks done <id>              # mark complete; prompts you to save durable memory + WorkingContext
-agent-tools tasks comment <id> "<note>"  # append a note
-```
-
-## Independent provider actors
-
-Use `agent-tools session --json` from the model's actual tool to inspect its
-native provider actor and optional CMUX membership. `agent-tools session --peers`
-inspects local CMUX peers. Task mutations attach actor identity automatically.
-Native conversations register automatically with a canonical project/Git/provider/
-OS base and local numeric slot. Peers stay distinct under a shared daemon;
-reconnects and terminal reattachment reuse the registration. CMUX membership and
-executor paths/flags never select task identity. Ambiguous native metadata cannot
-select a peer. No configuration edits or copied UUIDs are needed; calls without
-native metadata retain existing plain-shell behavior.
-
-Read platform requirements and ownership, then successfully claim a task before
-working. Respect peer claims even when machine author names match. Agents choose
-research/testing/implementation roles under user instructions; neither CMUX nor
-the gateway assigns work. Peer comments and completions are useful coordination
-context, not automatic assignments. Do not post acknowledgment-only comments or
-restart completed work merely because an event arrives.
 
 ## Markdown (structure-aware reading)
 
@@ -183,7 +138,7 @@ agent-tools doc section <file.md> "<heading>"  # one section's body, by heading 
 
 Project ident auto-derives from the cwd git remote; agent id is
 machine-persistent. Do not use the deprecated MCP comms tools.
-Use comms for explicit gateway or cronjob messages; tasks are the normal work queue.
+Use comms for explicit gateway or cronjob messages.
 
 ```bash
 agent-tools comms confirm <id>           # ack each handled message
@@ -215,16 +170,16 @@ Types: `user`, `feedback`, `project`, `reference`.
 /// full body in on relevance match.
 const SKILL_BODY_CODEX: &str = r#"---
 name: agent-tools
-description: Token-efficient code exploration (tree/symbols/search), gateway-backed task board, cross-project comms, and persistent memory via the `agent-tools` and `memory` CLIs. Prefer for bulk exploration and use `agent-tools tasks` as the persistent task surface instead of an in-memory plan.
+description: Token-efficient code exploration (tree/symbols/search), cross-project comms, and persistent memory via the `agent-tools` and `memory` CLIs. Prefer for bulk exploration.
 metadata:
-  short-description: agent-tools + memory CLIs for exploration, tasks, comms, memory
+  short-description: agent-tools + memory CLIs for exploration, comms, memory
 ---
 
 # agent-tools
 
-The `agent-tools` CLI and its companion `memory` CLI give Codex sessions a
-persistent task board, cross-project messaging, and token-efficient symbol
-search that outlives any single conversation.
+The `agent-tools` CLI and its companion `memory` CLI give Codex sessions
+cross-project messaging and token-efficient symbol search that outlives any
+single conversation.
 
 ## Code Exploration (token-efficient)
 
@@ -249,8 +204,7 @@ carry `derived` authority, so they rank below repository- and gateway-authored
 knowledge and never substitute for reading the source.
 
 Normal tool use feeds the graph without any extra step: reads and greps record
-access signals, and `agent-tools tasks done` writes a draft `Observation`
-concept linked to the resources the work touched. Set `AGENT_TOOLS_OBSERVE=off`
+access signals. Set `AGENT_TOOLS_OBSERVE=off`
 to disable.
 
 ```bash
@@ -261,45 +215,6 @@ agent-tools refs|imports|impls <symbol>        # resolved callers/callees (--all
 agent-tools read <okf-uri>                     # render a stored concept as Markdown
 agent-tools okf export --destination <dir>     # optional: materialize the stored bundle
 ```
-
-## Task Board (persistent across sessions)
-
-Gateway-backed with three statuses, server-enforced ownership, 1h stale-claim
-reclaim, and 7d done falloff. Use this as your TODO surface rather than an
-in-message plan — tasks survive session turnover. For complex tasks, add a
-specification with enough handoff context for a disconnected or new agent to
-resume the work; gateway-backed specifications are more durable than local plan
-files because they survive full system crashes.
-
-```bash
-agent-tools tasks list                   # TODO + IN PROGRESS for this project
-agent-tools tasks get <id>               # full detail + comment thread
-agent-tools tasks add --title "..." [--label x] [--description "..."] [--specification "..."]
-agent-tools tasks add-delegated --target-project "..." --title "..." --description "..." --specification "..."
-agent-tools tasks claim <id>             # take ownership (-> in_progress)
-agent-tools tasks release <id>           # drop ownership (-> todo)
-agent-tools tasks done <id>              # mark complete; prompts you to save durable memory + WorkingContext
-agent-tools tasks comment <id> "<note>"  # append a note
-```
-
-## Independent provider actors
-
-Use `agent-tools session --json` from the model's actual tool to inspect its
-native provider actor and optional CMUX membership. `agent-tools session --peers`
-inspects local CMUX peers. Task mutations attach actor identity automatically.
-Native conversations register automatically with a canonical project/Git/provider/
-OS base and local numeric slot. Peers stay distinct under a shared daemon;
-reconnects and terminal reattachment reuse the registration. CMUX membership and
-executor paths/flags never select task identity. Ambiguous native metadata cannot
-select a peer. No configuration edits or copied UUIDs are needed; calls without
-native metadata retain existing plain-shell behavior.
-
-Read platform requirements and ownership, then successfully claim a task before
-working. Respect peer claims even when machine author names match. Agents choose
-research/testing/implementation roles under user instructions; neither CMUX nor
-the gateway assigns work. Peer comments and completions are useful coordination
-context, not automatic assignments. Do not post acknowledgment-only comments or
-restart completed work merely because an event arrives.
 
 ## Markdown (structure-aware reading)
 
@@ -317,7 +232,7 @@ agent-tools doc section <file.md> "<heading>"  # one section's body, by heading 
 
 Project ident auto-derives from the cwd git remote; agent id is
 machine-persistent.
-Use comms for explicit gateway or cronjob messages; tasks are the normal work queue.
+Use comms for explicit gateway or cronjob messages.
 
 ```bash
 agent-tools comms confirm <id>           # ack each handled message
@@ -452,19 +367,19 @@ mod tests {
         let body = SkillTarget::Claude.body();
         assert!(body.starts_with("---\n"));
         assert!(body.contains("name: agent-tools"));
-        // Description must mention the disabled native task tools so Claude
-        // knows not to call them.
-        assert!(body.contains("disabled"));
-        assert!(body.contains("TaskCreate"));
+        // Task policy belongs to amux, not this skill.
+        assert!(!body.contains("disabled"));
+        assert!(!body.contains("TaskCreate"));
         assert!(body.contains("allowed-tools: Bash(agent-tools *), Bash(memory *)"));
         assert!(body.contains("Code Exploration"));
-        assert!(body.contains("Task Board"));
+        assert!(!body.contains("Task Board"));
+        assert!(!body.contains("agent-tools tasks"));
         assert!(body.contains("Markdown (structure-aware reading)"));
         assert!(body.contains("agent-tools doc outline"));
         assert!(!body.contains("Markdown Context"));
         assert!(!body.contains("agent-tools docs"));
         assert!(body.contains("Comms"));
-        // Comms polling was removed; tasks are the normal work queue.
+        // Comms polling was removed.
         assert!(body.contains("Use comms for explicit gateway or cronjob messages"));
         assert!(body.contains("agent-tools comms send"));
         assert!(!body.contains("agent-tools comms recv"));
@@ -484,13 +399,14 @@ mod tests {
         assert!(!body.contains("allowed-tools:"));
         // Capability coverage still required.
         assert!(body.contains("Code Exploration"));
-        assert!(body.contains("Task Board"));
+        assert!(!body.contains("Task Board"));
+        assert!(!body.contains("agent-tools tasks"));
         assert!(body.contains("Markdown (structure-aware reading)"));
         assert!(body.contains("agent-tools doc outline"));
         assert!(!body.contains("Markdown Context"));
         assert!(!body.contains("agent-tools docs"));
         assert!(body.contains("Comms"));
-        // Comms polling was removed; tasks are the normal work queue.
+        // Comms polling was removed.
         assert!(body.contains("Use comms for explicit gateway or cronjob messages"));
         assert!(body.contains("agent-tools comms send"));
         assert!(!body.contains("agent-tools comms recv"));
