@@ -2,9 +2,29 @@
 
 ## Unreleased
 
-- Retire generated task protocols, queue injections and nudges; task CLI/API and permission setup now return non-mutating amux migration errors. Preserve unrelated context, manual instructions and separate amux blocks on regeneration; existing sessions must reload. Unpublished goal/profile source remains preserved.
+## v2.0.0 — 2026-10-27
 
+- Retire task management from agent-tools. Task CLI/API operations, permission
+  setup, and spec task generation/linking now return a non-mutating migration
+  error pointing to amux. Gateway task data remains intact.
+- Remove generated task protocols, queue injections, task nudges and completion
+  reminders. Regeneration preserves manual instructions, memory guidance and
+  separate amux task blocks; pattern and knowledge context remain available.
+- Pattern checks report superseded patterns without creating migration tasks.
 - Resolve nested native identity from environment boundaries.
+
+After updating, regenerate managed rules and skills, then reload existing agent
+sessions:
+
+```bash
+agent-tools update
+agent-tools setup rules --all
+agent-tools setup skill
+```
+
+Amux supplies task operations and replacement task rules; see
+https://github.com/nitecon/amux . Unpublished goal/profile work is excluded from
+this release.
 
 ## v1.22.0
 
