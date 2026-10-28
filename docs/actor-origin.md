@@ -59,14 +59,20 @@ use their installed provider and payload `session_id`, checked against present
 same-provider native IDs. No project/provider lookup selects a peer conversation.
 Calls without native conversation metadata retain existing plain-shell behavior.
 
-The local registry is under the native OS temporary directory at
-`agent-tools-actors/<instance_id>/<base_id>/`. Each positive numeric slot file
+The local registry is under the same per-user data home as `actor-instance-id`, at
+`~/.agentic/agent-tools/actors/<instance_id>/<base_id>/`. Registry directories
+below the resolved home cannot be symlinks. On Unix, the home and each registry
+parent must be owned by the effective user and not writable by group or others;
+new directories use mode 0700. Unsafe existing directories are rejected without
+changing their permissions. Each positive numeric slot file
 contains its conversation session UUID. Atomic no-clobber publication assigns
 the first available slot, including concurrent first callers; later calls with
 the same UUID reuse it. Slots are limited to 1–65535. The readable local identity
 is `actor_id`, formatted `<base_id>-<session_slot>`; it is display/registration metadata, not a gateway
-credential. Deleting temporary files may renumber slots but cannot make another
-native conversation reuse an earlier gateway UUID. Corrupt registration files
+credential. Temporary-directory cleanup no longer renumbers slots. Existing
+temporary registries are neither imported nor deleted: the first registration
+after upgrading may assign a different display slot, while the gateway session
+UUID remains unchanged. Corrupt registration files
 reject rather than selecting a peer. No daemon, service or assignment policy
 is involved in local registration.
 

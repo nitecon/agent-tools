@@ -24,12 +24,16 @@ pub struct Actor {
 /// Identity initialization publishes a complete file without replacing a winner.
 /// No display-id override or terminal metadata participates in this namespace.
 pub fn instance_id() -> Result<Uuid> {
+    load_instance(&actor_home()?.join(".agentic/agent-tools/actor-instance-id"))
+}
+
+fn actor_home() -> Result<PathBuf> {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .context("actor data home unavailable")?;
     ensure!(home.is_absolute(), "actor data home must be absolute");
-    load_instance(&home.join(".agentic/agent-tools/actor-instance-id"))
+    Ok(home)
 }
 
 fn load_instance(path: &Path) -> Result<Uuid> {
@@ -142,17 +146,67 @@ pub fn register(
     base: Uuid,
 ) -> Result<Actor> {
     let mut actor = derive(instance, os, provider, native, base, 1)?;
-    let directory = std::env::temp_dir()
-        .join("agent-tools-actors")
-        .join(instance.to_string())
-        .join(base.to_string());
+    let directory = registry_directory(&actor_home()?, instance, base)?;
     actor.session_slot = register_slot(&directory, &actor.origin.session_id)?;
     actor.actor_id = format!("{base}-{}", actor.session_slot);
     Ok(actor)
 }
 
+fn registry_directory(home: &Path, instance: Uuid, base: Uuid) -> Result<PathBuf> {
+    // Resolve the configured home once; never follow symlinks in the registry
+    // beneath it. Each checked parent prevents other users replacing children.
+    let mut directory = home.canonicalize().context("resolve actor data home")?;
+    validate_registry_directory(&directory)?;
+    for component in [
+        ".agentic".to_owned(),
+        "agent-tools".to_owned(),
+        "actors".to_owned(),
+        instance.to_string(),
+        base.to_string(),
+    ] {
+        directory.push(component);
+        create_registry_directory(&directory)?;
+    }
+    Ok(directory)
+}
+
+fn create_registry_directory(path: &Path) -> Result<()> {
+    let builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
+        builder.mode(0o700);
+        builder
+    };
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).context("create actor registry directory"),
+    }
+    validate_registry_directory(path)
+}
+
+fn validate_registry_directory(path: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    ensure!(
+        metadata.is_dir(),
+        "actor registry must be a directory, not a symlink: {}",
+        path.display()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid has no parameters or memory effects.
+        let uid = unsafe { libc::geteuid() };
+        ensure!(metadata.uid() == uid && metadata.mode() & 0o022 == 0,
+            "actor registry directory must be owned by the current user and not writable by group/others: {}", path.display());
+    }
+    Ok(())
+}
+
 fn register_slot(directory: &Path, session_id: &str) -> Result<u32> {
-    std::fs::create_dir_all(directory)?;
+    create_registry_directory(directory)?;
     for slot in 1..=65535 {
         let path = directory.join(slot.to_string());
         match std::fs::read_to_string(&path) {
@@ -196,6 +250,82 @@ fn register_slot(directory: &Path, session_id: &str) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_is_per_home_and_preserves_slots_when_reopened() {
+        let first_home = tempfile::tempdir().unwrap();
+        let second_home = tempfile::tempdir().unwrap();
+        let instance = Uuid::new_v4();
+        let base = Uuid::new_v5(&instance, b"base");
+        let first = registry_directory(first_home.path(), instance, base).unwrap();
+        let second = registry_directory(second_home.path(), instance, base).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&first).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert_eq!(
+            first,
+            first_home
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join(".agentic/agent-tools/actors")
+                .join(instance.to_string())
+                .join(base.to_string())
+        );
+        let a = Uuid::new_v5(&base, b"a").to_string();
+        let b = Uuid::new_v5(&base, b"b").to_string();
+        assert_eq!(register_slot(&first, &a).unwrap(), 1);
+        assert_eq!(register_slot(&first, &b).unwrap(), 2);
+        assert_eq!(register_slot(&second, &b).unwrap(), 1);
+        let reopened = registry_directory(first_home.path(), instance, base).unwrap();
+        assert_eq!(register_slot(&reopened, &b).unwrap(), 2);
+        assert_eq!(register_slot(&reopened, &a).unwrap(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_rejects_writable_or_symlinked_parents() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let home = tempfile::tempdir().unwrap();
+        let instance = Uuid::new_v4();
+        let base = Uuid::new_v5(&instance, b"base");
+        let parent = home.path().join(".agentic");
+        std::fs::create_dir(&parent).unwrap();
+        for mode in [0o770, 0o707] {
+            std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert!(registry_directory(home.path(), instance, base).is_err());
+            assert!(!parent.join("agent-tools").exists());
+        }
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), parent.join("agent-tools")).unwrap();
+        assert!(registry_directory(home.path(), instance, base).is_err());
+        assert!(!outside.path().join("actors").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_rejects_a_directory_owned_by_another_user() {
+        use std::os::unix::fs::MetadataExt;
+        // Root can exercise the ownership mismatch without requiring another
+        // account. Ordinary users use the root-owned filesystem directory.
+        if unsafe { libc::geteuid() } == 0 {
+            let directory = tempfile::tempdir().unwrap();
+            let path =
+                std::ffi::CString::new(directory.path().as_os_str().as_encoded_bytes()).unwrap();
+            // SAFETY: path is a valid NUL-terminated string; -1 preserves gid.
+            assert_eq!(unsafe { libc::chown(path.as_ptr(), 1, !0) }, 0);
+            assert!(validate_registry_directory(directory.path()).is_err());
+        } else {
+            assert_eq!(std::fs::metadata("/").unwrap().uid(), 0);
+            assert!(validate_registry_directory(Path::new("/")).is_err());
+        }
+    }
 
     #[test]
     fn shared_uuid_conformance_vectors() {
@@ -333,7 +463,7 @@ mod tests {
             handles.into_iter().map(|h| h.join().unwrap()).collect();
         assert_eq!(slots.len(), 8);
         assert!(slots.iter().all(|slot| *slot > 2));
-        // A temp registry reset cannot make a peer reuse this conversation UUID.
+        // Even deleting the registry cannot change a conversation UUID.
         let reset = tempfile::tempdir().unwrap();
         assert_eq!(
             register_slot(reset.path(), &peer.origin.session_id).unwrap(),

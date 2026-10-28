@@ -15,5 +15,8 @@ rpassword = { workspace = true }
 uuid = { version = "1", features = ["v4", "v5"] }
 tempfile = "3"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tokio = { workspace = true }
